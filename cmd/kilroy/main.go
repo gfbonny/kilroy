@@ -32,6 +32,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  kilroy attractor resume --cxdb <http_base_url> --context-id <id>")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor resume --run-branch <attractor/run/...> [--repo <path>]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor validate --graph <file.dot>")
+	fmt.Fprintln(os.Stderr, "  kilroy attractor ingest [--output <file.dot>] [--model <model>] [--skill <skill.md>] <requirements>")
 }
 
 func attractor(args []string) {
@@ -46,6 +47,8 @@ func attractor(args []string) {
 		attractorResume(args[1:])
 	case "validate":
 		attractorValidate(args[1:])
+	case "ingest":
+		attractorIngest(args[1:])
 	default:
 		usage()
 		os.Exit(1)
