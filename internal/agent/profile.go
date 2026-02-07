@@ -47,7 +47,7 @@ func (p *baseProfile) ToolDefinitions() []llm.ToolDefinition {
 	return append([]llm.ToolDefinition{}, p.toolDefs...)
 }
 func (p *baseProfile) SupportsParallelToolCalls() bool { return p.parallel }
-func (p *baseProfile) ContextWindowSize() int           { return p.contextWindow }
+func (p *baseProfile) ContextWindowSize() int          { return p.contextWindow }
 func (p *baseProfile) ProjectDocFiles() []string {
 	return append([]string{}, p.docFiles...)
 }
@@ -210,7 +210,8 @@ func defReadFile() llm.ToolDefinition {
 		Name:        "read_file",
 		Description: "Read a file from the filesystem. Returns line-numbered content.",
 		Parameters: map[string]any{
-			"type": "object",
+			"type":                 "object",
+			"additionalProperties": false,
 			"properties": map[string]any{
 				"file_path": map[string]any{"type": "string"},
 				"offset":    map[string]any{"type": "integer"},
@@ -226,7 +227,8 @@ func defReadManyFiles() llm.ToolDefinition {
 		Name:        "read_many_files",
 		Description: "Read multiple files from the filesystem. Returns a concatenated, line-numbered output for each file.",
 		Parameters: map[string]any{
-			"type": "object",
+			"type":                 "object",
+			"additionalProperties": false,
 			"properties": map[string]any{
 				"file_paths": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 				"offset":     map[string]any{"type": "integer"},
@@ -242,7 +244,8 @@ func defWriteFile() llm.ToolDefinition {
 		Name:        "write_file",
 		Description: "Write content to a file. Creates the file and parent directories if needed.",
 		Parameters: map[string]any{
-			"type": "object",
+			"type":                 "object",
+			"additionalProperties": false,
 			"properties": map[string]any{
 				"file_path": map[string]any{"type": "string"},
 				"content":   map[string]any{"type": "string"},
@@ -257,7 +260,8 @@ func defListDir() llm.ToolDefinition {
 		Name:        "list_dir",
 		Description: "List directory contents. Depth controls recursion (1 = this directory only).",
 		Parameters: map[string]any{
-			"type": "object",
+			"type":                 "object",
+			"additionalProperties": false,
 			"properties": map[string]any{
 				"path":  map[string]any{"type": "string"},
 				"depth": map[string]any{"type": "integer"},
@@ -271,7 +275,8 @@ func defEditFile() llm.ToolDefinition {
 		Name:        "edit_file",
 		Description: "Replace an exact string occurrence in a file.",
 		Parameters: map[string]any{
-			"type": "object",
+			"type":                 "object",
+			"additionalProperties": false,
 			"properties": map[string]any{
 				"file_path":   map[string]any{"type": "string"},
 				"old_string":  map[string]any{"type": "string"},
@@ -288,7 +293,8 @@ func defShell() llm.ToolDefinition {
 		Name:        "shell",
 		Description: "Execute a shell command. Returns stdout, stderr, and exit code.",
 		Parameters: map[string]any{
-			"type": "object",
+			"type":                 "object",
+			"additionalProperties": false,
 			"properties": map[string]any{
 				"command":     map[string]any{"type": "string"},
 				"timeout_ms":  map[string]any{"type": "integer"},
@@ -304,7 +310,8 @@ func defGrep() llm.ToolDefinition {
 		Name:        "grep",
 		Description: "Search file contents using regex patterns.",
 		Parameters: map[string]any{
-			"type": "object",
+			"type":                 "object",
+			"additionalProperties": false,
 			"properties": map[string]any{
 				"pattern":          map[string]any{"type": "string"},
 				"path":             map[string]any{"type": "string"},
@@ -322,7 +329,8 @@ func defGlob() llm.ToolDefinition {
 		Name:        "glob",
 		Description: "Find files matching a glob pattern.",
 		Parameters: map[string]any{
-			"type": "object",
+			"type":                 "object",
+			"additionalProperties": false,
 			"properties": map[string]any{
 				"pattern": map[string]any{"type": "string"},
 				"path":    map[string]any{"type": "string"},
@@ -337,7 +345,8 @@ func defApplyPatch() llm.ToolDefinition {
 		Name:        "apply_patch",
 		Description: "Apply code changes using the v4a patch format.",
 		Parameters: map[string]any{
-			"type": "object",
+			"type":                 "object",
+			"additionalProperties": false,
 			"properties": map[string]any{
 				"patch": map[string]any{"type": "string"},
 			},
@@ -351,7 +360,8 @@ func defSpawnAgent() llm.ToolDefinition {
 		Name:        "spawn_agent",
 		Description: "Spawn a sub-agent to work on a scoped task.",
 		Parameters: map[string]any{
-			"type": "object",
+			"type":                 "object",
+			"additionalProperties": false,
 			"properties": map[string]any{
 				"task": map[string]any{"type": "string"},
 			},
@@ -365,7 +375,8 @@ func defSendInput() llm.ToolDefinition {
 		Name:        "send_input",
 		Description: "Send input to a sub-agent.",
 		Parameters: map[string]any{
-			"type": "object",
+			"type":                 "object",
+			"additionalProperties": false,
 			"properties": map[string]any{
 				"agent_id": map[string]any{"type": "string"},
 				"input":    map[string]any{"type": "string"},
@@ -380,7 +391,8 @@ func defWait() llm.ToolDefinition {
 		Name:        "wait",
 		Description: "Wait for a sub-agent to finish and return its result.",
 		Parameters: map[string]any{
-			"type": "object",
+			"type":                 "object",
+			"additionalProperties": false,
 			"properties": map[string]any{
 				"agent_id":   map[string]any{"type": "string"},
 				"timeout_ms": map[string]any{"type": "integer"},
@@ -395,7 +407,8 @@ func defCloseAgent() llm.ToolDefinition {
 		Name:        "close_agent",
 		Description: "Close a sub-agent session.",
 		Parameters: map[string]any{
-			"type": "object",
+			"type":                 "object",
+			"additionalProperties": false,
 			"properties": map[string]any{
 				"agent_id": map[string]any{"type": "string"},
 			},
