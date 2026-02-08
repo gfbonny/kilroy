@@ -40,8 +40,8 @@ func TestRunProviderCapabilityProbe_TimesOutAndKillsProcessGroup(t *testing.T) {
 
 	parentPID := mustReadPIDFile(t, parentPIDPath)
 	childPID := mustReadPIDFile(t, childPIDPath)
-	waitForProcessGone(t, parentPID, 5*time.Second)
-	waitForProcessGone(t, childPID, 5*time.Second)
+	waitForPIDToExit(t, parentPID, 5*time.Second)
+	waitForPIDToExit(t, childPID, 5*time.Second)
 }
 
 func TestRunProviderCapabilityProbe_RespectsParentContextCancel(t *testing.T) {
@@ -71,8 +71,8 @@ func TestRunProviderCapabilityProbe_RespectsParentContextCancel(t *testing.T) {
 
 	parentPID := mustReadPIDFile(t, parentPIDPath)
 	childPID := mustReadPIDFile(t, childPIDPath)
-	waitForProcessGone(t, parentPID, 5*time.Second)
-	waitForProcessGone(t, childPID, 5*time.Second)
+	waitForPIDToExit(t, parentPID, 5*time.Second)
+	waitForPIDToExit(t, childPID, 5*time.Second)
 }
 
 func TestRunWithConfig_FailsFast_WhenCLIModelNotInCatalogForProvider(t *testing.T) {

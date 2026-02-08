@@ -37,11 +37,6 @@ func mustReadPIDFileWithin(t *testing.T, path string, timeout time.Duration) int
 	}
 }
 
-func waitForProcessGone(t *testing.T, pid int, timeout time.Duration) {
-	t.Helper()
-	waitForPIDToExit(t, pid, timeout)
-}
-
 func waitForPIDToExit(t *testing.T, pid int, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -54,10 +49,6 @@ func waitForPIDToExit(t *testing.T, pid int, timeout time.Duration) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-}
-
-func probeProcessExists(pid int) bool {
-	return pidRunning(pid)
 }
 
 func pidRunning(pid int) bool {

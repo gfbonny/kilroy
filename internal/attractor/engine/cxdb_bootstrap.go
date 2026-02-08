@@ -159,9 +159,7 @@ func ensureCXDBReady(ctx context.Context, cfg *RunConfigFile, logsRoot string, r
 	}
 	info.Warnings = append(info.Warnings, fmt.Sprintf("CXDB autostart launched (pid=%d, log=%s)", proc.PID, logPath))
 	terminateAutostart := func() {
-		if err := proc.terminate(500 * time.Millisecond); err != nil {
-			info.Warnings = append(info.Warnings, fmt.Sprintf("CXDB autostart cleanup warning: %v", err))
-		}
+		_ = proc.terminate(500 * time.Millisecond)
 	}
 
 	waitTimeout := time.Duration(cfg.CXDB.Autostart.WaitTimeoutMS) * time.Millisecond
