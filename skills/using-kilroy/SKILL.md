@@ -1,131 +1,103 @@
 ---
 name: using-kilroy
-description: Use when operating the Kilroy CLI to build software from English requirements via Attractor pipelines, or when configuring, running, validating, resuming, or ingesting pipelines.
+description: "Operate Kilroy Attractor pipelines end-to-end: ingest English requirements into DOT graphs, validate graph semantics, run and resume pipelines with run config files, configure provider backends (cli/api), and debug runs from logs_root artifacts and checkpoints."
 ---
 
 # Using Kilroy
 
-Kilroy builds software by converting English requirements into DOT pipeline graphs, then executing those graphs node-by-node with LLM agents. Each node invokes a coding agent that reads, writes, and tests code in an isolated git worktree.
+Kilroy is a local-first Attractor runner:
+
+1. Generate a DOT pipeline from English requirements.
+2. Validate DOT structure + semantics.
+3. Run in an isolated git worktree with checkpoint commits.
+4. Resume interrupted runs from logs, CXDB, or run branch.
+
+## Command Surface
+
+Use these exact command forms:
+
+```text
+kilroy attractor run --graph <file.dot> --config <run.yaml> [--run-id <id>] [--logs-root <dir>]
+kilroy attractor resume --logs-root <dir>
+kilroy attractor resume --cxdb <http_base_url> --context-id <id>
+kilroy attractor resume --run-branch <attractor/run/...> [--repo <path>]
+kilroy attractor validate --graph <file.dot>
+kilroy attractor ingest [--output <file.dot>] [--model <model>] [--skill <skill.md>] [--repo <path>] [--no-validate] <requirements>
+```
 
 ## Workflow
 
-```
-English requirements
-    |
-    v
-kilroy attractor ingest → pipeline.dot
-    |
-    v
-kilroy attractor validate → check syntax
-    |
-    v
-Create run.yaml config
-    |
-    v
-kilroy attractor run → git branch with working code
-```
-
-## Commands
-
-### Ingest: English to Pipeline
+1. Run ingest:
 
 ```bash
-kilroy attractor ingest [flags] <requirements>
+kilroy attractor ingest -o pipeline.dot "Build a Go CLI link checker"
 ```
 
-| Flag | Default | Purpose |
-|------|---------|---------|
-| `-o, --output <path>` | stdout | Write .dot file |
-| `--model <model>` | `claude-sonnet-4-5` | LLM for generation |
-| `--skill <path>` | auto-detect | Skill file (auto-finds `skills/english-to-dotfile/SKILL.md`) |
-| `--repo <path>` | cwd | Repository root |
-| `--no-validate` | validate | Skip validation |
-
-```bash
-# From English to validated pipeline
-kilroy attractor ingest -o pipeline.dot "Build a Go CLI link checker with robots.txt support"
-
-# Reference an existing spec
-kilroy attractor ingest -o pipeline.dot "Build DTTF per demo/dttf/dttf-v1.md"
-
-# Use Opus for complex requirements
-kilroy attractor ingest --model claude-opus-4-6 -o pipeline.dot "Build a distributed task queue"
-```
-
-The ingest command invokes Claude Code with the `english-to-dotfile` skill. For DOT file structure, node patterns, and prompt authoring, see the `english-to-dotfile` skill.
-
-### Validate: Check Pipeline Syntax
+2. Validate:
 
 ```bash
 kilroy attractor validate --graph pipeline.dot
 ```
 
-Validates DOT syntax, node shapes, edge conditions, graph structure (one start, one exit, all nodes reachable). Exit 0 = valid, exit 1 = invalid.
+3. Create run config (`run.yaml` or `run.json`).
 
-### Run: Execute Pipeline
-
-```bash
-kilroy attractor run --graph pipeline.dot --config run.yaml [--run-id <id>] [--logs-root <dir>]
-```
-
-| Flag | Default | Purpose |
-|------|---------|---------|
-| `--graph <file.dot>` | required | Pipeline to execute |
-| `--config <run.yaml>` | required | Run configuration |
-| `--run-id <id>` | auto (ULID) | Unique run identifier |
-| `--logs-root <dir>` | `~/.local/state/kilroy/attractor/runs/<run_id>` | Logs and worktree location |
-
-**Output** (key=value to stdout):
-```
-run_id=01JKXYZ...
-logs_root=/home/user/.local/state/kilroy/attractor/runs/01JKXYZ...
-worktree=/home/user/.local/state/kilroy/attractor/runs/01JKXYZ.../worktree
-run_branch=attractor/run/01JKXYZ...
-final_commit=abc123...
-```
-
-**What happens during a run:**
-1. Creates git branch `attractor/run/<run_id>` at current HEAD
-2. Creates isolated git worktree (all tracked files available including `skills/`)
-3. Executes nodes in graph order, each via an LLM agent
-4. Commits after every node (even if no changes)
-5. Logs all artifacts to `{logs_root}/<node_id>/`
-6. Records events to CXDB
-
-**Exit codes:** 0 = success, 1 = failure
-
-### Resume: Continue Interrupted Run
-
-Three methods, all converge on the same internal logic:
+4. Run:
 
 ```bash
-# Method 1: From logs directory (most common)
+kilroy attractor run --graph pipeline.dot --config run.yaml
+```
+
+5. If interrupted, resume from the most convenient source:
+
+```bash
 kilroy attractor resume --logs-root <path>
-
-# Method 2: From CXDB context
-kilroy attractor resume --cxdb <http_url> --context-id <uuid>
-
-# Method 3: From git branch
-kilroy attractor resume --run-branch attractor/run/<id> [--repo <path>]
 ```
 
-| Method | Use When |
-|--------|----------|
-| `--logs-root` | You have the logs directory path (printed by `run`) |
-| `--cxdb` | You lost the printed `logs_root`, but CXDB is running and can be used to recover the recorded `logs_root`/checkpoint path |
-| `--run-branch` | Both logs and CXDB are unavailable; git branch exists |
+## Ingest Details
 
-Resume resets the worktree to the last checkpoint commit and continues from the next node.
+- Uses Claude CLI (`KILROY_CLAUDE_PATH` override, default executable `claude`).
+- Default model: `claude-sonnet-4-5`.
+- Default repo: current working directory.
+- Default skill path auto-detection: `<repo>/skills/english-to-dotfile/SKILL.md`.
+- If no skill file exists, ingest fails fast.
+- Validation runs by default; use `--no-validate` to skip.
 
-## Configuration
+## Validate Semantics
 
-### run.yaml (Minimal)
+`attractor validate` runs parse + transforms + validators and fails on error-severity diagnostics.
+
+Key checks:
+
+- Exactly one start node and one exit node.
+- Start has no incoming edges; exit has no outgoing edges.
+- All nodes reachable from start.
+- Edge conditions parse correctly.
+- `llm_provider` required for codergen nodes (`shape=box`).
+- `model_stylesheet` is optional, but if present must parse.
+
+## Run Config (`version: 1`)
+
+Required fields:
+
+- `repo.path`
+- `cxdb.binary_addr`
+- `cxdb.http_base_url`
+- `modeldb.litellm_catalog_path`
+
+Defaults:
+
+- `git.run_branch_prefix`: `attractor/run`
+- `modeldb.litellm_catalog_update_policy`: `on_run_start`
+- `modeldb.litellm_catalog_url`: `https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json`
+- `modeldb.litellm_catalog_fetch_timeout_ms`: `5000`
+
+Minimal example:
 
 ```yaml
 version: 1
 
 repo:
-  path: /absolute/path/to/git/repo
+  path: /absolute/path/to/repo
 
 cxdb:
   binary_addr: 127.0.0.1:9009
@@ -133,12 +105,18 @@ cxdb:
 
 llm:
   providers:
+    openai:
+      backend: cli
     anthropic:
-      backend: cli    # or api
+      backend: api
+    google:
+      backend: api
 
 modeldb:
-  litellm_catalog_path: /path/to/model_prices_and_context_window.json
+  litellm_catalog_path: /absolute/path/to/model_prices_and_context_window.json
   litellm_catalog_update_policy: on_run_start
+  litellm_catalog_url: https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json
+  litellm_catalog_fetch_timeout_ms: 5000
 
 git:
   require_clean: true
@@ -146,80 +124,126 @@ git:
   commit_per_node: true
 ```
 
-### Backend Selection
+Notes:
 
-Every provider used in the pipeline MUST have an explicit backend. No defaults.
+- Provider keys accept `openai`, `anthropic`, `google` (`gemini` alias maps to `google`).
+- If a graph node uses provider `P`, `llm.providers.P.backend` must be set (`api` or `cli`).
+- In v1 behavior, runs require a clean repo and checkpoint each node.
 
-| Backend | When to Use | Requirements |
-|---------|-------------|--------------|
-| `cli` | Full agent capabilities (file editing, tool use, multi-turn) | Provider CLI installed (`claude`, `codex`, `gemini`) |
-| `api` | Direct API calls via Kilroy's built-in agent loop | API key in environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`) |
+## Provider Backends
 
-If a node uses `llm_provider: anthropic` but the config has no `anthropic` entry under `llm.providers`, the run fails immediately.
+CLI backend mappings:
 
-### Supported Providers
+- `openai` -> `codex exec --json --sandbox workspace-write -m <model> -C <worktree>`
+- `anthropic` -> `claude -p --output-format stream-json --model <model>`
+- `google` -> `gemini -p --output-format stream-json --yolo --model <model>`
 
-| Provider | CLI | API Key Env Var |
-|----------|-----|-----------------|
-| `anthropic` | `claude` | `ANTHROPIC_API_KEY` |
-| `openai` | `codex` | `OPENAI_API_KEY` |
-| `google` | `gemini` | `GEMINI_API_KEY` |
+CLI executable overrides:
 
-## Prerequisites Checklist
+- `KILROY_CODEX_PATH`
+- `KILROY_CLAUDE_PATH`
+- `KILROY_GEMINI_PATH`
 
-Before running a pipeline:
+API backend credentials:
 
-- [ ] **Build kilroy:** `go build -o kilroy ./cmd/kilroy` (or use existing binary)
-- [ ] **Target repo is a git repo** with at least one commit
-- [ ] **Clean working tree** (no uncommitted changes; `git.require_clean: true`)
-- [ ] **CXDB running** at the configured `binary_addr` and `http_base_url`
-- [ ] **Provider credentials** configured (CLI installed or API key in env)
-- [ ] **Model catalog** available (auto-downloads with `on_run_start`, or provide path for `pinned`)
+- OpenAI: `OPENAI_API_KEY` (`OPENAI_BASE_URL` optional)
+- Anthropic: `ANTHROPIC_API_KEY` (`ANTHROPIC_BASE_URL` optional)
+- Google: `GEMINI_API_KEY` or `GOOGLE_API_KEY` (`GEMINI_BASE_URL` optional)
 
-## Run Directory Layout
+## Run Output and Exit Codes
 
+`run` and `resume` print:
+
+- `run_id`
+- `logs_root`
+- `worktree`
+- `run_branch`
+- `final_commit`
+
+Exit codes:
+
+- `0`: final status `success` (or validation success)
+- `1`: command failure, validation failure, or non-success final status
+
+## Artifacts
+
+Run-level (`{logs_root}`) commonly includes:
+
+- `graph.dot`
+- `manifest.json`
+- `checkpoint.json`
+- `final.json`
+- `run_config.json`
+- `modeldb/litellm_catalog.json`
+- `run.tgz`
+- `worktree/`
+
+Stage-level (`{logs_root}/{node_id}`) commonly includes:
+
+- `prompt.md`
+- `response.md`
+- `status.json`
+- `stage.tgz`
+- `stdout.log`, `stderr.log`
+- `events.ndjson`, `events.json`
+- `cli_invocation.json`, `cli_timing.json`
+- `api_request.json`, `api_response.json`
+- `output_schema.json`, `output.json`
+- `tool_invocation.json`, `tool_timing.json`
+- `diff.patch`
+
+Exact files depend on handler/backend type.
+
+## Status Contract for Codergen Nodes
+
+For `shape=box` nodes:
+
+- `llm_provider` and `llm_model` must resolve.
+- If backend returns no explicit outcome, Kilroy expects a `status.json` signal.
+- `status.json` may be written in worktree root; Kilroy copies it into stage directory.
+- If `auto_status=true`, missing `status.json` becomes success; otherwise stage fails.
+
+Canonical `status.json` shape:
+
+```json
+{
+  "status": "success",
+  "preferred_label": "",
+  "suggested_next_ids": [],
+  "context_updates": {},
+  "notes": "",
+  "failure_reason": ""
+}
 ```
-{logs_root}/
-  graph.dot                  # Pipeline definition
-  manifest.json              # Run metadata (repo, branch, CXDB context)
-  checkpoint.json            # Execution state (current node, context, retries)
-  final.json                 # Final status, commit SHA, CXDB IDs
-  modeldb/
-    litellm_catalog.json     # Per-run catalog snapshot
-  worktree/                  # Isolated git worktree
-  <node_id>/
-    prompt.md                # Prompt sent to agent
-    response.md              # Agent response
-    status.json              # Node outcome (success/fail/retry)
-```
 
-## Common Mistakes
+Valid statuses: `success`, `partial_success`, `retry`, `fail`, `skipped`.
 
-| Mistake | Fix |
-|---------|-----|
-| Missing backend config for a provider | Add provider under `llm.providers` with explicit `backend: api` or `backend: cli` |
-| Dirty git repo | Commit or stash changes before running |
-| CXDB not running | Start CXDB before `kilroy attractor run` |
-| Wrong logs path on resume | Check original `run` output for `logs_root=` line |
-| Relative path in `repo.path` | Use absolute path |
-| Forgot `--graph` or `--config` | Both are required for `run` |
-| Pipeline has no model_stylesheet | Every pipeline needs a model_stylesheet in graph attributes |
+## Resume Behavior
 
-## Environment Variables
+- `--logs-root`: direct and most reliable.
+- `--cxdb --context-id`: recovers logs path from recent `RunStarted`/`CheckpointSaved` turns.
+- `--run-branch`: derives run id from branch suffix and scans default runs directory for manifest match.
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `KILROY_CLAUDE_PATH` | `claude` | Override path to Claude Code CLI |
-| `XDG_STATE_HOME` | `~/.local/state` | Base for default logs location |
+On resume, Kilroy:
 
-## Spec and Skill Locations
+- Loads `manifest.json`, `checkpoint.json`, and `graph.dot`.
+- Recreates run branch/worktree at checkpoint commit.
+- Requires clean repo before continuing.
+- Uses the run's snapshotted model catalog from `logs_root/modeldb/litellm_catalog.json`.
 
-| What | Where |
-|------|-------|
-| Kilroy system specs | `docs/strongdm/attractor/` |
-| Attractor DSL spec | `docs/strongdm/attractor/attractor-spec.md` |
-| Metaspec (implementation decisions) | `docs/strongdm/attractor/kilroy-metaspec.md` |
-| Ingestor spec | `docs/strongdm/attractor/ingestor-spec.md` |
-| English-to-dotfile skill | `skills/english-to-dotfile/SKILL.md` |
-| Product specs (things Kilroy builds) | `specs/` |
-| Test coverage map | `docs/strongdm/attractor/test-coverage-map.md` |
+## Frequent Failures
+
+- `missing llm.providers.<provider>.backend`: add explicit backend in config.
+- `missing llm_model on node`: set `llm_model` (or stylesheet model that resolves to it).
+- `missing status.json (auto_status=false)`: write status file or set `auto_status=true`.
+- `repo has uncommitted changes`: commit/stash before run or resume.
+- `could not locate logs_root for run_branch`: use `--logs-root` or `--cxdb --context-id`.
+- `resume: missing per-run model catalog snapshot`: ensure run logs are intact.
+
+## Related Files
+
+- Kilroy metaspec: `docs/strongdm/attractor/kilroy-metaspec.md`
+- Attractor spec: `docs/strongdm/attractor/attractor-spec.md`
+- Ingestor spec: `docs/strongdm/attractor/ingestor-spec.md`
+- Test coverage map: `docs/strongdm/attractor/test-coverage-map.md`
+- English-to-dotfile skill: `skills/english-to-dotfile/SKILL.md`
