@@ -121,6 +121,9 @@ type ToolCallData struct {
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments,omitempty"` // raw JSON object
 	Type      string          `json:"type,omitempty"`      // usually "function"
+	// ThoughtSignature carries provider-specific thought-signature state (e.g., Gemini)
+	// required to continue tool-calling turns safely.
+	ThoughtSignature string `json:"thought_signature,omitempty"`
 }
 
 type ToolResultData struct {

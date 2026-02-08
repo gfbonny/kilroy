@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -99,7 +100,7 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	if _, err := cxdbClient.PublishRegistryBundle(ctx, bundleID, bundle); err != nil {
 		return nil, err
 	}
-	ci, err := cxdbClient.CreateContext(ctx, "0")
+	ci, err := createContextWithFallback(ctx, cxdbClient, bin)
 	if err != nil {
 		return nil, err
 	}
@@ -141,4 +142,18 @@ func hasProviderBackend(cfg *RunConfigFile, provider string) bool {
 		return v.Backend == BackendAPI || v.Backend == BackendCLI
 	}
 	return false
+}
+
+func createContextWithFallback(ctx context.Context, client *cxdb.Client, bin *cxdb.BinaryClient) (cxdb.ContextInfo, error) {
+	if bin != nil {
+		ci, err := bin.CreateContext(ctx, 0)
+		if err == nil {
+			return cxdb.ContextInfo{
+				ContextID:  strconv.FormatUint(ci.ContextID, 10),
+				HeadTurnID: strconv.FormatUint(ci.HeadTurnID, 10),
+				HeadDepth:  int(ci.HeadDepth),
+			}, nil
+		}
+	}
+	return client.CreateContext(ctx, "0")
 }

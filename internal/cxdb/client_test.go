@@ -74,6 +74,27 @@ func TestClient_CreateAndForkContext(t *testing.T) {
 	}
 }
 
+func TestClient_Health_FallsBackToHealthz(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	c := New(srv.URL)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	if err := c.Health(ctx); err != nil {
+		t.Fatalf("health fallback to /healthz: %v", err)
+	}
+}
+
 func TestClient_AppendAndListTurns(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/contexts/1/append", func(w http.ResponseWriter, r *http.Request) {

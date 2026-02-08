@@ -85,7 +85,19 @@ func (c *Client) Health(ctx context.Context) error {
 	if c == nil {
 		return fmt.Errorf("cxdb client is nil")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/health", nil)
+	if err := c.healthPath(ctx, "/health"); err == nil {
+		return nil
+	} else if shouldTryCompat(err) {
+		if err2 := c.healthPath(ctx, "/healthz"); err2 == nil {
+			return nil
+		}
+	}
+	// Retry once against /healthz even for non-HTTP errors to support servers that only expose it.
+	return c.healthPath(ctx, "/healthz")
+}
+
+func (c *Client) healthPath(ctx context.Context, path string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
 	if err != nil {
 		return err
 	}
@@ -96,7 +108,7 @@ func (c *Client) Health(ctx context.Context) error {
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("cxdb health failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(b)))
+		return httpErr(path, resp.StatusCode, b)
 	}
 	return nil
 }

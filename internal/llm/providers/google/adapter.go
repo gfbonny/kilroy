@@ -378,12 +378,24 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 									name, _ := fc["name"].(string)
 									argsAny := normalizeJSONNumbers(fc["args"])
 									argsRaw, _ := json.Marshal(argsAny)
+									thoughtSig := geminiThoughtSignature(p, fc)
 									flushTextPart()
 
 									id := "call_" + ulid.Make().String() // synthetic per spec
-									tc := llm.ToolCallData{ID: id, Name: name, Type: "function"}
+									tc := llm.ToolCallData{
+										ID:               id,
+										Name:             name,
+										Type:             "function",
+										ThoughtSignature: thoughtSig,
+									}
 									s.Send(llm.StreamEvent{Type: llm.StreamEventToolCallStart, ToolCall: &tc})
-									tcEnd := llm.ToolCallData{ID: id, Name: name, Arguments: argsRaw, Type: "function"}
+									tcEnd := llm.ToolCallData{
+										ID:               id,
+										Name:             name,
+										Arguments:        argsRaw,
+										Type:             "function",
+										ThoughtSignature: thoughtSig,
+									}
 									s.Send(llm.StreamEvent{Type: llm.StreamEventToolCallEnd, ToolCall: &tcEnd})
 
 									// Preserve tool call in the accumulated response.
@@ -616,12 +628,17 @@ func toGeminiContents(msgs []llm.Message) (system string, contents []map[string]
 					if len(p.ToolCall.Arguments) > 0 {
 						_ = json.Unmarshal(p.ToolCall.Arguments, &args)
 					}
-					parts = append(parts, map[string]any{
+					part := map[string]any{
 						"functionCall": map[string]any{
 							"name": p.ToolCall.Name,
 							"args": args,
 						},
-					})
+					}
+					if sig := strings.TrimSpace(p.ToolCall.ThoughtSignature); sig != "" {
+						// Gemini requires replaying the thought signature that accompanied prior tool calls.
+						part["thoughtSignature"] = sig
+					}
+					parts = append(parts, part)
 				case llm.ContentAudio, llm.ContentDocument:
 					return "", nil, &llm.ConfigurationError{Message: fmt.Sprintf("unsupported content kind for google: %s", p.Kind)}
 				default:
@@ -683,6 +700,23 @@ func toolNameFromCallID(msgs []llm.Message, callID string) string {
 	return ""
 }
 
+func geminiThoughtSignature(part map[string]any, fc map[string]any) string {
+	if v, _ := part["thoughtSignature"].(string); strings.TrimSpace(v) != "" {
+		return strings.TrimSpace(v)
+	}
+	if v, _ := part["thought_signature"].(string); strings.TrimSpace(v) != "" {
+		return strings.TrimSpace(v)
+	}
+	// Defensive fallback for non-conformant payloads.
+	if v, _ := fc["thoughtSignature"].(string); strings.TrimSpace(v) != "" {
+		return strings.TrimSpace(v)
+	}
+	if v, _ := fc["thought_signature"].(string); strings.TrimSpace(v) != "" {
+		return strings.TrimSpace(v)
+	}
+	return ""
+}
+
 func normalizeJSONNumbers(v any) any {
 	switch x := v.(type) {
 	case map[string]any:
@@ -737,13 +771,15 @@ func fromGeminiResponse(raw map[string]any, requestedModel string) llm.Response 
 							name, _ := fc["name"].(string)
 							argsAny := fc["args"]
 							argsRaw, _ := json.Marshal(argsAny)
+							thoughtSig := geminiThoughtSignature(p, fc)
 							msg.Content = append(msg.Content, llm.ContentPart{
 								Kind: llm.ContentToolCall,
 								ToolCall: &llm.ToolCallData{
-									ID:        "call_" + ulid.Make().String(), // synthetic per spec
-									Name:      name,
-									Arguments: argsRaw,
-									Type:      "function",
+									ID:               "call_" + ulid.Make().String(), // synthetic per spec
+									Name:             name,
+									Arguments:        argsRaw,
+									Type:             "function",
+									ThoughtSignature: thoughtSig,
 								},
 							})
 						}

@@ -107,6 +107,16 @@ Parse the user's message for constraints, including:
 
 Treat constraints as requirements to satisfy when possible, but still run the full process below to pick concrete model IDs and settings.
 
+#### Step 0.1B: Load Preferences File
+
+Read the preferences file at `.claude/skills/english-to-dotfile/preferences.yaml`.
+
+This file contains:
+- **Default models per role** (`defaults.models.default`, `.hard`, `.verify`, `.review`). If a role has a non-empty model ID, use it as the starting default for that role. The Weather Report and user overrides can still supersede it.
+- **Executor preference** (`executor`). A single global setting: "cli" or "api". When set to "cli", prefer CLI agents (codex, claude, gemini) for all providers. Falls back to API if the CLI binary isn't installed.
+
+If the file is missing or unreadable, proceed with no defaults (same as all fields blank).
+
 #### Step 0.2: Detect Provider Access (API and CLI for All Three)
 
 Determine, for each provider, whether **API** and/or **CLI** execution is feasible in this environment:
@@ -128,7 +138,7 @@ Extract the "Today's Models" list and treat it as the source of **current** mode
 Fetch:
 - `curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json`
 
-You MUST only use model IDs that exist in this catalog. Never invent model IDs.
+Use the LiteLLM catalog to verify model IDs and look up costs. However: **if the user explicitly requests a model that is not in the catalog, always obey the user.** New models often appear on provider APIs before LiteLLM adds them. The catalog is a reference, not a gatekeeper. Only reject model IDs that you yourself are inventing without user or Weather Report backing.
 
 #### Step 0.5: Resolve Weather Report Names to Real Model IDs (Best-Effort, Verified)
 
@@ -137,7 +147,7 @@ Weather Report names may not exactly match LiteLLM keys.
 For each Weather Report model name:
 - Find a matching LiteLLM key by searching the catalog (best-effort string normalization is OK).
 - Prefer exact/near-exact matches and "latest" variants when present.
-- Reject anything you cannot verify exists as a catalog key.
+- If a Weather Report model has no catalog match, **use it anyway** — the Weather Report reflects what is actually running in production today. New models routinely appear before LiteLLM catalogs them.
 
 #### Step 0.6: Define "Current" and "Cheapest (Current-Only)"
 
@@ -165,7 +175,7 @@ The table MUST include:
 - Which model(s) you'd use for `impl`, `verify`, and `review` (and for High, the 3 parallel branches + the synthesis model).
 - Parallelism behavior (none vs 3-way).
 - Thinking approach (brief).
-- Executor availability and recommendation **for OpenAI, Anthropic, and Gemini** (account for both API+CLI where available; pick a preferred one consistent with constraints).
+- Executor availability and recommendation **for OpenAI, Anthropic, and Gemini** (account for both API+CLI where available; use the `executor` value from the preferences file to pick the preferred one, unless the user specifies otherwise).
 
 After the table, ask:
 "Pick `low`, `medium`, or `high`, or reply with overrides (providers/models/executor/parallel/thinking)."

@@ -8,6 +8,7 @@ import (
 	"mime"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,11 +17,11 @@ import (
 	"github.com/zeebo/blake3"
 )
 
-// CXDBSink appends normalized Attractor events to a CXDB context via the HTTP API,
-// and stores large artifacts in CXDB's blob CAS via the binary protocol.
+// CXDBSink appends normalized Attractor events to a CXDB context and stores
+// large artifacts in CXDB's blob CAS.
 //
 // v1 implementation notes:
-// - Uses the HTTP JSON append endpoint for simplicity.
+// - Prefers binary protocol for mutating operations; falls back to HTTP compat routes.
 // - Serializes appends to maintain a linear head within a context.
 type CXDBSink struct {
 	Client *cxdb.Client
@@ -46,7 +47,7 @@ func NewCXDBSink(client *cxdb.Client, binary *cxdb.BinaryClient, runID, contextI
 }
 
 func (s *CXDBSink) append(ctx context.Context, req cxdb.AppendTurnRequest) (turnID string, contentHash string, err error) {
-	if s == nil || s.Client == nil {
+	if s == nil || (s.Client == nil && s.Binary == nil) {
 		return "", "", fmt.Errorf("cxdb sink is nil")
 	}
 	if req.Data == nil {
@@ -59,12 +60,52 @@ func (s *CXDBSink) append(ctx context.Context, req cxdb.AppendTurnRequest) (turn
 	if strings.TrimSpace(req.ParentTurnID) == "" {
 		req.ParentTurnID = s.HeadTurnID
 	}
-	resp, err := s.Client.AppendTurn(ctx, s.ContextID, req)
-	if err != nil {
+
+	var binErr error
+	if s.Binary != nil {
+		ctxID, err := strconv.ParseUint(strings.TrimSpace(s.ContextID), 10, 64)
+		if err != nil {
+			binErr = fmt.Errorf("cxdb binary append: invalid context_id %q: %w", s.ContextID, err)
+		} else {
+			parent := uint64(0)
+			if p := strings.TrimSpace(req.ParentTurnID); p != "" {
+				parent, err = strconv.ParseUint(p, 10, 64)
+				if err != nil {
+					binErr = fmt.Errorf("cxdb binary append: invalid parent_turn_id %q: %w", p, err)
+				}
+			}
+			if binErr == nil {
+				payload, err := cxdb.EncodeTurnPayload(req.TypeID, req.TypeVersion, req.Data)
+				if err != nil {
+					binErr = err
+				} else {
+					ack, err := s.Binary.AppendTurn(ctx, ctxID, parent, req.TypeID, uint32(req.TypeVersion), payload)
+					if err == nil {
+						s.HeadTurnID = strconv.FormatUint(ack.NewTurnID, 10)
+						return s.HeadTurnID, hex.EncodeToString(ack.ContentHash[:]), nil
+					}
+					binErr = err
+				}
+			}
+		}
+	}
+
+	if s.Client != nil {
+		resp, err := s.Client.AppendTurn(ctx, s.ContextID, req)
+		if err == nil {
+			s.HeadTurnID = resp.TurnID
+			return resp.TurnID, resp.ContentHash, nil
+		}
+		if binErr != nil {
+			return "", "", fmt.Errorf("cxdb append failed (binary=%v, http=%v)", binErr, err)
+		}
 		return "", "", err
 	}
-	s.HeadTurnID = resp.TurnID
-	return resp.TurnID, resp.ContentHash, nil
+
+	if binErr != nil {
+		return "", "", binErr
+	}
+	return "", "", fmt.Errorf("cxdb append failed: no append transport available")
 }
 
 func (s *CXDBSink) Append(ctx context.Context, typeID string, typeVersion int, data map[string]any) (turnID string, contentHash string, err error) {
@@ -76,18 +117,53 @@ func (s *CXDBSink) Append(ctx context.Context, typeID string, typeVersion int, d
 }
 
 func (s *CXDBSink) ForkFromHead(ctx context.Context) (*CXDBSink, error) {
-	if s == nil || s.Client == nil {
+	if s == nil || (s.Client == nil && s.Binary == nil) {
 		return nil, fmt.Errorf("cxdb sink is nil")
 	}
 	base := s.HeadTurnID
 	if strings.TrimSpace(base) == "" {
 		base = "0"
 	}
-	ci, err := s.Client.ForkContext(ctx, base)
-	if err != nil {
+
+	var binErr error
+	if s.Binary != nil {
+		if _, err := strconv.ParseUint(strings.TrimSpace(s.ContextID), 10, 64); err != nil {
+			binErr = fmt.Errorf("cxdb binary fork: invalid context_id %q: %w", s.ContextID, err)
+		} else {
+			baseID, err := strconv.ParseUint(strings.TrimSpace(base), 10, 64)
+			if err != nil {
+				binErr = fmt.Errorf("cxdb binary fork: invalid base_turn_id %q: %w", base, err)
+			} else {
+				ci, err := s.Binary.ForkContext(ctx, baseID)
+				if err == nil {
+					return NewCXDBSink(
+						s.Client,
+						s.Binary,
+						s.RunID,
+						strconv.FormatUint(ci.ContextID, 10),
+						strconv.FormatUint(ci.HeadTurnID, 10),
+						s.BundleID,
+					), nil
+				}
+				binErr = err
+			}
+		}
+	}
+
+	if s.Client != nil {
+		ci, err := s.Client.ForkContext(ctx, base)
+		if err == nil {
+			return NewCXDBSink(s.Client, s.Binary, s.RunID, ci.ContextID, ci.HeadTurnID, s.BundleID), nil
+		}
+		if binErr != nil {
+			return nil, fmt.Errorf("cxdb fork failed (binary=%v, http=%v)", binErr, err)
+		}
 		return nil, err
 	}
-	return NewCXDBSink(s.Client, s.Binary, s.RunID, ci.ContextID, ci.HeadTurnID, s.BundleID), nil
+	if binErr != nil {
+		return nil, binErr
+	}
+	return nil, fmt.Errorf("cxdb fork failed: no fork transport available")
 }
 
 func (s *CXDBSink) PutArtifactFile(ctx context.Context, nodeID, logicalName, path string) (artifactTurnID string, err error) {

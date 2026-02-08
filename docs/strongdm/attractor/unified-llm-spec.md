@@ -292,15 +292,15 @@ MODELS = [
     ModelInfo(id="claude-sonnet-4-5",             provider="anthropic", display_name="Claude Sonnet 4.5", context_window=200000, supports_tools=true, supports_vision=true, supports_reasoning=true),
 
     -- ==========================================================
-    -- OpenAI -- prefer GPT-5.2 series for top quality
+    -- OpenAI -- prefer GPT-5.3 Codex for top quality
     -- ==========================================================
 
+    ModelInfo(id="gpt-5.3-codex",                 provider="openai",    display_name="GPT-5.3 Codex",     context_window=1047576, supports_tools=true, supports_vision=true, supports_reasoning=true),
     ModelInfo(id="gpt-5.2",                       provider="openai",    display_name="GPT-5.2",           context_window=1047576, supports_tools=true, supports_vision=true, supports_reasoning=true),
-    ModelInfo(id="gpt-5.2-mini",                  provider="openai",    display_name="GPT-5.2 Mini",      context_window=1047576, supports_tools=true, supports_vision=true, supports_reasoning=true),
     ModelInfo(id="gpt-5.2-codex",                 provider="openai",    display_name="GPT-5.2 Codex",     context_window=1047576, supports_tools=true, supports_vision=true, supports_reasoning=true),
 
     -- ==========================================================
-    -- Gemini -- prefer Gemini 3 Flash Preview for latest
+    -- Gemini -- prefer Gemini 3 Pro Preview for top quality
     -- ==========================================================
 
     ModelInfo(id="gemini-3-pro-preview",          provider="gemini",    display_name="Gemini 3 Pro (Preview)",   context_window=1048576, supports_tools=true, supports_vision=true, supports_reasoning=true),

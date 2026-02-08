@@ -501,7 +501,7 @@ func TestAdapter_Stream_TranslatesFunctionCalls(t *testing.T) {
 			}
 		}
 
-		write(`{"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather","args":{"n":1}}}]}}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}`)
+		write(`{"candidates":[{"content":{"parts":[{"thoughtSignature":"sig-1","functionCall":{"name":"get_weather","args":{"n":1}}}]}}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}`)
 		write(`{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":2,"totalTokenCount":3}}`)
 	}))
 	t.Cleanup(srv.Close)
@@ -517,6 +517,7 @@ func TestAdapter_Stream_TranslatesFunctionCalls(t *testing.T) {
 	defer stream.Close()
 
 	var startID, endID string
+	var startSig, endSig string
 	var endArgs string
 	var finishResp *llm.Response
 	var kinds []llm.StreamEventType
@@ -526,10 +527,12 @@ func TestAdapter_Stream_TranslatesFunctionCalls(t *testing.T) {
 		case llm.StreamEventToolCallStart:
 			if ev.ToolCall != nil {
 				startID = ev.ToolCall.ID
+				startSig = ev.ToolCall.ThoughtSignature
 			}
 		case llm.StreamEventToolCallEnd:
 			if ev.ToolCall != nil {
 				endID = ev.ToolCall.ID
+				endSig = ev.ToolCall.ThoughtSignature
 				endArgs = string(ev.ToolCall.Arguments)
 			}
 		case llm.StreamEventFinish:
@@ -544,6 +547,9 @@ func TestAdapter_Stream_TranslatesFunctionCalls(t *testing.T) {
 	if strings.TrimSpace(endArgs) != `{"n":1}` {
 		t.Fatalf("tool args: %q", endArgs)
 	}
+	if startSig != "sig-1" || endSig != "sig-1" {
+		t.Fatalf("thought signature: start=%q end=%q", startSig, endSig)
+	}
 	if finishResp == nil {
 		t.Fatalf("expected finish response")
 	}
@@ -557,6 +563,9 @@ func TestAdapter_Stream_TranslatesFunctionCalls(t *testing.T) {
 	if strings.TrimSpace(string(calls[0].Arguments)) != `{"n":1}` {
 		t.Fatalf("finish tool call args: %q", string(calls[0].Arguments))
 	}
+	if calls[0].ThoughtSignature != "sig-1" {
+		t.Fatalf("finish tool call thought signature: %q", calls[0].ThoughtSignature)
+	}
 	foundStart := false
 	foundEnd := false
 	for _, k := range kinds {
@@ -569,6 +578,100 @@ func TestAdapter_Stream_TranslatesFunctionCalls(t *testing.T) {
 	}
 	if !foundStart || !foundEnd {
 		t.Fatalf("expected TOOL_CALL_START and TOOL_CALL_END events (kinds=%v)", kinds)
+	}
+}
+
+func TestAdapter_Complete_ReplaysFunctionCallThoughtSignature(t *testing.T) {
+	var secondBody map[string]any
+	callN := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callN++
+		if r.Method != http.MethodPost || !strings.Contains(r.URL.Path, ":generateContent") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if callN == 2 {
+			b, _ := io.ReadAll(r.Body)
+			_ = r.Body.Close()
+			_ = json.Unmarshal(b, &secondBody)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if callN == 1 {
+			_, _ = w.Write([]byte(`{
+  "candidates": [{"content": {"parts": [{"thoughtSignature":"sig-replay-1","functionCall":{"name":"list_dir","args":{"path":"."}}}]}}],
+  "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2}
+}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{
+  "candidates": [{"content": {"parts": [{"text":"done"}]}, "finishReason":"STOP"}],
+  "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2}
+}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	a := &Adapter{APIKey: "k", BaseURL: srv.URL, Client: srv.Client()}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	resp1, err := a.Complete(ctx, llm.Request{
+		Model:    "gemini-test",
+		Messages: []llm.Message{llm.User("hi")},
+		Tools: []llm.ToolDefinition{{
+			Name:       "list_dir",
+			Parameters: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("first Complete: %v", err)
+	}
+	calls := resp1.ToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("first tool calls: %+v", calls)
+	}
+	if calls[0].ThoughtSignature != "sig-replay-1" {
+		t.Fatalf("captured thought signature: %q", calls[0].ThoughtSignature)
+	}
+
+	toolResult := llm.ToolResultNamed(calls[0].ID, calls[0].Name, map[string]any{"entries": []string{"a", "b"}}, false)
+	_, err = a.Complete(ctx, llm.Request{
+		Model: "gemini-test",
+		Messages: []llm.Message{
+			llm.User("hi"),
+			resp1.Message,
+			toolResult,
+		},
+		Tools: []llm.ToolDefinition{{
+			Name:       "list_dir",
+			Parameters: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("second Complete: %v", err)
+	}
+	if secondBody == nil {
+		t.Fatalf("second request body not captured")
+	}
+
+	foundSig := ""
+	contents, _ := secondBody["contents"].([]any)
+	for _, cAny := range contents {
+		c, _ := cAny.(map[string]any)
+		parts, _ := c["parts"].([]any)
+		for _, pAny := range parts {
+			p, _ := pAny.(map[string]any)
+			if _, ok := p["functionCall"].(map[string]any); !ok {
+				continue
+			}
+			if sig, _ := p["thoughtSignature"].(string); sig != "" {
+				foundSig = sig
+			}
+		}
+	}
+	if foundSig != "sig-replay-1" {
+		t.Fatalf("replayed thought signature: got %q want %q", foundSig, "sig-replay-1")
 	}
 }
 
