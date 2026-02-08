@@ -7,3 +7,7 @@ When you are executing `docs/strongdm/attractor/kilroy-metaspec.md`, you MUST:
 - Do not ask the user questions while executing the metaspec. Use local inspection, tool calls, and web lookups to resolve uncertainty and proceed.
 - Defer setting up/running CXDB locally until after the Attractor implementation work is complete.
 
+## Open Files In Editors (CLI)
+
+- Cursor: `cursor -r -g "path/to/file:line[:col]"`
+- VS Code: `code -r -g "path/to/file:line[:col]"`
