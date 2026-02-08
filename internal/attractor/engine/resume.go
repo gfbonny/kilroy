@@ -333,7 +333,7 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 
 	// Continue traversal from next node.
 	eng.incomingEdge = nextEdge
-	res, err := eng.runLoop(ctx, nextEdge.To, append([]string{}, cp.CompletedNodes...), copyStringIntMap(cp.NodeRetries), nodeOutcomes)
+	res, err = eng.runLoop(ctx, nextEdge.To, append([]string{}, cp.CompletedNodes...), copyStringIntMap(cp.NodeRetries), nodeOutcomes)
 	if err != nil {
 		return nil, err
 	}
