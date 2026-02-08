@@ -333,9 +333,9 @@ This section documents *current known* headless interfaces for the three target 
 - Machine-readable events: `codex exec --json ...` emits newline-delimited JSON events to `stdout` (JSONL).
 - Model override: `--model, -m`
 - Working directory: `--cd, -C`
-- Non-interactive approvals/sandbox:
-  - `--ask-for-approval never` for fully non-interactive
-  - `--sandbox workspace-write` (or `--full-auto`) to permit edits
+- Non-interactive execution:
+  - `codex exec --json --sandbox workspace-write ...` is sufficient for non-interactive runs
+  - `--skip-git-repo-check` is only required when running outside a trusted git repository
 - Structured final output: `--output-schema <schema.json> -o <output.json>` writes final JSON output to a file.
 - Resume: `codex exec resume [SESSION_ID]` or `codex exec resume --last [PROMPT]`
 
