@@ -19,6 +19,9 @@ import (
 )
 
 func TestRunWithConfig_CLIBackend_CapturesInvocationAndPersistsArtifactsToCXDB(t *testing.T) {
+	cleanupStrayEngineArtifacts(t)
+	t.Cleanup(func() { cleanupStrayEngineArtifacts(t) })
+
 	repo := initTestRepo(t)
 	logsRoot := t.TempDir()
 

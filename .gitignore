@@ -1,3 +1,7 @@
 .ai/
 kilroy
 /restart-*/
+/internal/attractor/engine/cli_wrote.txt
+/internal/attractor/engine/status.json
+/cli_wrote.txt
+/status.json

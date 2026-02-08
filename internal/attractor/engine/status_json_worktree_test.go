@@ -12,6 +12,9 @@ import (
 )
 
 func TestRunWithConfig_CLIBackend_WorktreeStatusJSON_IsTreatedAsStageStatus(t *testing.T) {
+	cleanupStrayEngineArtifacts(t)
+	t.Cleanup(func() { cleanupStrayEngineArtifacts(t) })
+
 	repo := initTestRepo(t)
 	logsRoot := t.TempDir()
 

@@ -12,6 +12,9 @@ import (
 )
 
 func TestRunWithConfig_CLIBackend_WorktreeLegacyFailDetails_PopulatesFailureReason(t *testing.T) {
+	cleanupStrayEngineArtifacts(t)
+	t.Cleanup(func() { cleanupStrayEngineArtifacts(t) })
+
 	repo := initTestRepo(t)
 	logsRoot := t.TempDir()
 
