@@ -142,7 +142,12 @@ func (h *ParallelHandler) runBranch(ctx context.Context, exec *Execution, parall
 	// IMPORTANT: git ref namespace rules forbid creating refs under an existing ref path.
 	// Since the main run branch is typically "attractor/run/<run_id>", parallel branches
 	// MUST NOT be nested under that ref. Use a sibling namespace instead.
-	branchName := fmt.Sprintf("%s/parallel/%s/%s/%s", exec.Engine.Options.RunBranchPrefix, exec.Engine.Options.RunID, sanitizeRefComponent(parallelNode.ID), key)
+	prefix := strings.TrimSpace(exec.Engine.Options.RunBranchPrefix)
+	prefix = strings.TrimSuffix(prefix, "/")
+	if prefix == "" {
+		prefix = "attractor/run"
+	}
+	branchName := fmt.Sprintf("%s/parallel/%s/%s/%s", prefix, exec.Engine.Options.RunID, sanitizeRefComponent(parallelNode.ID), key)
 	branchRoot := filepath.Join(exec.LogsRoot, "parallel", parallelNode.ID, fmt.Sprintf("%02d-%s", idx+1, key))
 	worktreeDir := filepath.Join(branchRoot, "worktree")
 

@@ -900,17 +900,18 @@ func (e *Engine) checkpoint(nodeID string, out runtime.Outcome, completed []stri
 
 func (e *Engine) writeManifest(baseSHA string) error {
 	manifest := map[string]any{
-		"run_id":     e.Options.RunID,
-		"graph_name": e.Graph.Name,
-		"goal":       e.Graph.Attrs["goal"],
-		"base_sha":   baseSHA,
-		"run_branch": e.RunBranch,
-		"logs_root":  e.LogsRoot,
-		"worktree":   e.WorktreeDir,
-		"graph_dot":  filepath.Join(e.LogsRoot, "graph.dot"),
-		"started_at": time.Now().UTC().Format(time.RFC3339Nano),
-		"repo_path":  e.Options.RepoPath,
-		"kilroy_v1":  true,
+		"run_id":            e.Options.RunID,
+		"graph_name":        e.Graph.Name,
+		"goal":              e.Graph.Attrs["goal"],
+		"base_sha":          baseSHA,
+		"run_branch":        e.RunBranch,
+		"run_branch_prefix": e.Options.RunBranchPrefix,
+		"logs_root":         e.LogsRoot,
+		"worktree":          e.WorktreeDir,
+		"graph_dot":         filepath.Join(e.LogsRoot, "graph.dot"),
+		"started_at":        time.Now().UTC().Format(time.RFC3339Nano),
+		"repo_path":         e.Options.RepoPath,
+		"kilroy_v1":         true,
 		"run_config_path": func() string {
 			if e.RunConfig == nil {
 				return ""

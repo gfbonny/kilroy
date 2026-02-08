@@ -15,10 +15,11 @@ import (
 )
 
 type manifest struct {
-	RunID         string `json:"run_id"`
-	RepoPath      string `json:"repo_path"`
-	RunBranch     string `json:"run_branch"`
-	RunConfigPath string `json:"run_config_path"`
+	RunID           string `json:"run_id"`
+	RepoPath        string `json:"repo_path"`
+	RunBranch       string `json:"run_branch"`
+	RunBranchPrefix string `json:"run_branch_prefix"`
+	RunConfigPath   string `json:"run_config_path"`
 
 	ModelDB struct {
 		LiteLLMCatalogPath   string `json:"litellm_catalog_path"`
@@ -142,9 +143,10 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 	eng := &Engine{
 		Graph: g,
 		Options: RunOptions{
-			RepoPath: m.RepoPath,
-			RunID:    m.RunID,
-			LogsRoot: logsRoot,
+			RepoPath:        m.RepoPath,
+			RunID:           m.RunID,
+			LogsRoot:        logsRoot,
+			RunBranchPrefix: resolveRunBranchPrefix(m, cfg),
 		},
 		DotSource:       dotSource,
 		RunConfig:       cfg,
@@ -175,6 +177,7 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 			eng.Warn(w)
 		}
 	}
+	eng.baseLogsRoot = logsRoot
 	eng.Context.ReplaceSnapshot(cp.ContextValues, cp.Logs)
 	if cp != nil && cp.Extra != nil {
 		// Metaspec/attractor-spec: if the previous hop used `full` fidelity, degrade to
@@ -305,4 +308,45 @@ func loadManifest(path string) (*manifest, error) {
 		return nil, fmt.Errorf("manifest missing required fields")
 	}
 	return &m, nil
+}
+
+func resolveRunBranchPrefix(m *manifest, cfg *RunConfigFile) string {
+	if m != nil {
+		if prefix := normalizeRunBranchPrefix(m.RunBranchPrefix); prefix != "" {
+			return prefix
+		}
+	}
+	if cfg != nil {
+		if prefix := normalizeRunBranchPrefix(cfg.Git.RunBranchPrefix); prefix != "" {
+			return prefix
+		}
+	}
+	if m != nil {
+		if derived := deriveRunBranchPrefix(m.RunBranch, m.RunID); derived != "" {
+			return derived
+		}
+	}
+	return "attractor/run"
+}
+
+func deriveRunBranchPrefix(runBranch string, runID string) string {
+	runBranch = strings.TrimSpace(runBranch)
+	runID = strings.TrimSpace(runID)
+	if runBranch == "" || runID == "" {
+		return ""
+	}
+	suffix := "/" + runID
+	if !strings.HasSuffix(runBranch, suffix) {
+		return ""
+	}
+	return normalizeRunBranchPrefix(strings.TrimSuffix(runBranch, suffix))
+}
+
+func normalizeRunBranchPrefix(prefix string) string {
+	prefix = strings.TrimSpace(prefix)
+	prefix = strings.TrimSuffix(prefix, "/")
+	if prefix == "" {
+		return ""
+	}
+	return prefix
 }
