@@ -28,6 +28,20 @@ Although bringing your own agentic loop and unified LLM SDK is not required to b
 - Loop safety:
   - Use `loop_restart=true` on retry-loop edges that jump back to earlier stages.
   - Set graph-level `max_restarts` to bound cycle count and prevent unbounded runs.
+  - `loop_restart` now requires `failure_class=transient_infra`; deterministic failures emit `loop_restart_blocked` and terminate.
+- Failure-class semantics:
+  - Provider CLI stage failures emit normalized `failure_class` and `failure_signature` metadata at source.
+  - Stage retry gating consumes `failure_class` and blocks deterministic classified failures (`stage_retry_blocked` event).
+  - Unclassified fail/retry outcomes retain legacy stage retry behavior for backward compatibility.
+- Provider preflight:
+  - Runs after catalog/provider-model validation and before CXDB health/bootstrap.
+  - Always writes `<logs_root>/preflight_report.json` (pass/warn/fail checks and summary).
+  - `KILROY_PREFLIGHT_STRICT_CAPABILITIES=1` turns capability-probe failures into hard preflight failures.
+  - `KILROY_PREFLIGHT_CAPABILITY_PROBES=off` disables capability probing and keeps binary-presence checks only.
+- Fan-in all-fail behavior:
+  - When all parallel branches are `status=fail`, fan-in emits `failure_class` + `failure_signature` on the aggregate fail outcome.
+  - Deterministic precedence is fail-closed: any deterministic/unknown branch class makes aggregate deterministic.
+  - Current caveat: `status=retry` branches are still considered winner candidates by heuristic selection; all-fail aggregation only runs when every branch is `status=fail`.
 - Detached runs:
   - Launch long-running jobs with `./kilroy attractor run --detach --graph <graph.dot> --config <run.yaml> --run-id <run_id> --logs-root <logs_root>`.
   - Detached launch writes `<logs_root>/run.pid` and appends launcher/child output to `<logs_root>/run.out`.
