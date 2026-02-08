@@ -740,7 +740,20 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 			retries[node.ID] = 0
 			return out, nil
 		}
-		// FAIL and RETRY both participate in retry policy (spec DoD expects this).
+
+		// Retry policy is failure-class aware. Deterministic failures fail fast instead of
+		// consuming retry budget and sleep time.
+		if !shouldRetryOutcome(out) {
+			if out.FailureReason == "" {
+				out.FailureReason = "deterministic failure; retry blocked"
+			}
+			out.Status = runtime.StatusFail
+			fo, _ := out.Canonicalize()
+			_ = writeJSON(filepath.Join(stageDir, "status.json"), fo)
+			return fo, nil
+		}
+
+		// FAIL and RETRY both participate in retry policy when classifies transient.
 		if attempt < maxAttempts {
 			retries[node.ID]++
 			delay := backoffDelayForNode(e.Options.RunID, e.Graph, node, attempt)
