@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,6 +91,27 @@ digraph G {
 	restartDir := filepath.Join(logsRoot, "restart-1")
 	if _, err := os.Stat(restartDir); err != nil {
 		t.Fatalf("expected restart-1 directory to exist: %v", err)
+	}
+
+	// Verify manifest.json exists in the restart directory (review fix: metadata in restart dirs).
+	manifestPath := filepath.Join(restartDir, "manifest.json")
+	manifestBytes, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("expected manifest.json in restart dir: %v", err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+		t.Fatalf("invalid manifest.json: %v", err)
+	}
+	if manifest["run_id"] != "test-restart" {
+		t.Errorf("manifest run_id = %v, want %q", manifest["run_id"], "test-restart")
+	}
+
+	// Verify context was reset on restart (review fix: no stale context bleed).
+	// After a successful restart, context should have graph-level attrs but NOT
+	// node outcomes from the first (failed) iteration.
+	if _, found := eng.Context.Get("node.work.outcome"); found {
+		t.Error("stale node outcome leaked across restart boundary")
 	}
 }
 

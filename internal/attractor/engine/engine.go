@@ -102,6 +102,7 @@ type Engine struct {
 	// loop_restart state (attractor-spec §3.2 Step 7).
 	restartCount int
 	baseLogsRoot string // original LogsRoot before any restarts
+	baseSHA      string // HEAD SHA at run start, needed for restart manifests
 
 	progressMu sync.Mutex
 
@@ -253,6 +254,7 @@ func (e *Engine) run(ctx context.Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	e.baseSHA = baseSHA
 	if err := os.MkdirAll(e.LogsRoot, 0o755); err != nil {
 		return nil, err
 	}
@@ -566,13 +568,27 @@ func (e *Engine) loopRestart(ctx context.Context, targetNodeID string) (*Result,
 		"new_logs_root": newLogsRoot,
 	})
 
+	// Switch to fresh logs; worktree stays the same.
+	e.LogsRoot = newLogsRoot
+
+	// Write run metadata into the restart directory so consumers find manifest.json.
+	if err := e.writeManifest(e.baseSHA); err != nil {
+		return nil, fmt.Errorf("loop_restart: write manifest: %w", err)
+	}
+	if e.RunConfig != nil {
+		_ = writeJSON(filepath.Join(newLogsRoot, "run_config.json"), e.RunConfig)
+	}
 	// Persist graph.dot in the new logs dir for replay/resume.
 	if len(e.DotSource) > 0 {
 		_ = os.WriteFile(filepath.Join(newLogsRoot, "graph.dot"), e.DotSource, 0o644)
 	}
 
-	// Switch to fresh logs; worktree stays the same.
-	e.LogsRoot = newLogsRoot
+	// Reset context: start fresh with only graph-level attributes.
+	e.Context = runtime.NewContext()
+	for k, v := range e.Graph.Attrs {
+		e.Context.Set("graph."+k, v)
+	}
+	e.Context.Set("graph.goal", e.Graph.Attrs["goal"])
 
 	// Reset fidelity state.
 	e.incomingEdge = nil
