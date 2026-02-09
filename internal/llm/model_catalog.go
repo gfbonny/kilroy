@@ -9,20 +9,20 @@ import (
 	"strings"
 )
 
-// ModelInfo is the normalized model metadata entry, primarily sourced from the LiteLLM catalog
+// ModelInfo is the normalized model metadata entry, primarily sourced from OpenRouter model info
 // in Kilroy. This is metadata-only and is not used as a provider call path.
 type ModelInfo struct {
-	ID              string   `json:"id"`
-	Provider        string   `json:"provider"`
-	DisplayName     string   `json:"display_name"`
-	ContextWindow   int      `json:"context_window"`
-	MaxOutputTokens *int     `json:"max_output_tokens,omitempty"`
-	SupportsTools   bool     `json:"supports_tools"`
-	SupportsVision  bool     `json:"supports_vision"`
-	SupportsReasoning bool   `json:"supports_reasoning"`
+	ID                   string   `json:"id"`
+	Provider             string   `json:"provider"`
+	DisplayName          string   `json:"display_name"`
+	ContextWindow        int      `json:"context_window"`
+	MaxOutputTokens      *int     `json:"max_output_tokens,omitempty"`
+	SupportsTools        bool     `json:"supports_tools"`
+	SupportsVision       bool     `json:"supports_vision"`
+	SupportsReasoning    bool     `json:"supports_reasoning"`
 	InputCostPerMillion  *float64 `json:"input_cost_per_million,omitempty"`
 	OutputCostPerMillion *float64 `json:"output_cost_per_million,omitempty"`
-	Aliases         []string `json:"aliases,omitempty"`
+	Aliases              []string `json:"aliases,omitempty"`
 }
 
 type ModelCatalog struct {
@@ -115,66 +115,77 @@ func (c *ModelCatalog) buildIndex() {
 	c.byID = by
 }
 
-// LoadModelCatalogFromLiteLLMJSON loads model metadata from a LiteLLM model catalog JSON file.
-// The LiteLLM catalog is metadata-only (pricing + context windows + capability flags).
-func LoadModelCatalogFromLiteLLMJSON(path string) (*ModelCatalog, error) {
+type openRouterCatalogPayload struct {
+	Data []openRouterCatalogModel `json:"data"`
+}
+
+type openRouterCatalogModel struct {
+	ID                  string   `json:"id"`
+	ContextLength       int      `json:"context_length"`
+	SupportedParameters []string `json:"supported_parameters"`
+	Architecture        struct {
+		InputModalities  []string `json:"input_modalities"`
+		OutputModalities []string `json:"output_modalities"`
+	} `json:"architecture"`
+	Pricing struct {
+		Prompt     string `json:"prompt"`
+		Completion string `json:"completion"`
+	} `json:"pricing"`
+	TopProvider struct {
+		ContextLength       int `json:"context_length"`
+		MaxCompletionTokens int `json:"max_completion_tokens"`
+	} `json:"top_provider"`
+}
+
+// LoadModelCatalogFromOpenRouterJSON loads model metadata from OpenRouter's
+// /api/v1/models payload shape: {"data":[...]}.
+func LoadModelCatalogFromOpenRouterJSON(path string) (*ModelCatalog, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-
-	var raw map[string]map[string]any
-	dec := json.NewDecoder(strings.NewReader(string(b)))
-	dec.UseNumber()
-	if err := dec.Decode(&raw); err != nil {
+	var payload openRouterCatalogPayload
+	if err := json.Unmarshal(b, &payload); err != nil {
 		return nil, err
 	}
-	if len(raw) == 0 {
-		return nil, fmt.Errorf("litellm catalog is empty: %s", path)
+	if len(payload.Data) == 0 {
+		return nil, fmt.Errorf("openrouter catalog is empty: %s", path)
 	}
 
 	var models []ModelInfo
-	for id, v := range raw {
-		// Skip the upstream schema example.
-		if id == "sample_spec" {
+	for _, v := range payload.Data {
+		id := strings.TrimSpace(v.ID)
+		if id == "" {
 			continue
 		}
-		mode, _ := v["mode"].(string)
-		if strings.TrimSpace(mode) != "" && strings.TrimSpace(mode) != "chat" {
-			continue
-		}
-
-		prov := normalizeCatalogProvider(fmt.Sprint(v["litellm_provider"]))
-		ctxWindow := parseInt(v["max_input_tokens"])
+		prov := providerFromOpenRouterID(id)
+		ctxWindow := v.ContextLength
 		if ctxWindow == 0 {
-			ctxWindow = parseInt(v["max_tokens"])
+			ctxWindow = v.TopProvider.ContextLength
 		}
-		maxOut := parseInt(v["max_output_tokens"])
-		if maxOut == 0 {
-			maxOut = parseInt(v["max_tokens"])
-		}
+		maxOut := v.TopProvider.MaxCompletionTokens
 		var maxOutPtr *int
 		if maxOut > 0 {
 			maxOutPtr = &maxOut
 		}
 
-		inCost := parseFloatPtr(v["input_cost_per_token"])
-		outCost := parseFloatPtr(v["output_cost_per_token"])
+		inCost := parseFloatStringPtr(v.Pricing.Prompt)
+		outCost := parseFloatStringPtr(v.Pricing.Completion)
 		inPerM := scalePerMillion(inCost)
 		outPerM := scalePerMillion(outCost)
 
 		models = append(models, ModelInfo{
-			ID:                id,
-			Provider:          prov,
-			DisplayName:       id,
-			ContextWindow:     ctxWindow,
-			MaxOutputTokens:   maxOutPtr,
-			SupportsTools:     parseBool(v["supports_function_calling"]),
-			SupportsVision:    parseBool(v["supports_vision"]),
-			SupportsReasoning: parseBool(v["supports_reasoning"]),
+			ID:                   id,
+			Provider:             prov,
+			DisplayName:          id,
+			ContextWindow:        ctxWindow,
+			MaxOutputTokens:      maxOutPtr,
+			SupportsTools:        stringSliceContainsCI(v.SupportedParameters, "tools"),
+			SupportsVision:       stringSliceContainsCI(v.Architecture.InputModalities, "image") || stringSliceContainsCI(v.Architecture.OutputModalities, "image"),
+			SupportsReasoning:    stringSliceContainsCI(v.SupportedParameters, "reasoning") || stringSliceContainsCI(v.SupportedParameters, "include_reasoning"),
 			InputCostPerMillion:  inPerM,
 			OutputCostPerMillion: outPerM,
-			Aliases:           nil,
+			Aliases:              nil,
 		})
 	}
 
@@ -188,6 +199,11 @@ func LoadModelCatalogFromLiteLLMJSON(path string) (*ModelCatalog, error) {
 	return &ModelCatalog{Models: models}, nil
 }
 
+// Deprecated: use LoadModelCatalogFromOpenRouterJSON.
+func LoadModelCatalogFromLiteLLMJSON(path string) (*ModelCatalog, error) {
+	return LoadModelCatalogFromOpenRouterJSON(path)
+}
+
 func normalizeCatalogProvider(p string) string {
 	p = strings.ToLower(strings.TrimSpace(p))
 	switch p {
@@ -198,57 +214,35 @@ func normalizeCatalogProvider(p string) string {
 	}
 }
 
-func parseInt(v any) int {
-	switch x := v.(type) {
-	case json.Number:
-		n, _ := x.Int64()
-		return int(n)
-	case float64:
-		return int(x)
-	case int:
-		return x
-	case string:
-		n, _ := strconv.Atoi(strings.TrimSpace(x))
-		return n
-	default:
-		return 0
+func providerFromOpenRouterID(id string) string {
+	id = strings.TrimSpace(id)
+	parts := strings.SplitN(id, "/", 2)
+	if len(parts) < 2 {
+		return ""
 	}
+	return normalizeCatalogProvider(parts[0])
 }
 
-func parseBool(v any) bool {
-	switch x := v.(type) {
-	case bool:
-		return x
-	case string:
-		b, _ := strconv.ParseBool(strings.TrimSpace(x))
-		return b
-	default:
-		return false
+func stringSliceContainsCI(values []string, target string) bool {
+	target = strings.ToLower(strings.TrimSpace(target))
+	for _, v := range values {
+		if strings.ToLower(strings.TrimSpace(v)) == target {
+			return true
+		}
 	}
+	return false
 }
 
-func parseFloatPtr(v any) *float64 {
-	switch x := v.(type) {
-	case json.Number:
-		f, err := x.Float64()
-		if err != nil {
-			return nil
-		}
-		return &f
-	case float64:
-		return &x
-	case int:
-		f := float64(x)
-		return &f
-	case string:
-		f, err := strconv.ParseFloat(strings.TrimSpace(x), 64)
-		if err != nil {
-			return nil
-		}
-		return &f
-	default:
+func parseFloatStringPtr(v string) *float64 {
+	v = strings.TrimSpace(v)
+	if v == "" {
 		return nil
 	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return nil
+	}
+	return &f
 }
 
 func scalePerMillion(perToken *float64) *float64 {
@@ -258,4 +252,3 @@ func scalePerMillion(perToken *float64) *float64 {
 	v := *perToken * 1_000_000
 	return &v
 }
-
