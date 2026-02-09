@@ -75,8 +75,22 @@ digraph G {
 	if _, statErr := os.Stat(filepath.Join(logsRoot, "verify", "status.json")); !os.IsNotExist(statErr) {
 		t.Fatalf("verify node should not execute after fan-in all-fail; stat err=%v", statErr)
 	}
-	if fanInEdgeWasSelected(t, filepath.Join(logsRoot, "progress.ndjson"), "join", "verify") {
+	progressPath := filepath.Join(logsRoot, "progress.ndjson")
+	if fanInEdgeWasSelected(t, progressPath, "join", "verify") {
 		t.Fatalf("unexpected edge_selected join->verify after fan-in all-fail")
+	}
+	if got := countProgressEventsForNode(t, progressPath, "stage_attempt_start", "join"); got != 1 {
+		t.Fatalf("join attempt count: got %d want %d", got, 1)
+	}
+	if hasProgressEventForNode(t, progressPath, "stage_retry_sleep", "join") {
+		t.Fatalf("unexpected stage_retry_sleep for deterministic join failure")
+	}
+	blocked, blockedClass := findRetryBlockedClassForNode(t, progressPath, "join")
+	if !blocked {
+		t.Fatalf("expected stage_retry_blocked for join deterministic failure")
+	}
+	if blockedClass != failureClassDeterministic {
+		t.Fatalf("stage_retry_blocked failure_class: got %q want %q", blockedClass, failureClassDeterministic)
 	}
 
 	final := mustReadFinalOutcome(t, filepath.Join(logsRoot, "final.json"))
@@ -90,19 +104,7 @@ digraph G {
 
 func fanInEdgeWasSelected(t *testing.T, progressPath, from, to string) bool {
 	t.Helper()
-	b, err := os.ReadFile(progressPath)
-	if err != nil {
-		t.Fatalf("read progress %s: %v", progressPath, err)
-	}
-	for _, line := range strings.Split(string(b), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		var ev map[string]any
-		if err := json.Unmarshal([]byte(line), &ev); err != nil {
-			t.Fatalf("decode progress row %q: %v", line, err)
-		}
+	for _, ev := range mustReadProgressEventsFile(t, progressPath) {
 		if strings.TrimSpace(anyToString(ev["event"])) != "edge_selected" {
 			continue
 		}
@@ -112,6 +114,61 @@ func fanInEdgeWasSelected(t *testing.T, progressPath, from, to string) bool {
 		}
 	}
 	return false
+}
+
+func countProgressEventsForNode(t *testing.T, progressPath, eventName, nodeID string) int {
+	t.Helper()
+	count := 0
+	for _, ev := range mustReadProgressEventsFile(t, progressPath) {
+		if strings.TrimSpace(anyToString(ev["event"])) != strings.TrimSpace(eventName) {
+			continue
+		}
+		if strings.TrimSpace(anyToString(ev["node_id"])) != strings.TrimSpace(nodeID) {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+func hasProgressEventForNode(t *testing.T, progressPath, eventName, nodeID string) bool {
+	t.Helper()
+	return countProgressEventsForNode(t, progressPath, eventName, nodeID) > 0
+}
+
+func findRetryBlockedClassForNode(t *testing.T, progressPath, nodeID string) (bool, string) {
+	t.Helper()
+	for _, ev := range mustReadProgressEventsFile(t, progressPath) {
+		if strings.TrimSpace(anyToString(ev["event"])) != "stage_retry_blocked" {
+			continue
+		}
+		if strings.TrimSpace(anyToString(ev["node_id"])) != strings.TrimSpace(nodeID) {
+			continue
+		}
+		return true, strings.TrimSpace(anyToString(ev["failure_class"]))
+	}
+	return false, ""
+}
+
+func mustReadProgressEventsFile(t *testing.T, progressPath string) []map[string]any {
+	t.Helper()
+	b, err := os.ReadFile(progressPath)
+	if err != nil {
+		t.Fatalf("read progress %s: %v", progressPath, err)
+	}
+	events := make([]map[string]any, 0)
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var ev map[string]any
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("decode progress row %q: %v", line, err)
+		}
+		events = append(events, ev)
+	}
+	return events
 }
 
 func mustReadFinalOutcome(t *testing.T, path string) runtime.FinalOutcome {
