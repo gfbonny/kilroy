@@ -656,6 +656,10 @@ func (e *Engine) loopRestart(ctx context.Context, targetNodeID string, fromNodeI
 		_ = os.WriteFile(filepath.Join(newLogsRoot, "graph.dot"), e.DotSource, 0o644)
 	}
 
+	// NOTE: loopFailureSignatures is intentionally NOT reset across loop restarts.
+	// If the same deterministic failure persists after a restart, the counter should
+	// keep accumulating so the circuit breaker can still trip and prevent infinite loops.
+
 	// Reset context: start fresh with only graph-level attributes.
 	e.Context = runtime.NewContext()
 	for k, v := range e.Graph.Attrs {
@@ -907,6 +911,9 @@ func (e *Engine) checkpoint(nodeID string, out runtime.Outcome, completed []stri
 	cp.Extra["restart_count"] = e.restartCount
 	if len(e.restartFailureSignatures) > 0 {
 		cp.Extra["restart_failure_signatures"] = copyStringIntMap(e.restartFailureSignatures)
+	}
+	if len(e.loopFailureSignatures) > 0 {
+		cp.Extra["loop_failure_signatures"] = copyStringIntMap(e.loopFailureSignatures)
 	}
 	if strings.TrimSpace(e.lastResolvedFidelity) != "" {
 		cp.Extra["last_fidelity"] = e.lastResolvedFidelity

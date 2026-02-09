@@ -231,6 +231,7 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 	eng.Context.ReplaceSnapshot(cp.ContextValues, cp.Logs)
 	eng.baseLogsRoot, eng.restartCount = restoreRestartState(logsRoot, cp)
 	eng.restartFailureSignatures = restoreRestartFailureSignatures(cp)
+	eng.loopFailureSignatures = restoreLoopFailureSignatures(cp)
 	eng.baseSHA = cp.GitCommitSHA
 	eng.lastCheckpointSHA = cp.GitCommitSHA
 	if cp != nil && cp.Extra != nil {
@@ -450,6 +451,36 @@ func restoreRestartFailureSignatures(cp *runtime.Checkpoint) map[string]int {
 		return out
 	}
 	raw, ok := cp.Extra["restart_failure_signatures"]
+	if !ok || raw == nil {
+		return out
+	}
+	switch m := raw.(type) {
+	case map[string]int:
+		for k, v := range m {
+			if strings.TrimSpace(k) == "" || v < 0 {
+				continue
+			}
+			out[strings.TrimSpace(k)] = v
+		}
+	case map[string]any:
+		for k, v := range m {
+			if strings.TrimSpace(k) == "" {
+				continue
+			}
+			if n, ok := anyToNonNegativeInt(v); ok {
+				out[strings.TrimSpace(k)] = n
+			}
+		}
+	}
+	return out
+}
+
+func restoreLoopFailureSignatures(cp *runtime.Checkpoint) map[string]int {
+	out := map[string]int{}
+	if cp == nil || cp.Extra == nil {
+		return out
+	}
+	raw, ok := cp.Extra["loop_failure_signatures"]
 	if !ok || raw == nil {
 		return out
 	}
