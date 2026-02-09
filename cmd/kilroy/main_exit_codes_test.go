@@ -321,6 +321,11 @@ func (s *cxdbTestServer) handleBinaryConn(conn net.Conn) {
 
 func buildKilroyBinary(t *testing.T) string {
 	t.Helper()
+	return buildKilroyBinaryWithRevision(t, "")
+}
+
+func buildKilroyBinaryWithRevision(t *testing.T, revision string) string {
+	t.Helper()
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
@@ -328,7 +333,12 @@ func buildKilroyBinary(t *testing.T) string {
 	// wd is .../cmd/kilroy
 	root := filepath.Dir(filepath.Dir(wd))
 	bin := filepath.Join(t.TempDir(), "kilroy")
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/kilroy")
+	args := []string{"build", "-o", bin}
+	if strings.TrimSpace(revision) != "" {
+		args = append(args, "-ldflags", "-X main.embeddedBuildRevision="+revision)
+	}
+	args = append(args, "./cmd/kilroy")
+	cmd := exec.Command("go", args...)
 	cmd.Dir = root
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -421,6 +431,26 @@ func runKilroy(t *testing.T, bin string, args ...string) (exitCode int, stdoutSt
 	return ee.ExitCode(), string(out)
 }
 
+func runKilroyInDir(t *testing.T, dir string, bin string, args ...string) (exitCode int, stdoutStderr string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("kilroy timed out\n%s", string(out))
+	}
+	if err == nil {
+		return 0, string(out)
+	}
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("kilroy failed: %v\n%s", err, string(out))
+	}
+	return ee.ExitCode(), string(out)
+}
+
 func TestKilroyAttractorExitCodes(t *testing.T) {
 	cxdbSrv := newCXDBTestServer(t)
 	bin := buildKilroyBinary(t)
@@ -492,8 +522,69 @@ func TestUsage_IncludesAllowTestShimFlag(t *testing.T) {
 	if !strings.Contains(out, "--allow-test-shim") {
 		t.Fatalf("usage should include --allow-test-shim; output:\n%s", out)
 	}
+	if !strings.Contains(out, "--confirm-stale-build") {
+		t.Fatalf("usage should include --confirm-stale-build; output:\n%s", out)
+	}
 	if !strings.Contains(out, "--force-model") {
 		t.Fatalf("usage should include --force-model; output:\n%s", out)
+	}
+}
+
+func TestAttractorRun_StaleBuildRequiresConfirm(t *testing.T) {
+	bin := buildKilroyBinaryWithRevision(t, "deadbeef")
+	repo := initTestRepo(t)
+	repoBin := filepath.Join(repo, "kilroy")
+	b, err := os.ReadFile(bin)
+	if err != nil {
+		t.Fatalf("read built binary: %v", err)
+	}
+	if err := os.WriteFile(repoBin, b, 0o755); err != nil {
+		t.Fatalf("write repo binary: %v", err)
+	}
+
+	missingGraph := filepath.Join(repo, "missing.dot")
+	missingConfig := filepath.Join(repo, "missing.yaml")
+	code, out := runKilroyInDir(t, repo, repoBin, "attractor", "run", "--graph", missingGraph, "--config", missingConfig)
+	if code != 1 {
+		t.Fatalf("exit code: got %d want 1\n%s", code, out)
+	}
+	if !strings.Contains(out, "WARNING: STALE KILROY BUILD DETECTED") {
+		t.Fatalf("expected stale build warning, got:\n%s", out)
+	}
+	if !strings.Contains(out, "--confirm-stale-build") {
+		t.Fatalf("expected confirm remediation hint, got:\n%s", out)
+	}
+	if strings.Contains(out, "missing.dot") {
+		t.Fatalf("expected stale-build gate before graph read, got:\n%s", out)
+	}
+}
+
+func TestAttractorRun_StaleBuildConfirmAllowsProceeding(t *testing.T) {
+	bin := buildKilroyBinaryWithRevision(t, "deadbeef")
+	repo := initTestRepo(t)
+	repoBin := filepath.Join(repo, "kilroy")
+	b, err := os.ReadFile(bin)
+	if err != nil {
+		t.Fatalf("read built binary: %v", err)
+	}
+	if err := os.WriteFile(repoBin, b, 0o755); err != nil {
+		t.Fatalf("write repo binary: %v", err)
+	}
+
+	missingGraph := filepath.Join(repo, "missing.dot")
+	missingConfig := filepath.Join(repo, "missing.yaml")
+	code, out := runKilroyInDir(t, repo, repoBin, "attractor", "run", "--confirm-stale-build", "--graph", missingGraph, "--config", missingConfig)
+	if code != 1 {
+		t.Fatalf("exit code: got %d want 1\n%s", code, out)
+	}
+	if !strings.Contains(out, "WARNING: STALE KILROY BUILD DETECTED") {
+		t.Fatalf("expected stale build warning, got:\n%s", out)
+	}
+	if !strings.Contains(out, "proceeding because --confirm-stale-build was provided") {
+		t.Fatalf("expected proceed message, got:\n%s", out)
+	}
+	if !strings.Contains(out, "missing.dot") {
+		t.Fatalf("expected command to proceed to graph read, got:\n%s", out)
 	}
 }
 

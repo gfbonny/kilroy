@@ -29,7 +29,7 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
-	fmt.Fprintln(os.Stderr, "  kilroy attractor run [--detach] [--allow-test-shim] [--force-model <provider=model>] --graph <file.dot> --config <run.yaml> [--run-id <id>] [--logs-root <dir>]")
+	fmt.Fprintln(os.Stderr, "  kilroy attractor run [--detach] [--allow-test-shim] [--confirm-stale-build] [--force-model <provider=model>] --graph <file.dot> --config <run.yaml> [--run-id <id>] [--logs-root <dir>]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor resume --logs-root <dir>")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor resume --cxdb <http_base_url> --context-id <id>")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor resume --run-branch <attractor/run/...> [--repo <path>]")
@@ -64,6 +64,7 @@ func attractorRun(args []string) {
 	var logsRoot string
 	var detach bool
 	var allowTestShim bool
+	var confirmStaleBuild bool
 	var forceModelSpecs []string
 
 	for i := 0; i < len(args); i++ {
@@ -72,6 +73,8 @@ func attractorRun(args []string) {
 			detach = true
 		case "--allow-test-shim":
 			allowTestShim = true
+		case "--confirm-stale-build":
+			confirmStaleBuild = true
 		case "--force-model":
 			i++
 			if i >= len(args) {
@@ -117,6 +120,10 @@ func attractorRun(args []string) {
 		usage()
 		os.Exit(1)
 	}
+	if err := ensureFreshKilroyBuild(confirmStaleBuild); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	forceModels, canonicalForceSpecs, err := parseForceModelFlags(forceModelSpecs)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -150,6 +157,9 @@ func attractorRun(args []string) {
 		}
 		if allowTestShim {
 			childArgs = append(childArgs, "--allow-test-shim")
+		}
+		if confirmStaleBuild {
+			childArgs = append(childArgs, "--confirm-stale-build")
 		}
 		for _, spec := range canonicalForceSpecs {
 			childArgs = append(childArgs, "--force-model", spec)
