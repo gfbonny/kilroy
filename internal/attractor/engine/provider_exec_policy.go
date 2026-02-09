@@ -59,6 +59,23 @@ func resolveProviderExecutable(cfg *RunConfigFile, provider string, opts RunOpti
 	}
 }
 
+func validateRunCLIProfilePolicy(cfg *RunConfigFile, opts RunOptions) error {
+	switch normalizedCLIProfile(cfg) {
+	case "real":
+		if overrides := configuredProviderPathOverrides(); len(overrides) > 0 {
+			return fmt.Errorf("preflight: llm.cli_profile=real forbids provider path overrides via %s (unset overrides or use llm.cli_profile=test_shim with --allow-test-shim)", strings.Join(overrides, ", "))
+		}
+		return nil
+	case "test_shim":
+		if !opts.AllowTestShim {
+			return fmt.Errorf("preflight: llm.cli_profile=test_shim requires --allow-test-shim")
+		}
+		return nil
+	default:
+		return fmt.Errorf("invalid llm.cli_profile: %q (want real|test_shim)", normalizedCLIProfile(cfg))
+	}
+}
+
 func normalizedCLIProfile(cfg *RunConfigFile) string {
 	if cfg == nil {
 		return "real"

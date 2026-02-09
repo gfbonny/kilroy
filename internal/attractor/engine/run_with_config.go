@@ -68,6 +68,9 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	if err := opts.applyDefaults(); err != nil {
 		return nil, err
 	}
+	if err := validateRunCLIProfilePolicy(cfg, opts); err != nil {
+		return nil, err
+	}
 
 	// Resolve + snapshot the LiteLLM model catalog for this run (repeatability).
 	resolved, err := modeldb.ResolveLiteLLMCatalog(

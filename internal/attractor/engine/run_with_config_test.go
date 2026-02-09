@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -63,5 +64,75 @@ digraph G {
 	}
 	if got, want := res.CXDBUIURL, "http://127.0.0.1:9020"; got != want {
 		t.Fatalf("res.CXDBUIURL=%q want %q", got, want)
+	}
+}
+
+func TestRunWithConfig_RejectsTestShimWithoutAllowFlag(t *testing.T) {
+	repo := initTestRepo(t)
+	cfg := &RunConfigFile{}
+	cfg.Version = 1
+	cfg.Repo.Path = repo
+	cfg.CXDB.BinaryAddr = "127.0.0.1:9009"
+	cfg.CXDB.HTTPBaseURL = "http://127.0.0.1:9010"
+	cfg.LLM.CLIProfile = "test_shim"
+	cfg.LLM.Providers = map[string]ProviderConfig{
+		"openai": {Backend: BackendCLI, Executable: "/tmp/fake/codex"},
+	}
+	cfg.ModelDB.LiteLLMCatalogPath = writePinnedCatalog(t)
+	cfg.ModelDB.LiteLLMCatalogUpdatePolicy = "pinned"
+
+	dot := []byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  start -> exit
+}
+`)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "shim-no-allow", LogsRoot: t.TempDir()})
+	if err == nil {
+		t.Fatalf("expected test_shim gate error, got nil")
+	}
+	if !strings.Contains(err.Error(), "llm.cli_profile=test_shim requires --allow-test-shim") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunWithConfig_RejectsRealProfileWhenProviderPathEnvIsSet(t *testing.T) {
+	repo := initTestRepo(t)
+	t.Setenv("KILROY_CODEX_PATH", "/tmp/fake/codex")
+
+	cfg := &RunConfigFile{}
+	cfg.Version = 1
+	cfg.Repo.Path = repo
+	cfg.CXDB.BinaryAddr = "127.0.0.1:9009"
+	cfg.CXDB.HTTPBaseURL = "http://127.0.0.1:9010"
+	cfg.LLM.CLIProfile = "real"
+	cfg.LLM.Providers = map[string]ProviderConfig{
+		"openai": {Backend: BackendCLI},
+	}
+	cfg.ModelDB.LiteLLMCatalogPath = writePinnedCatalog(t)
+	cfg.ModelDB.LiteLLMCatalogUpdatePolicy = "pinned"
+
+	dot := []byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="hi"]
+  start -> a -> exit
+}
+`)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "real-env-reject", LogsRoot: t.TempDir()})
+	if err == nil {
+		t.Fatalf("expected real profile env override error, got nil")
+	}
+	if !strings.Contains(err.Error(), "llm.cli_profile=real forbids provider path overrides") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "KILROY_CODEX_PATH") {
+		t.Fatalf("expected env key in error, got %v", err)
 	}
 }
