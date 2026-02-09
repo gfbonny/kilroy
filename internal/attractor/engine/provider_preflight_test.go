@@ -81,10 +81,9 @@ func TestRunProviderCapabilityProbe_RespectsParentContextCancel(t *testing.T) {
 func TestRunWithConfig_FailsFast_WhenCLIModelNotInCatalogForProvider(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
-  "gemini/gemini-3-pro-preview": {
-    "litellm_provider": "google",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "google/gemini-3-pro-preview"}
+  ]
 }`)
 
 	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
@@ -112,10 +111,9 @@ func TestRunWithConfig_FailsFast_WhenCLIModelNotInCatalogForProvider(t *testing.
 func TestRunWithConfig_FailsFast_WhenAPIModelNotInCatalogForProvider(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
-  "anthropic/claude-opus-4-6": {
-    "litellm_provider": "anthropic",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "anthropic/claude-opus-4-6"}
+  ]
 }`)
 
 	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
@@ -143,10 +141,9 @@ func TestRunWithConfig_FailsFast_WhenAPIModelNotInCatalogForProvider(t *testing.
 func TestRunWithConfig_UsesModelFallbackAttributeForCatalogValidation(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
-  "gemini/gemini-3-pro-preview": {
-    "litellm_provider": "google",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "google/gemini-3-pro-preview"}
+  ]
 }`)
 
 	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
@@ -170,10 +167,9 @@ func TestRunWithConfig_UsesModelFallbackAttributeForCatalogValidation(t *testing
 func TestRunWithConfig_AllowsCLIModel_WhenCatalogHasProviderMatch(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
-  "gemini/gemini-3-pro-preview": {
-    "litellm_provider": "google",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "google/gemini-3-pro-preview"}
+  ]
 }`)
 	geminiCLI := writeFakeCLI(t, "gemini", "Usage: gemini -p --output-format stream-json --yolo --approval-mode", 0)
 
@@ -202,10 +198,9 @@ func TestRunWithConfig_AllowsCLIModel_WhenCatalogHasProviderMatch(t *testing.T) 
 func TestRunWithConfig_PreflightFails_WhenGoogleModelProbeReportsModelNotFound(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
-  "gemini/gemini-3-pro-preview": {
-    "litellm_provider": "google",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "google/gemini-3-pro-preview"}
+  ]
 }`)
 	geminiCLI := writeFakeCLIWithModelProbeFailure(
 		t,
@@ -242,10 +237,9 @@ func TestRunWithConfig_PreflightFails_WhenGoogleModelProbeReportsModelNotFound(t
 func TestRunWithConfig_PreflightModelProbeFailure_WarnsWhenNonStrict(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
-  "gemini/gemini-3-pro-preview": {
-    "litellm_provider": "google",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "google/gemini-3-pro-preview"}
+  ]
 }`)
 	geminiCLI := writeFakeCLIWithModelProbeFailure(
 		t,
@@ -282,10 +276,9 @@ func TestRunWithConfig_PreflightModelProbeFailure_WarnsWhenNonStrict(t *testing.
 func TestRunWithConfig_PreflightFails_WhenProviderCLIBinaryMissing(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
-  "gemini/gemini-3-pro-preview": {
-    "litellm_provider": "google",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "google/gemini-3-pro-preview"}
+  ]
 }`)
 	missingGemini := filepath.Join(t.TempDir(), "does-not-exist")
 
@@ -314,10 +307,9 @@ func TestRunWithConfig_PreflightFails_WhenProviderCLIBinaryMissing(t *testing.T)
 func TestRunWithConfig_PreflightFails_WhenAnthropicCapabilityMissingVerbose(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
-  "anthropic/claude-sonnet-4-20250514": {
-    "litellm_provider": "anthropic",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "anthropic/claude-sonnet-4-20250514"}
+  ]
 }`)
 	claudeCLI := writeFakeCLI(t, "claude", "Usage: claude -p --output-format stream-json --model MODEL", 0)
 
@@ -349,10 +341,9 @@ func TestRunWithConfig_PreflightFails_WhenAnthropicCapabilityMissingVerbose(t *t
 func TestRunWithConfig_WritesPreflightReport_Always(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
-  "gemini/gemini-3-pro-preview": {
-    "litellm_provider": "google",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "google/gemini-3-pro-preview"}
+  ]
 }`)
 	geminiCLI := writeFakeCLI(t, "gemini", "Usage: gemini -p --output-format stream-json --yolo", 0)
 
@@ -378,10 +369,9 @@ func TestRunWithConfig_WritesPreflightReport_Always(t *testing.T) {
 func TestRunWithConfig_PreflightCapabilityProbeFailure_WarnsWhenNonStrict(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
-  "gemini/gemini-3-pro-preview": {
-    "litellm_provider": "google",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "google/gemini-3-pro-preview"}
+  ]
 }`)
 	geminiCLI := writeFakeCLI(t, "gemini", "probe error", 2)
 
@@ -410,10 +400,9 @@ func TestRunWithConfig_PreflightCapabilityProbeFailure_WarnsWhenNonStrict(t *tes
 func TestRunWithConfig_PreflightCapabilityProbeFailure_FailsWhenStrict(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
-  "gemini/gemini-3-pro-preview": {
-    "litellm_provider": "google",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "google/gemini-3-pro-preview"}
+  ]
 }`)
 	geminiCLI := writeFakeCLI(t, "gemini", "probe error", 2)
 	t.Setenv("KILROY_PREFLIGHT_STRICT_CAPABILITIES", "1")
@@ -443,10 +432,9 @@ func TestRunWithConfig_PreflightCapabilityProbeFailure_FailsWhenStrict(t *testin
 func TestPreflightReport_IncludesCLIProfileAndSource(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
-  "gemini/gemini-3-pro-preview": {
-    "litellm_provider": "google",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "google/gemini-3-pro-preview"}
+  ]
 }`)
 	geminiCLI := writeFakeCLI(t, "gemini", "Usage: gemini -p --output-format stream-json --yolo --approval-mode", 0)
 	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
