@@ -227,6 +227,7 @@ Provider runtime architecture:
 - Provider aliases: `gemini`/`google_ai_studio` -> `google`, `moonshot`/`moonshotai` -> `kimi`, `z-ai`/`z.ai` -> `zai`.
 - CLI contracts are built-in for `openai`, `anthropic`, and `google`.
 - `kimi` and `zai` are API-only in this release.
+- `profile_family` selects agent behavior/tooling profile only; API requests still route by `llm_provider` (native provider key).
 
 CLI backend command mappings:
 

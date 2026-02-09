@@ -689,7 +689,29 @@ func profileForRuntimeProvider(rt ProviderRuntime, model string) (agent.Provider
 	if family == "" {
 		family = rt.Key
 	}
-	return agent.NewProfileForFamily(family, model)
+	base, err := agent.NewProfileForFamily(family, model)
+	if err != nil {
+		return nil, err
+	}
+	providerKey := normalizeProviderKey(rt.Key)
+	if providerKey == "" || providerKey == normalizeProviderKey(base.ID()) {
+		return base, nil
+	}
+	// Keep family-specific tool behavior/prompting while routing requests through
+	// the runtime provider key (e.g., kimi uses openai-family tooling but kimi API).
+	return providerRoutedProfile{
+		ProviderProfile: base,
+		providerID:      providerKey,
+	}, nil
+}
+
+type providerRoutedProfile struct {
+	agent.ProviderProfile
+	providerID string
+}
+
+func (p providerRoutedProfile) ID() string {
+	return p.providerID
 }
 
 func profileForProvider(provider string, modelID string) (agent.ProviderProfile, error) {

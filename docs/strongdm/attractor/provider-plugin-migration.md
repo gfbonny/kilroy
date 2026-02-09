@@ -54,6 +54,7 @@ Supported `llm.providers.<provider>.api.*` fields:
 - `kimi` and `zai` are API-only in this release.
 - Default Kimi built-in route targets Kimi Coding Anthropic-compatible messages API.
 - Moonshot Open Platform users can still override `kimi.api` to OpenAI chat-completions (`https://api.moonshot.ai`, `/v1/chat/completions`).
+- `profile_family` controls agent behavior/tooling profile; provider routing still uses the node/config provider key.
 - CLI contracts remain built-in for `openai`, `anthropic`, and `google`.
 - Provider/model catalog validation still applies and uses canonical provider keys.
 - `--force-model <provider=model>` accepts built-ins `openai`, `anthropic`, `google`, `kimi`, `zai` and their aliases.

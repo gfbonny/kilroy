@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/strongdm/kilroy/internal/agent"
 	"github.com/strongdm/kilroy/internal/attractor/model"
 	"github.com/strongdm/kilroy/internal/attractor/modeldb"
 	"github.com/strongdm/kilroy/internal/llm"
@@ -150,14 +151,18 @@ func TestCodergenRouter_WithFailoverText_AppliesForceModelToFailoverProvider(t *
 	}
 }
 
-func TestProfileForRuntimeProvider_UsesConfiguredProfileFamily(t *testing.T) {
+func TestProfileForRuntimeProvider_RoutesByRuntimeProviderAndKeepsFamilyBehavior(t *testing.T) {
 	rt := ProviderRuntime{Key: "zai", ProfileFamily: "openai"}
 	p, err := profileForRuntimeProvider(rt, "glm-4.7")
 	if err != nil {
 		t.Fatalf("profileForRuntimeProvider: %v", err)
 	}
-	if p.ID() != "openai" {
-		t.Fatalf("expected openai family profile")
+	if p.ID() != "zai" {
+		t.Fatalf("expected request routing provider zai, got %q", p.ID())
+	}
+	sys := p.BuildSystemPrompt(agent.EnvironmentInfo{}, nil)
+	if !strings.Contains(sys, "OpenAI profile") {
+		t.Fatalf("expected openai-family prompt behavior, got: %q", sys)
 	}
 }
 
