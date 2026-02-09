@@ -92,7 +92,7 @@ func TestRunWithConfig_FailsFast_WhenCLIModelNotInCatalogForProvider(t *testing.
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-fail", LogsRoot: logsRoot})
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-fail", LogsRoot: logsRoot, AllowTestShim: true})
 	if err == nil {
 		t.Fatalf("expected preflight error, got nil")
 	}
@@ -114,17 +114,18 @@ func TestRunWithConfig_AllowsCLIModel_WhenCatalogHasProviderMatch(t *testing.T) 
     "mode": "chat"
   }
 }`)
-	t.Setenv("KILROY_GEMINI_PATH", writeFakeCLI(t, "gemini", "Usage: gemini -p --output-format stream-json --yolo --approval-mode", 0))
+	geminiCLI := writeFakeCLI(t, "gemini", "Usage: gemini -p --output-format stream-json --yolo --approval-mode", 0)
 
 	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
 		"google": BackendCLI,
 	})
+	cfg.LLM.Providers["google"] = ProviderConfig{Backend: BackendCLI, Executable: geminiCLI}
 	dot := singleProviderDot("google", "gemini-3-pro-preview")
 
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-pass", LogsRoot: logsRoot})
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-pass", LogsRoot: logsRoot, AllowTestShim: true})
 	if err == nil {
 		t.Fatalf("expected downstream error after preflight (cxdb is intentionally unreachable), got nil")
 	}
@@ -145,7 +146,7 @@ func TestRunWithConfig_PreflightFails_WhenGoogleModelProbeReportsModelNotFound(t
     "mode": "chat"
   }
 }`)
-	t.Setenv("KILROY_GEMINI_PATH", writeFakeCLIWithModelProbeFailure(
+	geminiCLI := writeFakeCLIWithModelProbeFailure(
 		t,
 		"gemini",
 		"Usage: gemini -p --output-format stream-json --yolo --approval-mode",
@@ -153,17 +154,18 @@ func TestRunWithConfig_PreflightFails_WhenGoogleModelProbeReportsModelNotFound(t
 		"gemini-3-pro-preview",
 		"ModelNotFoundError: Requested entity was not found.",
 		1,
-	))
+	)
 
 	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
 		"google": BackendCLI,
 	})
+	cfg.LLM.Providers["google"] = ProviderConfig{Backend: BackendCLI, Executable: geminiCLI}
 	dot := singleProviderDot("google", "gemini-3-pro-preview")
 
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-model-not-found", LogsRoot: logsRoot})
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-model-not-found", LogsRoot: logsRoot, AllowTestShim: true})
 	if err == nil {
 		t.Fatalf("expected model probe preflight error, got nil")
 	}
@@ -184,7 +186,7 @@ func TestRunWithConfig_PreflightModelProbeFailure_WarnsWhenNonStrict(t *testing.
     "mode": "chat"
   }
 }`)
-	t.Setenv("KILROY_GEMINI_PATH", writeFakeCLIWithModelProbeFailure(
+	geminiCLI := writeFakeCLIWithModelProbeFailure(
 		t,
 		"gemini",
 		"Usage: gemini -p --output-format stream-json --yolo --approval-mode",
@@ -192,17 +194,18 @@ func TestRunWithConfig_PreflightModelProbeFailure_WarnsWhenNonStrict(t *testing.
 		"gemini-3-pro-preview",
 		"temporary backend issue",
 		1,
-	))
+	)
 
 	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
 		"google": BackendCLI,
 	})
+	cfg.LLM.Providers["google"] = ProviderConfig{Backend: BackendCLI, Executable: geminiCLI}
 	dot := singleProviderDot("google", "gemini-3-pro-preview")
 
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-model-warn", LogsRoot: logsRoot})
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-model-warn", LogsRoot: logsRoot, AllowTestShim: true})
 	if err == nil {
 		t.Fatalf("expected downstream cxdb error, got nil")
 	}
@@ -223,17 +226,18 @@ func TestRunWithConfig_PreflightFails_WhenProviderCLIBinaryMissing(t *testing.T)
     "mode": "chat"
   }
 }`)
-	t.Setenv("KILROY_GEMINI_PATH", filepath.Join(t.TempDir(), "does-not-exist"))
+	missingGemini := filepath.Join(t.TempDir(), "does-not-exist")
 
 	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
 		"google": BackendCLI,
 	})
+	cfg.LLM.Providers["google"] = ProviderConfig{Backend: BackendCLI, Executable: missingGemini}
 	dot := singleProviderDot("google", "gemini-3-pro-preview")
 
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-binary-missing", LogsRoot: logsRoot})
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-binary-missing", LogsRoot: logsRoot, AllowTestShim: true})
 	if err == nil {
 		t.Fatalf("expected preflight binary-missing error, got nil")
 	}
@@ -254,17 +258,18 @@ func TestRunWithConfig_PreflightFails_WhenAnthropicCapabilityMissingVerbose(t *t
     "mode": "chat"
   }
 }`)
-	t.Setenv("KILROY_CLAUDE_PATH", writeFakeCLI(t, "claude", "Usage: claude -p --output-format stream-json --model MODEL", 0))
+	claudeCLI := writeFakeCLI(t, "claude", "Usage: claude -p --output-format stream-json --model MODEL", 0)
 
 	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
 		"anthropic": BackendCLI,
 	})
+	cfg.LLM.Providers["anthropic"] = ProviderConfig{Backend: BackendCLI, Executable: claudeCLI}
 	dot := singleProviderDot("anthropic", "claude-sonnet-4-20250514")
 
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-anthropic-verbose", LogsRoot: logsRoot})
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-anthropic-verbose", LogsRoot: logsRoot, AllowTestShim: true})
 	if err == nil {
 		t.Fatalf("expected anthropic capability error, got nil")
 	}
@@ -288,17 +293,18 @@ func TestRunWithConfig_WritesPreflightReport_Always(t *testing.T) {
     "mode": "chat"
   }
 }`)
-	t.Setenv("KILROY_GEMINI_PATH", writeFakeCLI(t, "gemini", "Usage: gemini -p --output-format stream-json --yolo", 0))
+	geminiCLI := writeFakeCLI(t, "gemini", "Usage: gemini -p --output-format stream-json --yolo", 0)
 
 	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
 		"google": BackendCLI,
 	})
+	cfg.LLM.Providers["google"] = ProviderConfig{Backend: BackendCLI, Executable: geminiCLI}
 	dot := singleProviderDot("google", "gemini-3-pro-preview")
 
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-report-always", LogsRoot: logsRoot})
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-report-always", LogsRoot: logsRoot, AllowTestShim: true})
 	if err == nil {
 		t.Fatalf("expected downstream cxdb error, got nil")
 	}
@@ -316,17 +322,18 @@ func TestRunWithConfig_PreflightCapabilityProbeFailure_WarnsWhenNonStrict(t *tes
     "mode": "chat"
   }
 }`)
-	t.Setenv("KILROY_GEMINI_PATH", writeFakeCLI(t, "gemini", "probe error", 2))
+	geminiCLI := writeFakeCLI(t, "gemini", "probe error", 2)
 
 	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
 		"google": BackendCLI,
 	})
+	cfg.LLM.Providers["google"] = ProviderConfig{Backend: BackendCLI, Executable: geminiCLI}
 	dot := singleProviderDot("google", "gemini-3-pro-preview")
 
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-warn-nonstrict", LogsRoot: logsRoot})
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-warn-nonstrict", LogsRoot: logsRoot, AllowTestShim: true})
 	if err == nil {
 		t.Fatalf("expected downstream cxdb error, got nil")
 	}
@@ -347,18 +354,19 @@ func TestRunWithConfig_PreflightCapabilityProbeFailure_FailsWhenStrict(t *testin
     "mode": "chat"
   }
 }`)
-	t.Setenv("KILROY_GEMINI_PATH", writeFakeCLI(t, "gemini", "probe error", 2))
+	geminiCLI := writeFakeCLI(t, "gemini", "probe error", 2)
 	t.Setenv("KILROY_PREFLIGHT_STRICT_CAPABILITIES", "1")
 
 	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
 		"google": BackendCLI,
 	})
+	cfg.LLM.Providers["google"] = ProviderConfig{Backend: BackendCLI, Executable: geminiCLI}
 	dot := singleProviderDot("google", "gemini-3-pro-preview")
 
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-strict", LogsRoot: logsRoot})
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-strict", LogsRoot: logsRoot, AllowTestShim: true})
 	if err == nil {
 		t.Fatalf("expected strict capability probe failure, got nil")
 	}
@@ -388,6 +396,7 @@ func testPreflightConfigForProviders(repo string, catalog string, providers map[
 	cfg.Repo.Path = repo
 	cfg.CXDB.BinaryAddr = "127.0.0.1:1"
 	cfg.CXDB.HTTPBaseURL = "http://127.0.0.1:1"
+	cfg.LLM.CLIProfile = "test_shim"
 	cfg.LLM.Providers = map[string]ProviderConfig{}
 	for provider, backend := range providers {
 		cfg.LLM.Providers[provider] = ProviderConfig{Backend: backend}

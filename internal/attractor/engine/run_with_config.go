@@ -63,6 +63,7 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	if overrides.RunBranchPrefix != "" {
 		opts.RunBranchPrefix = overrides.RunBranchPrefix
 	}
+	opts.AllowTestShim = overrides.AllowTestShim
 
 	if err := opts.applyDefaults(); err != nil {
 		return nil, err

@@ -646,9 +646,17 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 		return "", classifiedFailure(err, ""), nil
 	}
 
-	exe, args := defaultCLIInvocation(provider, modelID, execCtx.WorktreeDir)
-	if exe == "" {
-		return "", nil, fmt.Errorf("no CLI mapping for provider %s", provider)
+	defaultExe, args := defaultCLIInvocation(provider, modelID, execCtx.WorktreeDir)
+	if defaultExe == "" {
+		return "", classifiedFailure(fmt.Errorf("no cli invocation mapping for provider %s", provider), ""), nil
+	}
+	runOpts := RunOptions{}
+	if execCtx != nil && execCtx.Engine != nil {
+		runOpts = execCtx.Engine.Options
+	}
+	exe, err := ResolveProviderExecutable(r.cfg, provider, runOpts)
+	if err != nil {
+		return "", classifiedFailure(err, ""), nil
 	}
 	codexSemantics := usesCodexCLISemantics(providerKey, exe)
 
@@ -1255,27 +1263,19 @@ func usesCodexCLISemantics(providerKey string, exe string) bool {
 func defaultCLIInvocation(provider string, modelID string, worktreeDir string) (exe string, args []string) {
 	switch normalizeProviderKey(provider) {
 	case "openai":
-		exe = envOr("KILROY_CODEX_PATH", "codex")
+		exe = "codex"
 		args = []string{"exec", "--json", "--sandbox", "workspace-write", "-m", modelID, "-C", worktreeDir}
 	case "anthropic":
-		exe = envOr("KILROY_CLAUDE_PATH", "claude")
+		exe = "claude"
 		args = []string{"-p", "--output-format", "stream-json", "--verbose", "--model", modelID}
 	case "google":
-		exe = envOr("KILROY_GEMINI_PATH", "gemini")
+		exe = "gemini"
 		// Metaspec: CLI adapters must be non-interactive. Gemini CLI supports this via --yolo / --approval-mode.
 		args = []string{"-p", "--output-format", "stream-json", "--yolo", "--model", modelID}
 	default:
 		return "", nil
 	}
 	return exe, args
-}
-
-func envOr(key string, def string) string {
-	v := strings.TrimSpace(os.Getenv(key))
-	if v == "" {
-		return def
-	}
-	return v
 }
 
 func hasArg(args []string, want string) bool {

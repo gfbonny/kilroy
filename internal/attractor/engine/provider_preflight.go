@@ -67,16 +67,17 @@ func runProviderCLIPreflight(ctx context.Context, g *model.Graph, cfg *RunConfig
 	}
 
 	for _, provider := range providers {
-		exe, _ := defaultCLIInvocation(provider, "preflight-model", opts.WorktreeDir)
-		if strings.TrimSpace(exe) == "" {
+		execResolution, err := resolveProviderExecutable(cfg, provider, opts)
+		if err != nil {
 			report.addCheck(providerPreflightCheck{
 				Name:     "provider_cli_presence",
 				Provider: provider,
 				Status:   preflightStatusFail,
-				Message:  "no cli invocation mapping for provider",
+				Message:  err.Error(),
 			})
-			return report, fmt.Errorf("preflight: no cli invocation mapping for provider %s", provider)
+			return report, fmt.Errorf("preflight: provider %s executable policy rejected run: %w", provider, err)
 		}
+		exe := execResolution.Executable
 		resolvedPath, err := exec.LookPath(exe)
 		if err != nil {
 			report.addCheck(providerPreflightCheck{
@@ -95,6 +96,7 @@ func runProviderCLIPreflight(ctx context.Context, g *model.Graph, cfg *RunConfig
 			Details: map[string]any{
 				"executable": exe,
 				"path":       resolvedPath,
+				"source":     execResolution.Source,
 			},
 		})
 
