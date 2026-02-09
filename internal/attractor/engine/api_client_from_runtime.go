@@ -9,6 +9,7 @@ import (
 	"github.com/strongdm/kilroy/internal/llm"
 	"github.com/strongdm/kilroy/internal/llm/providers/anthropic"
 	"github.com/strongdm/kilroy/internal/llm/providers/google"
+	"github.com/strongdm/kilroy/internal/llm/providers/openaicompat"
 	"github.com/strongdm/kilroy/internal/llm/providers/openai"
 	"github.com/strongdm/kilroy/internal/providerspec"
 )
@@ -32,8 +33,14 @@ func newAPIClientFromProviderRuntimes(runtimes map[string]ProviderRuntime) (*llm
 		case providerspec.ProtocolGoogleGenerateContent:
 			c.Register(google.NewWithProvider(key, apiKey, rt.API.DefaultBaseURL))
 		case providerspec.ProtocolOpenAIChatCompletions:
-			// Added in Task 5 with openaicompat adapter registration.
-			continue
+			c.Register(openaicompat.NewAdapter(openaicompat.Config{
+				Provider:     key,
+				APIKey:       apiKey,
+				BaseURL:      rt.API.DefaultBaseURL,
+				Path:         rt.API.DefaultPath,
+				OptionsKey:   rt.API.ProviderOptionsKey,
+				ExtraHeaders: rt.APIHeaders(),
+			}))
 		default:
 			return nil, fmt.Errorf("unsupported api protocol %q for provider %s", rt.API.Protocol, key)
 		}
