@@ -6,10 +6,16 @@ It intentionally separates:
 - runtime-contract fixes (implemented behavior not fully specified);
 - required spec deltas (new contracts that must be documented).
 
+Source analyses:
+- `postmortem-rogue-fast-part-1.md`
+- `postmortem-rogue-fast-part-2.md`
+- `postmortem-rogue-slow-part-1.md`
+- `postmortem-rogue-slow-part-2.md`
+
 ## Spec Coverage Map
 
 - **Spec-backed now**
-- Canonical stage status path for routing: `{logs_root}/{node_id}/status.json`.
+- Canonical stage status file path/contract: `{logs_root}/{node_id}/status.json` (artifact contract; routing remains in-memory by handler outcome).
 - DOT routing/conditions/retry semantics.
 - Parallel branch isolation + join/error policy model.
 - Provider/model explicitness principles from unified-llm and attractor model selection.
@@ -37,6 +43,7 @@ It intentionally separates:
 
 ## Runtime Data Model Definitions (Must Be Explicit Before Coding)
 
+- These are runtime-contract definitions (not currently specified in attractor/coding-agent-loop/unified-llm specs).
 - `run_generation`: monotonic integer incremented on each loop-restart generation of a run; included on liveness events to avoid stale-branch attribution.
 - `attempt_id`: deterministic identifier for a stage attempt, format `branch_id:node_id:attempt_ordinal`, where `attempt_ordinal` is 1-indexed to match attractor retry semantics.
 - `terminal_artifact`: top-level `final.json` at run logs root, schema aligned with `internal/attractor/runtime/final.go`:
@@ -48,23 +55,16 @@ It intentionally separates:
   - `cxdb_context_id`
   - `cxdb_head_turn_id`
 - Terminal status mapping (run-level, intentionally binary):
-  - run `success` only when pipeline reaches terminal success state with goal-gate constraints satisfied
+  - run `success` only when pipeline reaches terminal success state with goal-gate constraints satisfied (including goal-gate acceptance of `success` or `partial_success`)
   - run `fail` for terminal failures (including exhausted retries, watchdog/cancel/internal fatal paths, or unsatisfied goal-gate completion)
-- `cycle_break_threshold`: sourced from runtime graph attribute `loop_restart_signature_limit` (implemented in engine today, not in attractor-spec), default `3` when unset/invalid.
+- `cycle_break_threshold`: sourced from runtime graph attribute `loop_restart_signature_limit` (implemented in engine today, not in attractor-spec); default value inherits code constant (`defaultLoopRestartSignatureLimit`) rather than a hardcoded doc value.
   - This graph attribute is runtime-contract behavior today and must be documented as a spec delta.
 
-## Event Taxonomy Mapping (Bridge, Not Replacement)
+## Runtime Event Proposal (Spec Delta Required)
 
-Attractor runtime events below are implementation telemetry and must be mapped to spec-level semantics:
+No normative cross-spec mapping is asserted yet. The events below are proposed runtime telemetry signals and must be codified before being treated as spec contracts.
 
-- Attractor spec `StageStarted` maps to runtime `stage_attempt_start` (one per attempt, including retries).
-- Attractor spec `StageCompleted` maps to runtime `stage_attempt_end` with success status.
-- Attractor spec `StageFailed`/`StageRetrying` maps to runtime `stage_attempt_end` fail/retry plus retry scheduling events.
-- Mapping cardinality: spec stage events are stage-level; runtime attempt events are attempt-level (one-to-many under retries).
-- Coding-agent-loop events (`TOOL_CALL_START`, `TOOL_CALL_END`, assistant text events) map to attractor liveness/progress events in API backend.
-- Runtime-only events (`stage_heartbeat`, `deterministic_failure_cycle_*`, ingestion decision events) are operational events and require spec-delta documentation.
-
-Accepted liveness event set for watchdog:
+Proposed liveness event set for watchdog:
 - `stage_attempt_start`
 - `stage_attempt_end`
 - `stage_heartbeat`
@@ -75,13 +75,13 @@ Accepted liveness event set for watchdog:
 
 ## Spec Alignment Guardrails
 
-- Keep `{logs_root}/{node_id}/status.json` authoritative for routing.
+- Keep `{logs_root}/{node_id}/status.json` as the canonical stage artifact path; do not change core routing to depend on filesystem reads during normal handler flow.
 - Do not change DOT condition semantics or retry/fallback routing behavior.
 - Preserve join policy semantics (`wait_all`, `k_of_n`, `first_success`, `quorum`) and error policy semantics (`fail_fast`, `continue`, `ignore`) while run is live.
 - Run-level cancellation precedence rule (runtime policy pending spec delta): cancellation always stops further work regardless of branch `error_policy`; `error_policy` only governs branch-local failure handling before cancellation.
 - Resolve attractor status-case inconsistency explicitly: Section 5.2 enum style vs Section 10.3 lowercase outcomes.
-  - Engine behavior: status-file parsing can be tolerant for legacy input casing, but DOT condition matching remains spec-defined case-sensitive until/if specs change.
-  - Migration note: legacy uppercase DOT conditions must be rewritten to lowercase via lint/fix tooling before enabling any casing-canonicalization change to condition evaluation.
+  - This plan does not change condition evaluator behavior.
+  - Any casing-policy change to condition matching is treated as a separate spec delta and migration.
   - Spec delta: codify lowercase as canonical wire/storage form.
 
 ## P0 (Immediate)
@@ -101,6 +101,10 @@ Accepted liveness event set for watchdog:
 - Make watchdog liveness fanout-aware.
   - Done when: no false `stall_watchdog_timeout` while any active branch emits accepted liveness events.
   - Coverage must include join policies: `wait_all`, `k_of_n`, `first_success`, `quorum`.
+  - Policy expectations per join mode:
+  - `wait_all`: any active branch liveness resets parent watchdog.
+  - `k_of_n` and `quorum`: liveness from undecided branches resets parent watchdog until threshold is reached and branch set is finalized.
+  - `first_success`: once winner selected and cancellation dispatched, only winner/join-path liveness counts; canceled-branch liveness is ignored after cancellation acknowledgment.
 - Stop heartbeat leaks with attempt scoping.
   - Done when: zero `stage_heartbeat` after matching attempt-end for identical `(node_id, attempt_id, run_generation)`.
 - Add cancellation guards in subgraph/parallel traversal.
@@ -112,6 +116,7 @@ Accepted liveness event set for watchdog:
   - Done when: terminal outputs retain upstream raw reason; normalized signature is separate metadata.
 - Guarantee terminal artifact persistence for all controllable terminal paths.
   - Done when: `final.json` is persisted on success/fail/cancel/watchdog/internal fatal paths (best effort excludes uncatchable `SIGKILL`).
+  - Write contract: `final.json` persistence uses temp-file + atomic rename for consistency with status artifact durability expectations.
 
 ## P1 (Hardening)
 
@@ -132,7 +137,7 @@ Accepted liveness event set for watchdog:
   - `StreamError`
   - `ConfigurationError`
   - Done when: terminal classing distinguishes cancel/stall/runtime faults from provider deterministic/transient categories using full mapping.
-  - Existing behavior baseline to preserve: `ContentFilterError` remains deterministic unless an explicit policy override says otherwise.
+  - Existing behavior baseline to preserve: `ContentFilterError` remains non-retryable/deterministic unless a future spec-delta policy explicitly changes it.
 - Normalize failure signatures only for breaker decisions.
   - Done when: raw reason remains route-visible; normalized key used only by breaker/telemetry.
 - Enforce pinned model/provider no-failover policy from run config.
@@ -215,6 +220,7 @@ Accepted liveness event set for watchdog:
 
 ## Primary Touchpoints
 
+Implementation:
 - `internal/attractor/engine/handlers.go`
 - `internal/attractor/runtime/status.go`
 - `internal/attractor/engine/progress.go`
@@ -223,6 +229,8 @@ Accepted liveness event set for watchdog:
 - `internal/attractor/engine/parallel_handlers.go`
 - `internal/attractor/engine/codergen_router.go`
 - `internal/attractor/runtime/final.go`
+
+Tests:
 - `internal/attractor/engine/engine_stall_watchdog_test.go`
 - `internal/attractor/engine/parallel_guardrails_test.go`
 - `internal/attractor/engine/parallel_test.go`
