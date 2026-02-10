@@ -97,3 +97,16 @@ digraph G {
 	}
 	t.Logf("found %d heartbeat events", heartbeats)
 }
+
+func TestRunWithConfig_HeartbeatStopsAfterProcessExit(t *testing.T) {
+	events := runHeartbeatFixture(t)
+	endIdx := findEventIndex(events, "stage_attempt_end", "a")
+	if endIdx < 0 {
+		t.Fatal("missing stage_attempt_end for node a")
+	}
+	for _, ev := range events[endIdx+1:] {
+		if ev["event"] == "stage_heartbeat" && ev["node_id"] == "a" {
+			t.Fatalf("unexpected heartbeat after attempt end: %+v", ev)
+		}
+	}
+}

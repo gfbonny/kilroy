@@ -963,6 +963,7 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 
 		// Emit periodic heartbeat events so operators monitoring detached runs
 		// have visibility into long-running codergen nodes.
+		heartbeatStop := make(chan struct{})
 		heartbeatDone := make(chan struct{})
 		go func() {
 			defer close(heartbeatDone)
@@ -986,6 +987,8 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 							"stderr_bytes": stderrSz,
 						})
 					}
+				case <-heartbeatStop:
+					return
 				case <-ctx.Done():
 					return
 				}
@@ -1000,6 +1003,8 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 		}
 		var idleTimedOut bool
 		runErr, idleTimedOut, err = waitWithIdleWatchdog(ctx, cmd, stdoutPath, stderrPath, idleTimeout, killGrace)
+		close(heartbeatStop)
+		<-heartbeatDone
 		if err != nil {
 			return nil, -1, time.Since(start), err
 		}
