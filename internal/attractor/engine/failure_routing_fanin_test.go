@@ -9,8 +9,24 @@ import (
 	"testing"
 	"time"
 
+	"github.com/strongdm/kilroy/internal/attractor/model"
 	"github.com/strongdm/kilroy/internal/attractor/runtime"
 )
+
+type subgraphFailureFixtureHandler struct{}
+
+func (h *subgraphFailureFixtureHandler) Execute(ctx context.Context, exec *Execution, node *model.Node) (runtime.Outcome, error) {
+	_ = ctx
+	_ = exec
+	_ = node
+	return runtime.Outcome{
+		Status:        runtime.StatusFail,
+		FailureReason: "provider timeout",
+		ContextUpdates: map[string]any{
+			"failure_class": failureClassTransientInfra,
+		},
+	}, nil
+}
 
 func TestFailureRouting_FanInAllFail_DoesNotFollowUnconditionalEdge(t *testing.T) {
 	repo := t.TempDir()
@@ -154,6 +170,36 @@ digraph G {
 	final := mustReadFinalOutcome(t, filepath.Join(logsRoot, "final.json"))
 	if final.Status != runtime.FinalFail {
 		t.Fatalf("final status: got %q want %q", final.Status, runtime.FinalFail)
+	}
+}
+
+func TestSubgraphContext_PreservesFailureReasonAcrossNodes(t *testing.T) {
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+
+	dot := []byte(`
+digraph G {
+  graph [goal="subgraph failure context fixture"]
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  a [shape=diamond, type="subgraph_failure_fixture"]
+  cond [shape=diamond]
+  start -> a
+  a -> cond [condition="outcome=fail"]
+  cond -> exit [condition="outcome=fail"]
+}
+`)
+	eng := newReliabilityFixtureEngine(t, repo, logsRoot, "subgraph-failure-context-fixture", dot)
+	eng.Registry.Register("subgraph_failure_fixture", &subgraphFailureFixtureHandler{})
+
+	if _, err := runSubgraphUntil(context.Background(), eng, "a", "exit"); err != nil {
+		t.Fatalf("runSubgraphUntil: %v", err)
+	}
+	if got := eng.Context.GetString("failure_reason", ""); got == "" {
+		t.Fatal("failure_reason missing in context")
+	}
+	if got := eng.Context.GetString("failure_class", ""); got == "" {
+		t.Fatal("failure_class missing in context")
 	}
 }
 

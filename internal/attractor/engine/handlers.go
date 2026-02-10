@@ -124,12 +124,14 @@ func (h *ConditionalHandler) Execute(ctx context.Context, exec *Execution, node 
 	prevStatus := runtime.StatusSuccess
 	prevPreferred := ""
 	prevFailure := ""
+	prevFailureClass := ""
 	if exec != nil && exec.Context != nil {
 		if st, err := runtime.ParseStageStatus(exec.Context.GetString("outcome", "")); err == nil && st != "" {
 			prevStatus = st
 		}
 		prevPreferred = exec.Context.GetString("preferred_label", "")
 		prevFailure = exec.Context.GetString("failure_reason", "")
+		prevFailureClass = exec.Context.GetString("failure_class", "")
 	}
 
 	return runtime.Outcome{
@@ -137,6 +139,9 @@ func (h *ConditionalHandler) Execute(ctx context.Context, exec *Execution, node 
 		PreferredLabel: prevPreferred,
 		FailureReason:  prevFailure,
 		Notes:          "conditional pass-through",
+		ContextUpdates: map[string]any{
+			"failure_class": prevFailureClass,
+		},
 	}, nil
 }
 

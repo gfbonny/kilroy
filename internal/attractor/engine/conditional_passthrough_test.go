@@ -84,3 +84,23 @@ digraph G {
 	}
 }
 
+func TestConditionalPassThrough_PreservesFailureReasonAndClass(t *testing.T) {
+	ctxState := runtime.NewContext()
+	ctxState.Set("outcome", "fail")
+	ctxState.Set("preferred_label", "retry")
+	ctxState.Set("failure_reason", "provider timeout")
+	ctxState.Set("failure_class", "transient_infra")
+
+	out, err := (&ConditionalHandler{}).Execute(context.Background(), &Execution{
+		Context: ctxState,
+	}, model.NewNode("cond"))
+	if err != nil {
+		t.Fatalf("ConditionalHandler.Execute: %v", err)
+	}
+	if out.FailureReason != "provider timeout" {
+		t.Fatalf("failure_reason=%q want %q", out.FailureReason, "provider timeout")
+	}
+	if got := strings.TrimSpace(anyToString(out.ContextUpdates["failure_class"])); got != failureClassTransientInfra {
+		t.Fatalf("failure_class=%q want %q", got, failureClassTransientInfra)
+	}
+}
