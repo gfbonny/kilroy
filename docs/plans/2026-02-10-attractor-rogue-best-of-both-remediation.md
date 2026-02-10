@@ -20,28 +20,26 @@
 - Test: `internal/attractor/runtime/final_test.go`
 - Test: `internal/attractor/runtime/checkpoint_test.go`
 
-**Step 1: Write failing tests for atomic JSON persistence path**
+**Step 1: Write failing tests for the new atomic writer primitive**
 
 ```go
-func TestFinalOutcomeSave_UsesAtomicWrite(t *testing.T) {
+func TestWriteFileAtomic_OverwritesTargetAtomically(t *testing.T) {
     dir := t.TempDir()
-    path := filepath.Join(dir, "final.json")
+    path := filepath.Join(dir, "status.json")
 
-    fo := &FinalOutcome{Status: FinalFail, FailureReason: "x"}
-    require.NoError(t, fo.Save(path))
+    require.NoError(t, os.WriteFile(path, []byte(`{"status":"old"}`), 0o644))
+    require.NoError(t, WriteFileAtomic(path, []byte(`{"status":"new"}`)))
 
     b, err := os.ReadFile(path)
     require.NoError(t, err)
-    var got FinalOutcome
-    require.NoError(t, json.Unmarshal(b, &got))
-    require.Equal(t, FinalFail, got.Status)
+    require.JSONEq(t, `{"status":"new"}`, string(b))
 }
 ```
 
-**Step 2: Run test to verify it fails or proves current non-atomic path**
+**Step 2: Run test to verify it fails before implementation**
 
-Run: `go test ./internal/attractor/runtime -run 'FinalOutcomeSave_UsesAtomicWrite|Checkpoint' -count=1`
-Expected: FAIL or missing atomic-writer assertions.
+Run: `go test ./internal/attractor/runtime -run 'WriteFileAtomic_OverwritesTargetAtomically' -count=1`
+Expected: FAIL with `undefined: WriteFileAtomic`.
 
 **Step 3: Implement helper and migrate `Save`/`writeJSON` callers**
 
@@ -92,7 +90,7 @@ func WriteJSONAtomicFile(path string, v any) error {
 
 **Step 4: Run runtime + engine tests for migrated call sites**
 
-Run: `go test ./internal/attractor/runtime ./internal/attractor/engine -run 'Final|Checkpoint|writeJSON' -count=1`
+Run: `go test ./internal/attractor/runtime ./internal/attractor/engine -run 'WriteFileAtomic|Final|Checkpoint|writeJSON' -count=1`
 Expected: PASS.
 
 **Step 5: Commit**
@@ -149,11 +147,20 @@ Expected: FAIL on at least one new precedence case.
 **Step 3: Implement explicit ingestion helper in `CodergenHandler.Execute` path**
 
 ```go
-func copyFirstValidFallbackStatus(stageStatusPath string, fallbackPaths []string) (string, error) {
+type statusSource string
+
+const (
+    statusSourceNone      statusSource = ""
+    statusSourceCanonical statusSource = "canonical"
+    statusSourceWorktree  statusSource = "worktree"
+    statusSourceDotAI     statusSource = "dot_ai"
+)
+
+func copyFirstValidFallbackStatus(stageStatusPath string, fallbackPaths []string) (statusSource, error) {
     if _, err := os.Stat(stageStatusPath); err == nil {
-        return "canonical", nil
+        return statusSourceCanonical, nil
     }
-    for _, p := range fallbackPaths {
+    for idx, p := range fallbackPaths {
         b, err := os.ReadFile(p)
         if err != nil {
             continue
@@ -165,12 +172,15 @@ func copyFirstValidFallbackStatus(stageStatusPath string, fallbackPaths []string
         }
         // Preserve raw payload bytes so we do not drop unknown legacy fields.
         if err := runtime.WriteFileAtomic(stageStatusPath, b); err != nil {
-            return "", err
+            return statusSourceNone, err
         }
         _ = os.Remove(p)
-        return p, nil
+        if idx == 0 {
+            return statusSourceWorktree, nil
+        }
+        return statusSourceDotAI, nil
     }
-    return "", nil
+    return statusSourceNone, nil
 }
 ```
 
@@ -215,7 +225,7 @@ func TestRunWithConfig_HeartbeatStopsAfterProcessExit(t *testing.T) {
 Run: `go test ./internal/attractor/engine -run 'Heartbeat' -count=1`
 Expected: FAIL with post-completion heartbeat leak.
 
-**Step 3: Add explicit heartbeat stop channel in `runOnce`**
+**Step 3: Add explicit heartbeat stop channel in the `runCLI` execution closure**
 
 ```go
 heartbeatStop := make(chan struct{})
@@ -535,17 +545,16 @@ func TestClassifyAPIError_AbortErrorMapsToCanceledClass(t *testing.T) {
     }
 }
 
-func TestShouldRetryOutcome_CanceledNeverRetries(t *testing.T) {
-    out := runtime.Outcome{Status: runtime.StatusFail, FailureReason: "run canceled"}
-    if shouldRetryOutcome(out, failureClassCanceled) {
-        t.Fatal("canceled outcome must not retry")
+func TestNormalizedFailureClass_CanceledPreserved(t *testing.T) {
+    if got := normalizedFailureClass("canceled"); got != failureClassCanceled {
+        t.Fatalf("normalized class=%q want %q", got, failureClassCanceled)
     }
 }
 ```
 
 **Step 2: Run classification/retry tests and confirm failure**
 
-Run: `go test ./internal/attractor/engine -run 'ClassifyAPIError|ShouldRetryOutcome|retry_failure_class' -count=1`
+Run: `go test ./internal/attractor/engine -run 'ClassifyAPIError|NormalizedFailureClass|retry_failure_class' -count=1`
 Expected: FAIL because canceled class is not yet modeled.
 
 **Step 3: Add `failureClassCanceled` and thread it through existing classifiers**
@@ -565,11 +574,19 @@ func classifyAPIError(err error) (string, string) {
     // Keep WrapContextError contract for context-derived errors.
     // Existing typed/non-typed logic follows...
 }
+
+func normalizedFailureClass(raw string) string {
+    switch strings.ToLower(strings.TrimSpace(raw)) {
+    case "canceled", "cancelled":
+        return failureClassCanceled
+    // existing cases follow...
+    }
+}
 ```
 
 **Step 4: Re-run classifier and retry-policy tests**
 
-Run: `go test ./internal/attractor/engine -run 'ClassifyAPIError|FailurePolicy|retry_failure_class' -count=1`
+Run: `go test ./internal/attractor/engine -run 'ClassifyAPIError|NormalizedFailureClass|FailurePolicy|retry_failure_class' -count=1`
 Expected: PASS.
 
 **Step 5: Commit**
@@ -625,6 +642,15 @@ if pc.Failover != nil {
 }
 
 // codergen_router.go
+func failoverOrderFromRuntime(primary string, runtimes map[string]ProviderRuntime) ([]string, bool) {
+    rt, ok := runtimes[normalizeProviderKey(primary)]
+    if !ok {
+        return nil, false
+    }
+    return append([]string{}, rt.Failover...), rt.FailoverExplicit
+}
+
+// update all callers to use the new return signature
 order, explicit := failoverOrderFromRuntime(provider, runtimes)
 if explicit && len(order) == 0 {
     return "", providerUse{}, fmt.Errorf("no failover allowed by runtime config for provider %s", provider)
@@ -772,10 +798,11 @@ Expected: PASS.
 **Step 3: Build and validate graph with local binary**
 
 Run:
+- `test -f demo/rogue/rogue_fast.dot`
 - `go build -o ./kilroy ./cmd/kilroy`
 - `./kilroy attractor validate --graph demo/rogue/rogue_fast.dot`
 
-Expected: Build succeeds; graph validator prints success.
+Expected: graph file exists, build succeeds, and validator prints success.
 
 **Step 4: Run one rogue-fast validation execution and capture artifacts**
 
