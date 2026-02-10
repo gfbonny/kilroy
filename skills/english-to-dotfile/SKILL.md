@@ -325,6 +325,32 @@ start -> check_toolchain -> impl_setup
 
 If the user explicitly wants a non-mutating environment (no auto-install), keep only the readiness gate and make the failure message include the exact install command.
 
+#### CXDB launcher defaults for companion run config (this repo)
+
+When you produce or update a companion `run.yaml` in this repository and CXDB endpoints are local (`127.0.0.1`/`localhost`), default to launcher-based autostart:
+
+```yaml
+cxdb:
+  binary_addr: 127.0.0.1:9009
+  http_base_url: http://127.0.0.1:9010
+  autostart:
+    enabled: true
+    command:
+      - /home/user/code/kilroy/scripts/start-cxdb.sh
+    wait_timeout_ms: 30000
+    poll_interval_ms: 250
+    ui:
+      url: http://127.0.0.1:9010
+```
+
+Rules:
+- Use the absolute launcher path shown above for this repo.
+- Prefer launcher autostart over manual "start CXDB first" prerequisites for local runs.
+- `scripts/start-cxdb.sh` is strict by default and rejects unmanaged healthy endpoints (to avoid accidentally using a test shim on the same ports).
+- If the user intentionally wants an external non-docker endpoint, document `KILROY_CXDB_ALLOW_EXTERNAL=1` in the run instructions (or disable autostart explicitly).
+
+If `cxdb.http_base_url` / `cxdb.binary_addr` point to non-local hosts, do not force the local launcher path; keep autostart optional and honor user/environment constraints.
+
 #### Node pattern: implement then verify
 
 For EVERY implementation unit — including `impl_setup` — generate a PAIR of nodes plus a conditional:
@@ -688,6 +714,7 @@ Custom outcome values work: `outcome=port`, `outcome=skip`, `outcome=needs_fix`.
 21. **Auto-install bootstrap without explicit user opt-in (interactive mode).** When tools are missing, do not silently add installer commands to run config. Ask the user first, then apply their choice.
 22. **Toolchain checks with no bootstrap path (when auto-install is intended).** If the run is expected to self-prepare the environment, companion run config must include idempotent `setup.commands` install/bootstrap steps. A check-only gate without setup bootstrap causes immediate hard failure.
 23. **Retrying long backward edges without restart.** When a retry edge jumps back to a much earlier implementation stage, set `loop_restart=true` on that edge so each retry starts with a fresh run directory and avoids stale-context loops.
+24. **Local CXDB configs without launcher autostart.** In this repo, do not emit companion `run.yaml` that points at local CXDB endpoints but omits `cxdb.autostart` launcher wiring. That creates fragile manual setup and can silently attach to the wrong daemon.
 
 ## Notes on Reference Dotfile Conventions
 
