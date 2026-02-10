@@ -955,11 +955,10 @@ func sleepWithContext(ctx context.Context, delay time.Duration) bool {
 
 func canceledOutcomeForRetry(ctx context.Context, out runtime.Outcome) runtime.Outcome {
 	out.Status = runtime.StatusFail
-	if reason := strings.TrimSpace(out.FailureReason); reason != "" {
-		out.FailureReason = reason
-	}
 	if cause := context.Cause(ctx); cause != nil && strings.TrimSpace(cause.Error()) != "" {
 		out.FailureReason = strings.TrimSpace(cause.Error())
+	} else if reason := strings.TrimSpace(out.FailureReason); reason != "" {
+		out.FailureReason = reason
 	}
 	if strings.TrimSpace(out.FailureReason) == "" {
 		if err := ctx.Err(); err != nil {

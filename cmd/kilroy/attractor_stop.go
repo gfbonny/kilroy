@@ -94,6 +94,9 @@ func runAttractorStop(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "find pid %d: %v\n", verified.PID, err)
 		return 1
 	}
+	// Best-effort identity check immediately before signaling. A small race
+	// remains without pidfd-based signaling, but start-time verification greatly
+	// reduces accidental PID-reuse targeting.
 	if err := verifyProcessIdentity(verified); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -287,7 +290,7 @@ func captureVerifiedProcess(pid int) (verifiedProcess, error) {
 	if !procutil.ProcFSAvailable() {
 		return verifiedProcess{PID: pid}, nil
 	}
-	start, err := readPIDStartTime(pid)
+	start, err := procutil.ReadPIDStartTime(pid)
 	if err != nil {
 		return verifiedProcess{}, fmt.Errorf("refusing to signal pid %d: cannot read process start time: %w", pid, err)
 	}
@@ -301,7 +304,7 @@ func verifyProcessIdentity(proc verifiedProcess) error {
 	if !proc.StartTimeKnown {
 		return nil
 	}
-	start, err := readPIDStartTime(proc.PID)
+	start, err := procutil.ReadPIDStartTime(proc.PID)
 	if err != nil {
 		return fmt.Errorf("refusing to signal pid %d: cannot read process start time: %w", proc.PID, err)
 	}
@@ -315,35 +318,11 @@ func processIdentityMatches(proc verifiedProcess) bool {
 	if !proc.StartTimeKnown {
 		return true
 	}
-	start, err := readPIDStartTime(proc.PID)
+	start, err := procutil.ReadPIDStartTime(proc.PID)
 	if err != nil {
 		return false
 	}
 	return start == proc.StartTime
-}
-
-func readPIDStartTime(pid int) (uint64, error) {
-	statPath := filepath.Join("/proc", strconv.Itoa(pid), "stat")
-	b, err := os.ReadFile(statPath)
-	if err != nil {
-		return 0, err
-	}
-	line := string(b)
-	closeIdx := strings.LastIndexByte(line, ')')
-	if closeIdx < 0 || closeIdx+2 >= len(line) {
-		return 0, fmt.Errorf("malformed stat record")
-	}
-	fields := strings.Fields(line[closeIdx+2:])
-	if len(fields) < 20 {
-		return 0, fmt.Errorf("malformed stat fields")
-	}
-	// starttime is field 22 in /proc/<pid>/stat (1-indexed), which maps to
-	// index 19 after trimming the leading "pid (comm) state" segment above.
-	start, err := strconv.ParseUint(fields[19], 10, 64)
-	if err != nil {
-		return 0, err
-	}
-	return start, nil
 }
 
 func readPIDCmdline(pid int) ([]string, error) {

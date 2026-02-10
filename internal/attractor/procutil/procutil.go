@@ -2,6 +2,7 @@ package procutil
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,18 +37,52 @@ func PIDZombie(pid int) bool {
 	if !ProcFSAvailable() {
 		return pidZombieFromPS(pid)
 	}
-	statPath := filepath.Join("/proc", strconv.Itoa(pid), "stat")
-	b, err := os.ReadFile(statPath)
+	state, _, err := readProcStat(pid)
 	if err != nil {
 		return false
 	}
-	line := string(b)
+	return state == 'Z' || state == 'X'
+}
+
+// ReadPIDStartTime returns the kernel process start-time tick value from
+// /proc/<pid>/stat field 22 (1-indexed).
+func ReadPIDStartTime(pid int) (uint64, error) {
+	if pid <= 0 {
+		return 0, fmt.Errorf("invalid pid %d", pid)
+	}
+	_, startTime, err := readProcStat(pid)
+	if err != nil {
+		return 0, err
+	}
+	return startTime, nil
+}
+
+func readProcStat(pid int) (byte, uint64, error) {
+	statPath := filepath.Join("/proc", strconv.Itoa(pid), "stat")
+	b, err := os.ReadFile(statPath)
+	if err != nil {
+		return 0, 0, err
+	}
+	return parseProcStatLine(string(b))
+}
+
+func parseProcStatLine(line string) (byte, uint64, error) {
 	closeIdx := strings.LastIndexByte(line, ')')
 	if closeIdx < 0 || closeIdx+2 >= len(line) {
-		return false
+		return 0, 0, fmt.Errorf("malformed stat record")
 	}
 	state := line[closeIdx+2]
-	return state == 'Z' || state == 'X'
+	fields := strings.Fields(line[closeIdx+2:])
+	if len(fields) < 20 {
+		return 0, 0, fmt.Errorf("malformed stat fields")
+	}
+	// starttime is field 22 in /proc/<pid>/stat (1-indexed), which maps to
+	// index 19 after trimming the leading "pid (comm) state" segment above.
+	startTime, err := strconv.ParseUint(fields[19], 10, 64)
+	if err != nil {
+		return 0, 0, err
+	}
+	return state, startTime, nil
 }
 
 func pidZombieFromPS(pid int) bool {

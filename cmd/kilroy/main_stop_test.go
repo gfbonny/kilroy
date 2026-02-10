@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/strongdm/kilroy/internal/attractor/procutil"
 )
 
 func requireProcFS(t *testing.T) {
@@ -214,9 +216,9 @@ func TestAttractorStop_ErrorsWhenNoPID(t *testing.T) {
 
 func TestVerifyProcessIdentity_DetectsChangedStartTime(t *testing.T) {
 	requireProcFS(t)
-	start, err := readPIDStartTime(os.Getpid())
+	start, err := procutil.ReadPIDStartTime(os.Getpid())
 	if err != nil {
-		t.Fatalf("readPIDStartTime: %v", err)
+		t.Fatalf("ReadPIDStartTime: %v", err)
 	}
 	id := verifiedProcess{PID: os.Getpid(), StartTime: start + 1, StartTimeKnown: true}
 	if err := verifyProcessIdentity(id); err == nil {
