@@ -63,6 +63,12 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	opts := RunOptions{
 		RepoPath:        cfg.Repo.Path,
 		RunBranchPrefix: cfg.Git.RunBranchPrefix,
+		StageTimeout:    durationFromOptionalMS(cfg.RuntimePolicy.StageTimeoutMS),
+		StallTimeout:    durationFromOptionalMS(cfg.RuntimePolicy.StallTimeoutMS),
+		StallCheckInterval: durationFromOptionalMS(
+			cfg.RuntimePolicy.StallCheckIntervalMS,
+		),
+		MaxLLMRetries: copyOptionalInt(cfg.RuntimePolicy.MaxLLMRetries),
 	}
 	// Allow select overrides.
 	if overrides.RunID != "" {
@@ -274,6 +280,24 @@ func modelIDForNode(n *model.Node) string {
 		modelID = strings.TrimSpace(n.Attr("model", ""))
 	}
 	return modelID
+}
+
+func durationFromOptionalMS(ms *int) time.Duration {
+	if ms == nil {
+		return 0
+	}
+	if *ms <= 0 {
+		return 0
+	}
+	return time.Duration(*ms) * time.Millisecond
+}
+
+func copyOptionalInt(v *int) *int {
+	if v == nil {
+		return nil
+	}
+	out := *v
+	return &out
 }
 
 func createContextWithFallback(ctx context.Context, client *cxdb.Client, bin *cxdb.BinaryClient) (cxdb.ContextInfo, error) {

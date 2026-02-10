@@ -51,6 +51,18 @@ type RunOptions struct {
 	// When set, the forced model is used for execution and bypasses model-catalog
 	// membership validation for that provider.
 	ForceModels map[string]string
+
+	// Optional global stage timeout cap. When > 0, each stage attempt uses the
+	// smaller positive timeout from node timeout and this global cap.
+	StageTimeout time.Duration
+
+	// Optional watchdog for no-progress stalls. Defaults are applied when unset.
+	StallTimeout       time.Duration
+	StallCheckInterval time.Duration
+
+	// Optional cap for LLM retries in codergen routing.
+	// Pointer preserves explicit zero versus unset semantics from config.
+	MaxLLMRetries *int
 }
 
 func (o *RunOptions) applyDefaults() error {
@@ -71,6 +83,22 @@ func (o *RunOptions) applyDefaults() error {
 	}
 	if o.WorktreeDir == "" {
 		o.WorktreeDir = filepath.Join(o.LogsRoot, "worktree")
+	}
+	// Runtime policy defaults (aligned with run config defaults).
+	if o.StageTimeout < 0 {
+		o.StageTimeout = 0
+	}
+	if o.StallTimeout < 0 {
+		o.StallTimeout = 0
+	}
+	if o.StallCheckInterval < 0 {
+		o.StallCheckInterval = 0
+	}
+	if o.MaxLLMRetries == nil {
+		v := 6
+		o.MaxLLMRetries = &v
+	} else if *o.MaxLLMRetries < 0 {
+		return fmt.Errorf("max llm retries must be >= 0")
 	}
 	o.ForceModels = normalizeForceModels(o.ForceModels)
 	return nil
@@ -125,6 +153,8 @@ type Engine struct {
 	loopFailureSignatures map[string]int
 
 	progressMu sync.Mutex
+	// Guarded by progressMu.
+	lastProgressAt time.Time
 
 	// Fidelity/session resolution state.
 	incomingEdge          *model.Edge // edge used to reach the current node (nil for start)
@@ -245,6 +275,9 @@ func Run(ctx context.Context, dotSource []byte, opts RunOptions) (*Result, error
 }
 
 func (e *Engine) run(ctx context.Context) (res *Result, err error) {
+	runCtx, cancelRun := context.WithCancelCause(ctx)
+	defer cancelRun(nil)
+
 	defer func() {
 		if err != nil {
 			e.persistFatalOutcome(ctx, err)
@@ -300,7 +333,7 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 			return nil, err
 		}
 	}
-	if err := e.cxdbRunStarted(ctx, baseSHA); err != nil {
+	if err := e.cxdbRunStarted(runCtx, baseSHA); err != nil {
 		return nil, err
 	}
 
@@ -312,6 +345,14 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 
 	// Capture the original logs root for loop_restart (attractor-spec §3.2 Step 7).
 	e.baseLogsRoot = e.LogsRoot
+	e.setLastProgressTime(time.Now().UTC())
+	if e.Options.StallTimeout > 0 {
+		checkEvery := e.Options.StallCheckInterval
+		if checkEvery <= 0 {
+			checkEvery = 5 * time.Second
+		}
+		go e.runStallWatchdog(runCtx, cancelRun, e.Options.StallTimeout, checkEvery)
+	}
 
 	current := findStartNodeID(e.Graph)
 	if current == "" {
@@ -324,7 +365,7 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 	// Node outcomes used for goal_gate checks.
 	nodeOutcomes := map[string]runtime.Outcome{}
 
-	return e.runLoop(ctx, current, completed, nodeRetries, nodeOutcomes)
+	return e.runLoop(runCtx, current, completed, nodeRetries, nodeOutcomes)
 }
 
 func (e *Engine) runLoop(ctx context.Context, current string, completed []string, nodeRetries map[string]int, nodeOutcomes map[string]runtime.Outcome) (*Result, error) {
@@ -677,15 +718,12 @@ func (e *Engine) loopRestart(ctx context.Context, targetNodeID string, fromNodeI
 }
 
 func (e *Engine) executeNode(ctx context.Context, node *model.Node) (runtime.Outcome, error) {
-	// Node-level timeout (attractor-spec timeout attribute).
-	// Note: parseDuration accepts both explicit duration strings (e.g., "900s") and
-	// bare integers (treated as seconds) for compatibility with existing DOT files.
-	if node != nil {
-		if nodeTimeout := parseDuration(node.Attr("timeout", ""), 0); nodeTimeout > 0 {
-			cctx, cancel := context.WithTimeout(ctx, nodeTimeout)
-			defer cancel()
-			ctx = cctx
-		}
+	// Effective timeout uses the smaller positive timeout between node timeout
+	// and global StageTimeout.
+	if timeout := effectiveStageTimeout(node, e.Options.StageTimeout); timeout > 0 {
+		cctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		ctx = cctx
 	}
 
 	h := e.Registry.Resolve(node)
@@ -725,6 +763,9 @@ func (e *Engine) executeNode(ctx context.Context, node *model.Node) (runtime.Out
 		}, node)
 	}()
 	if err != nil {
+		if cause := context.Cause(ctx); cause != nil && cause != context.Canceled && cause != context.DeadlineExceeded {
+			err = cause
+		}
 		out = runtime.Outcome{Status: runtime.StatusRetry, FailureReason: err.Error()}
 	}
 
@@ -737,6 +778,11 @@ func (e *Engine) executeNode(ctx context.Context, node *model.Node) (runtime.Out
 	out, cerr := out.Canonicalize()
 	if cerr != nil {
 		return runtime.Outcome{Status: runtime.StatusFail, FailureReason: cerr.Error()}, cerr
+	}
+	if (out.Status == runtime.StatusFail || out.Status == runtime.StatusRetry) && ctx.Err() != nil {
+		if cause := context.Cause(ctx); cause != nil && cause != context.Canceled && cause != context.DeadlineExceeded {
+			out.FailureReason = cause.Error()
+		}
 	}
 	// Ensure required fields are present.
 	if out.ContextUpdates == nil {
@@ -1085,6 +1131,66 @@ func (e *Engine) finalOutcomePaths() []string {
 	add(e.LogsRoot)
 	add(e.baseLogsRoot)
 	return out
+}
+
+func effectiveStageTimeout(node *model.Node, global time.Duration) time.Duration {
+	nodeTimeout := time.Duration(0)
+	// parseDuration accepts explicit durations and bare second counts.
+	if node != nil {
+		nodeTimeout = parseDuration(node.Attr("timeout", ""), 0)
+	}
+	return minPositiveDuration(nodeTimeout, global)
+}
+
+func minPositiveDuration(a, b time.Duration) time.Duration {
+	switch {
+	case a > 0 && b > 0:
+		if a < b {
+			return a
+		}
+		return b
+	case a > 0:
+		return a
+	case b > 0:
+		return b
+	default:
+		return 0
+	}
+}
+
+func (e *Engine) runStallWatchdog(ctx context.Context, cancel context.CancelCauseFunc, stallTimeout time.Duration, checkEvery time.Duration) {
+	if e == nil || cancel == nil || stallTimeout <= 0 {
+		return
+	}
+	if checkEvery <= 0 {
+		checkEvery = 5 * time.Second
+	}
+	ticker := time.NewTicker(checkEvery)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			last := e.lastProgressTime()
+			if last.IsZero() {
+				last = time.Now().UTC()
+				e.setLastProgressTime(last)
+			}
+			idle := time.Since(last)
+			if idle < stallTimeout {
+				continue
+			}
+			e.appendProgress(map[string]any{
+				"event":            "stall_watchdog_timeout",
+				"stall_timeout_ms": stallTimeout.Milliseconds(),
+				"idle_ms":          idle.Milliseconds(),
+			})
+			cancel(fmt.Errorf("stall watchdog timeout after %s with no progress", stallTimeout))
+			return
+		}
+	}
 }
 
 func writeJSON(path string, v any) error {
