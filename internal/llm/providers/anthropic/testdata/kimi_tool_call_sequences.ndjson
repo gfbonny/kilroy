@@ -1,0 +1,11 @@
+{"sequence":"start_input_plus_delta_duplicate","event":"content_block_start","data":{"index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"shell","input":{"command":"rg --files demo/rogue/original-rogue/*.c"}}}}
+{"sequence":"start_input_plus_delta_duplicate","event":"content_block_delta","data":{"index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"rg --files demo/rogue/original-rogue/*.c\"}"}}}
+{"sequence":"start_input_plus_delta_duplicate","event":"content_block_stop","data":{"index":0}}
+{"sequence":"start_input_plus_delta_duplicate","event":"message_delta","data":{"stop_reason":"tool_use","usage":{"input_tokens":123,"output_tokens":45}}}
+{"sequence":"start_input_plus_delta_duplicate","event":"message_stop","data":{}}
+{"sequence":"delta_only_valid_json","event":"content_block_start","data":{"index":0,"content_block":{"type":"tool_use","id":"toolu_2","name":"glob"}}}
+{"sequence":"delta_only_valid_json","event":"content_block_delta","data":{"index":0,"delta":{"type":"input_json_delta","partial_json":"{\"pattern\":\"*.c\","}}}
+{"sequence":"delta_only_valid_json","event":"content_block_delta","data":{"index":0,"delta":{"type":"input_json_delta","partial_json":"\"path\":\"demo/rogue/original-rogue\"}"}}}
+{"sequence":"delta_only_valid_json","event":"content_block_stop","data":{"index":0}}
+{"sequence":"delta_only_valid_json","event":"message_delta","data":{"stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":11}}}
+{"sequence":"delta_only_valid_json","event":"message_stop","data":{}}

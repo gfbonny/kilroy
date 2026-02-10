@@ -345,6 +345,176 @@ func TestAdapter_Stream_TranslatesToolUseAndThinkingBlocks(t *testing.T) {
 	}
 }
 
+func TestAdapter_Stream_ToolUse_StartInputPlusDelta_NoDuplicateJSON(t *testing.T) {
+	streamEvents := runKimiToolCallSequence(t, "start_input_plus_delta_duplicate")
+
+	var startIDs []string
+	var deltaIDs []string
+	var endCall *llm.ToolCallData
+	var finish *llm.Response
+
+	for _, ev := range streamEvents {
+		switch ev.Type {
+		case llm.StreamEventError:
+			if ev.Err != nil {
+				t.Fatalf("stream error: %v", ev.Err)
+			}
+		case llm.StreamEventToolCallStart:
+			if ev.ToolCall == nil {
+				t.Fatalf("tool call start missing tool call payload")
+			}
+			startIDs = append(startIDs, ev.ToolCall.ID)
+		case llm.StreamEventToolCallDelta:
+			if ev.ToolCall == nil {
+				t.Fatalf("tool call delta missing tool call payload")
+			}
+			deltaIDs = append(deltaIDs, ev.ToolCall.ID)
+		case llm.StreamEventToolCallEnd:
+			if ev.ToolCall == nil {
+				t.Fatalf("tool call end missing tool call payload")
+			}
+			tc := *ev.ToolCall
+			endCall = &tc
+		case llm.StreamEventFinish:
+			if ev.Response != nil {
+				finish = ev.Response
+			}
+		}
+	}
+
+	if len(startIDs) != 1 {
+		t.Fatalf("expected exactly one tool call start, got %d", len(startIDs))
+	}
+	if len(deltaIDs) == 0 {
+		t.Fatalf("expected at least one tool call delta")
+	}
+	for i, id := range deltaIDs {
+		if id != startIDs[0] {
+			t.Fatalf("delta[%d] tool_call_id mismatch: got %q want %q", i, id, startIDs[0])
+		}
+	}
+	if endCall == nil {
+		t.Fatalf("expected tool call end event")
+	}
+	if endCall.ID != startIDs[0] {
+		t.Fatalf("tool call end id mismatch: got %q want %q", endCall.ID, startIDs[0])
+	}
+	if finish == nil {
+		t.Fatalf("expected finish response")
+	}
+	if finish.Finish.Reason != "tool_calls" {
+		t.Fatalf("finish reason: got %q want %q", finish.Finish.Reason, "tool_calls")
+	}
+
+	if !json.Valid(endCall.Arguments) {
+		t.Fatalf("tool call arguments must be valid JSON: %q", string(endCall.Arguments))
+	}
+	var args map[string]any
+	if err := json.Unmarshal(endCall.Arguments, &args); err != nil {
+		t.Fatalf("unmarshal tool args: %v", err)
+	}
+	if got := fmt.Sprint(args["command"]); got != "rg --files demo/rogue/original-rogue/*.c" {
+		t.Fatalf("tool command: got %q", got)
+	}
+
+	calls := finish.ToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("finish response tool calls: got %d want 1", len(calls))
+	}
+	if calls[0].ID != startIDs[0] {
+		t.Fatalf("finish tool call id mismatch: got %q want %q", calls[0].ID, startIDs[0])
+	}
+	if !json.Valid(calls[0].Arguments) {
+		t.Fatalf("finish tool args must be valid JSON: %q", string(calls[0].Arguments))
+	}
+}
+
+func TestAdapter_Stream_ToolUse_DeltaOnly_ValidJSON(t *testing.T) {
+	streamEvents := runKimiToolCallSequence(t, "delta_only_valid_json")
+
+	var startIDs []string
+	var deltaIDs []string
+	var endCall *llm.ToolCallData
+	var finish *llm.Response
+
+	for _, ev := range streamEvents {
+		switch ev.Type {
+		case llm.StreamEventError:
+			if ev.Err != nil {
+				t.Fatalf("stream error: %v", ev.Err)
+			}
+		case llm.StreamEventToolCallStart:
+			if ev.ToolCall == nil {
+				t.Fatalf("tool call start missing tool call payload")
+			}
+			startIDs = append(startIDs, ev.ToolCall.ID)
+		case llm.StreamEventToolCallDelta:
+			if ev.ToolCall == nil {
+				t.Fatalf("tool call delta missing tool call payload")
+			}
+			deltaIDs = append(deltaIDs, ev.ToolCall.ID)
+		case llm.StreamEventToolCallEnd:
+			if ev.ToolCall == nil {
+				t.Fatalf("tool call end missing tool call payload")
+			}
+			tc := *ev.ToolCall
+			endCall = &tc
+		case llm.StreamEventFinish:
+			if ev.Response != nil {
+				finish = ev.Response
+			}
+		}
+	}
+
+	if len(startIDs) != 1 {
+		t.Fatalf("expected exactly one tool call start, got %d", len(startIDs))
+	}
+	if len(deltaIDs) < 2 {
+		t.Fatalf("expected multiple tool call deltas, got %d", len(deltaIDs))
+	}
+	for i, id := range deltaIDs {
+		if id != startIDs[0] {
+			t.Fatalf("delta[%d] tool_call_id mismatch: got %q want %q", i, id, startIDs[0])
+		}
+	}
+	if endCall == nil {
+		t.Fatalf("expected tool call end event")
+	}
+	if endCall.ID != startIDs[0] {
+		t.Fatalf("tool call end id mismatch: got %q want %q", endCall.ID, startIDs[0])
+	}
+	if !json.Valid(endCall.Arguments) {
+		t.Fatalf("tool call arguments must be valid JSON: %q", string(endCall.Arguments))
+	}
+	var args map[string]any
+	if err := json.Unmarshal(endCall.Arguments, &args); err != nil {
+		t.Fatalf("unmarshal tool args: %v", err)
+	}
+	if got := fmt.Sprint(args["pattern"]); got != "*.c" {
+		t.Fatalf("tool pattern: got %q want %q", got, "*.c")
+	}
+	if got := fmt.Sprint(args["path"]); got != "demo/rogue/original-rogue" {
+		t.Fatalf("tool path: got %q", got)
+	}
+	if finish == nil {
+		t.Fatalf("expected finish response")
+	}
+	if finish.Finish.Reason != "tool_calls" {
+		t.Fatalf("finish reason: got %q want %q", finish.Finish.Reason, "tool_calls")
+	}
+
+	calls := finish.ToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("finish response tool calls: got %d want 1", len(calls))
+	}
+	if calls[0].ID != startIDs[0] {
+		t.Fatalf("finish tool call id mismatch: got %q want %q", calls[0].ID, startIDs[0])
+	}
+	if !json.Valid(calls[0].Arguments) {
+		t.Fatalf("finish tool args must be valid JSON: %q", string(calls[0].Arguments))
+	}
+}
+
 func TestAdapter_Complete_ImageInput_URL_Data_AndFilePath(t *testing.T) {
 	var gotBody map[string]any
 
@@ -1253,6 +1423,89 @@ func asInt(v any) int {
 }
 
 func intPtr(v int) *int { return &v }
+
+type streamFixtureEvent struct {
+	Sequence string          `json:"sequence"`
+	Event    string          `json:"event"`
+	Data     json.RawMessage `json:"data"`
+}
+
+func runKimiToolCallSequence(t *testing.T, sequence string) []llm.StreamEvent {
+	t.Helper()
+
+	events := loadStreamFixtureSequence(t, sequence)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/messages" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		f, _ := w.(http.Flusher)
+		for _, ev := range events {
+			_, _ = io.WriteString(w, "event: "+ev.Event+"\n")
+			_, _ = io.WriteString(w, "data: "+string(ev.Data)+"\n\n")
+			if f != nil {
+				f.Flush()
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	a := &Adapter{Provider: "kimi", APIKey: "k", BaseURL: srv.URL, Client: srv.Client()}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	stream, err := a.Stream(ctx, llm.Request{Provider: "kimi", Model: "kimi-k2.5", Messages: []llm.Message{llm.User("hi")}})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer stream.Close()
+
+	var out []llm.StreamEvent
+	for ev := range stream.Events() {
+		out = append(out, ev)
+	}
+	if len(out) == 0 {
+		t.Fatalf("expected stream events")
+	}
+	return out
+}
+
+func loadStreamFixtureSequence(t *testing.T, sequence string) []streamFixtureEvent {
+	t.Helper()
+
+	b, err := os.ReadFile(filepath.Join("testdata", "kimi_tool_call_sequences.ndjson"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	lines := strings.Split(string(b), "\n")
+	out := make([]streamFixtureEvent, 0, len(lines))
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		var ev streamFixtureEvent
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("parse fixture line %d: %v", i+1, err)
+		}
+		if ev.Sequence != sequence {
+			continue
+		}
+		if strings.TrimSpace(ev.Event) == "" {
+			t.Fatalf("fixture line %d has empty event", i+1)
+		}
+		if len(ev.Data) == 0 {
+			t.Fatalf("fixture line %d has empty data", i+1)
+		}
+		out = append(out, ev)
+	}
+	if len(out) == 0 {
+		t.Fatalf("fixture sequence %q not found", sequence)
+	}
+	return out
+}
 
 func writeAnthropicStreamOK(w http.ResponseWriter, text string) {
 	w.Header().Set("Content-Type", "text/event-stream")
