@@ -44,7 +44,7 @@ func LoadSnapshot(logsRoot string) (*Snapshot, error) {
 		}
 	}
 
-	if err := applyPIDFile(s); err != nil {
+	if err := applyPIDFile(s, terminal); err != nil {
 		return nil, err
 	}
 	if s.State == StateUnknown && s.PIDAlive {
@@ -113,7 +113,7 @@ func applyLiveOrProgress(s *Snapshot) error {
 	return nil
 }
 
-func applyPIDFile(s *Snapshot) error {
+func applyPIDFile(s *Snapshot, tolerateParseErrors bool) error {
 	path := filepath.Join(s.LogsRoot, "run.pid")
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -124,10 +124,16 @@ func applyPIDFile(s *Snapshot) error {
 	}
 	raw := strings.TrimSpace(string(b))
 	if raw == "" {
+		if tolerateParseErrors {
+			return nil
+		}
 		return fmt.Errorf("parse %s: empty pid", path)
 	}
 	pid, err := strconv.Atoi(raw)
 	if err != nil || pid <= 0 {
+		if tolerateParseErrors {
+			return nil
+		}
 		return fmt.Errorf("parse %s: invalid pid %q", path, raw)
 	}
 	s.PID = pid
@@ -139,11 +145,29 @@ func pidAlive(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
+	if pidZombie(pid) {
+		return false
+	}
 	err := syscall.Kill(pid, 0)
 	if err == nil {
 		return true
 	}
 	return errors.Is(err, syscall.EPERM)
+}
+
+func pidZombie(pid int) bool {
+	statPath := filepath.Join("/proc", strconv.Itoa(pid), "stat")
+	b, err := os.ReadFile(statPath)
+	if err != nil {
+		return false
+	}
+	line := string(b)
+	closeIdx := strings.LastIndexByte(line, ')')
+	if closeIdx < 0 || closeIdx+2 >= len(line) {
+		return false
+	}
+	state := line[closeIdx+2]
+	return state == 'Z' || state == 'X'
 }
 
 func readLiveEvent(path string) (map[string]any, bool, error) {

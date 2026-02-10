@@ -161,9 +161,16 @@ func runProviderAPIPreflight(ctx context.Context, g *model.Graph, runtimes map[s
 	for _, provider := range client.ProviderNames() {
 		available[normalizeProviderKey(provider)] = true
 	}
-	transports := configuredAPIPromptProbeTransports(cfg, g)
+	transports, explicitTransports, err := configuredAPIPromptProbeTransports(cfg, g)
+	if err != nil {
+		report.addCheck(providerPreflightCheck{
+			Name:    "provider_prompt_probe_transports",
+			Status:  preflightStatusFail,
+			Message: err.Error(),
+		})
+		return fmt.Errorf("preflight: %w", err)
+	}
 	policy := preflightAPIPromptProbePolicyFromConfig(cfg)
-	explicitTransports := cfg != nil && len(cfg.Preflight.PromptProbes.Transports) > 0
 
 	for _, provider := range providers {
 		if !available[provider] {
@@ -245,24 +252,25 @@ type preflightAPIPromptProbePolicy struct {
 	MaxDelay  time.Duration
 }
 
-func configuredAPIPromptProbeTransports(cfg *RunConfigFile, g *model.Graph) []string {
+func configuredAPIPromptProbeTransports(cfg *RunConfigFile, g *model.Graph) ([]string, bool, error) {
 	_ = g
 	if cfg != nil && len(cfg.Preflight.PromptProbes.Transports) > 0 {
 		seen := map[string]bool{}
 		out := make([]string, 0, len(cfg.Preflight.PromptProbes.Transports))
 		for _, raw := range cfg.Preflight.PromptProbes.Transports {
 			normalized := normalizePromptProbeTransport(raw)
-			if normalized == "" || seen[normalized] {
+			if normalized == "" {
+				return nil, false, fmt.Errorf("invalid preflight.prompt_probes.transports value %q (want complete|stream)", strings.TrimSpace(raw))
+			}
+			if seen[normalized] {
 				continue
 			}
 			seen[normalized] = true
 			out = append(out, normalized)
 		}
-		if len(out) > 0 {
-			return out
-		}
+		return out, true, nil
 	}
-	return []string{"complete", "stream"}
+	return []string{"complete", "stream"}, false, nil
 }
 
 func normalizePromptProbeTransport(raw string) string {

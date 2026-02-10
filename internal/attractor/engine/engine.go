@@ -370,6 +370,9 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 
 func (e *Engine) runLoop(ctx context.Context, current string, completed []string, nodeRetries map[string]int, nodeOutcomes map[string]runtime.Outcome) (*Result, error) {
 	for {
+		if err := runContextError(ctx); err != nil {
+			return nil, err
+		}
 		node := e.Graph.Nodes[current]
 		if node == nil {
 			return nil, fmt.Errorf("missing node: %s", current)
@@ -420,6 +423,9 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 			nodeOutcomes[node.ID] = out
 			completed = append(completed, node.ID)
 			e.cxdbStageFinished(ctx, node, out)
+			if err := runContextError(ctx); err != nil {
+				return nil, err
+			}
 			sha, err := e.checkpoint(node.ID, out, completed, nodeRetries)
 			if err != nil {
 				return nil, err
@@ -456,6 +462,9 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 			return nil, err
 		}
 		e.cxdbStageFinished(ctx, node, out)
+		if err := runContextError(ctx); err != nil {
+			return nil, err
+		}
 
 		// Record completion.
 		completed = append(completed, node.ID)
@@ -855,6 +864,12 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 			"status":         string(out.Status),
 			"failure_reason": out.FailureReason,
 		})
+		if ctx.Err() != nil {
+			co := canceledOutcomeForRetry(out, ctx)
+			fo, _ := co.Canonicalize()
+			_ = writeJSON(filepath.Join(stageDir, "status.json"), fo)
+			return fo, nil
+		}
 		if out.Status == runtime.StatusSuccess || out.Status == runtime.StatusPartialSuccess || out.Status == runtime.StatusSkipped {
 			retries[node.ID] = 0
 			return out, nil
@@ -882,7 +897,12 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 				"retries":   retries[node.ID],
 				"max_retry": maxRetries,
 			})
-			time.Sleep(delay)
+			if !sleepWithContext(ctx, delay) {
+				co := canceledOutcomeForRetry(out, ctx)
+				fo, _ := co.Canonicalize()
+				_ = writeJSON(filepath.Join(stageDir, "status.json"), fo)
+				return fo, nil
+			}
 			continue
 		}
 		if hintProvided && attempt < maxAttempts && (out.Status == runtime.StatusFail || out.Status == runtime.StatusRetry) {
@@ -917,6 +937,55 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 		return fo, nil
 	}
 	return runtime.Outcome{Status: runtime.StatusFail, FailureReason: "max retries exceeded"}, nil
+}
+
+func sleepWithContext(ctx context.Context, delay time.Duration) bool {
+	if delay <= 0 {
+		return true
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func canceledOutcomeForRetry(out runtime.Outcome, ctx context.Context) runtime.Outcome {
+	out.Status = runtime.StatusFail
+	if reason := strings.TrimSpace(out.FailureReason); reason != "" {
+		out.FailureReason = reason
+	}
+	if cause := context.Cause(ctx); cause != nil && strings.TrimSpace(cause.Error()) != "" {
+		out.FailureReason = strings.TrimSpace(cause.Error())
+	}
+	if strings.TrimSpace(out.FailureReason) == "" {
+		if err := ctx.Err(); err != nil {
+			out.FailureReason = strings.TrimSpace(err.Error())
+		}
+	}
+	if strings.TrimSpace(out.FailureReason) == "" {
+		out.FailureReason = "run canceled"
+	}
+	if out.ContextUpdates == nil {
+		out.ContextUpdates = map[string]any{}
+	}
+	if out.SuggestedNextIDs == nil {
+		out.SuggestedNextIDs = []string{}
+	}
+	return out
+}
+
+func runContextError(ctx context.Context) error {
+	if ctx == nil || ctx.Err() == nil {
+		return nil
+	}
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
+	}
+	return ctx.Err()
 }
 
 func (e *Engine) checkpoint(nodeID string, out runtime.Outcome, completed []string, retries map[string]int) (string, error) {

@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -60,12 +62,20 @@ func runAttractorStop(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	if snapshot.State != runstate.StateRunning {
+		fmt.Fprintf(stderr, "run state is %q (expected %q); refusing to stop\n", snapshot.State, runstate.StateRunning)
+		return 1
+	}
 	if snapshot.PID <= 0 {
 		fmt.Fprintln(stderr, "run pid is not available (run.pid missing or invalid)")
 		return 1
 	}
 	if !snapshot.PIDAlive {
 		fmt.Fprintf(stderr, "pid %d is not running\n", snapshot.PID)
+		return 1
+	}
+	if err := verifyAttractorRunPID(snapshot.PID, logsRoot, snapshot.RunID); err != nil {
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
 
@@ -135,9 +145,119 @@ func pidRunning(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
+	if pidZombie(pid) {
+		return false
+	}
 	err := syscall.Kill(pid, 0)
 	if err == nil {
 		return true
 	}
 	return errors.Is(err, syscall.EPERM)
+}
+
+func pidZombie(pid int) bool {
+	statPath := filepath.Join("/proc", strconv.Itoa(pid), "stat")
+	b, err := os.ReadFile(statPath)
+	if err != nil {
+		return false
+	}
+	line := string(b)
+	closeIdx := strings.LastIndexByte(line, ')')
+	if closeIdx < 0 || closeIdx+2 >= len(line) {
+		return false
+	}
+	state := line[closeIdx+2]
+	return state == 'Z' || state == 'X'
+}
+
+func verifyAttractorRunPID(pid int, logsRoot string, runID string) error {
+	args, err := readPIDCmdline(pid)
+	if err != nil {
+		return fmt.Errorf("refusing to signal pid %d: cannot read process command line: %w", pid, err)
+	}
+	if len(args) == 0 {
+		return fmt.Errorf("refusing to signal pid %d: empty process command line", pid)
+	}
+
+	attractorIdx := -1
+	for i, arg := range args {
+		if strings.TrimSpace(arg) == "attractor" {
+			attractorIdx = i
+			break
+		}
+	}
+	if attractorIdx < 0 || attractorIdx+1 >= len(args) {
+		return fmt.Errorf("refusing to signal pid %d: process is not an attractor run/resume command", pid)
+	}
+	sub := strings.TrimSpace(args[attractorIdx+1])
+	if sub != "run" && sub != "resume" {
+		return fmt.Errorf("refusing to signal pid %d: process is attractor %q, not run/resume", pid, sub)
+	}
+
+	if pidLogsRoot, ok := cmdlineLogsRoot(args); ok {
+		if !samePath(pidLogsRoot, logsRoot) {
+			return fmt.Errorf("refusing to signal pid %d: --logs-root mismatch (pid=%q requested=%q)", pid, pidLogsRoot, logsRoot)
+		}
+		return nil
+	}
+
+	if pidRunID, ok := cmdlineRunID(args); ok && strings.TrimSpace(runID) != "" {
+		if strings.TrimSpace(pidRunID) != strings.TrimSpace(runID) {
+			return fmt.Errorf("refusing to signal pid %d: --run-id mismatch (pid=%q snapshot=%q)", pid, pidRunID, runID)
+		}
+		return nil
+	}
+	return fmt.Errorf("refusing to signal pid %d: process command line has no --logs-root/--run-id", pid)
+}
+
+func readPIDCmdline(pid int) ([]string, error) {
+	path := filepath.Join("/proc", strconv.Itoa(pid), "cmdline")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.Split(string(b), "\x00")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if s := strings.TrimSpace(part); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out, nil
+}
+
+func cmdlineLogsRoot(args []string) (string, bool) {
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--logs-root" && i+1 < len(args):
+			return strings.TrimSpace(args[i+1]), true
+		case strings.HasPrefix(args[i], "--logs-root="):
+			return strings.TrimSpace(strings.TrimPrefix(args[i], "--logs-root=")), true
+		}
+	}
+	return "", false
+}
+
+func cmdlineRunID(args []string) (string, bool) {
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--run-id" && i+1 < len(args):
+			return strings.TrimSpace(args[i+1]), true
+		case strings.HasPrefix(args[i], "--run-id="):
+			return strings.TrimSpace(strings.TrimPrefix(args[i], "--run-id=")), true
+		}
+	}
+	return "", false
+}
+
+func samePath(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	absA, errA := filepath.Abs(a)
+	absB, errB := filepath.Abs(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	return filepath.Clean(absA) == filepath.Clean(absB)
 }
