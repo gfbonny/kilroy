@@ -44,6 +44,8 @@ func (e *Engine) appendProgress(ev map[string]any) {
 	e.lastProgressAt = now
 
 	// Append to progress.ndjson.
+	// Intentionally open/close on each event so writes are immediately flushed
+	// and resilient to abrupt process termination.
 	if f, err := os.OpenFile(filepath.Join(logsRoot, "progress.ndjson"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
 		_, _ = f.Write(append(b, '\n'))
 		_ = f.Close()

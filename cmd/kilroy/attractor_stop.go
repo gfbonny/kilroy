@@ -123,6 +123,7 @@ func runAttractorStop(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	forceWait := grace
 	if forceWait < time.Second {
+		// Give SIGKILL at least one second to be observed by wait/poll loops.
 		forceWait = time.Second
 	}
 	if !waitForPIDExit(verified, forceWait) {
@@ -208,6 +209,9 @@ func verifyAttractorRunPID(pid int, logsRoot string, runID string) (verifiedProc
 		return captureVerifiedProcess(pid)
 	}
 	if hasRunID {
+		// Fallback: we confirmed this is a local kilroy attractor run/resume process
+		// and it carries --run-id, but we have no expected run-id materialized yet
+		// (early startup before manifest/live events). Preserve operability here.
 		return captureVerifiedProcess(pid)
 	}
 	return verifiedProcess{}, fmt.Errorf("refusing to signal pid %d: process command line has no --logs-root/--run-id", pid)
@@ -337,6 +341,8 @@ func readPIDStartTime(pid int) (uint64, error) {
 	if len(fields) < 20 {
 		return 0, fmt.Errorf("malformed stat fields")
 	}
+	// starttime is field 22 in /proc/<pid>/stat (1-indexed), which maps to
+	// index 19 after trimming the leading "pid (comm) state" segment above.
 	start, err := strconv.ParseUint(fields[19], 10, 64)
 	if err != nil {
 		return 0, err

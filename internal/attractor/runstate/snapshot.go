@@ -114,7 +114,7 @@ func applyLiveOrProgress(s *Snapshot) error {
 	return nil
 }
 
-func applyPIDFile(s *Snapshot, tolerateParseErrors bool) error {
+func applyPIDFile(s *Snapshot, terminalState bool) error {
 	path := filepath.Join(s.LogsRoot, "run.pid")
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -125,14 +125,14 @@ func applyPIDFile(s *Snapshot, tolerateParseErrors bool) error {
 	}
 	raw := strings.TrimSpace(string(b))
 	if raw == "" {
-		if tolerateParseErrors {
+		if terminalState {
 			return nil
 		}
 		return fmt.Errorf("parse %s: empty pid", path)
 	}
 	pid, err := strconv.Atoi(raw)
 	if err != nil || pid <= 0 {
-		if tolerateParseErrors {
+		if terminalState {
 			return nil
 		}
 		return fmt.Errorf("parse %s: invalid pid %q", path, raw)
