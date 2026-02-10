@@ -27,9 +27,18 @@ func runSubgraphUntil(ctx context.Context, eng *Engine, startNodeID, stopNodeID 
 
 	var lastNode string
 	var lastOutcome runtime.Outcome
+	emitCanceledExit := func(nodeID string, out runtime.Outcome) {
+		eng.appendProgress(map[string]any{
+			"event":          "subgraph_canceled_exit",
+			"node_id":        strings.TrimSpace(nodeID),
+			"last_node_id":   strings.TrimSpace(lastNode),
+			"failure_reason": strings.TrimSpace(out.FailureReason),
+		})
+	}
 
 	for {
 		if err := ctx.Err(); err != nil {
+			emitCanceledExit(current, lastOutcome)
 			return parallelBranchResult{
 				HeadSHA:    headSHA,
 				LastNodeID: lastNode,
@@ -59,6 +68,7 @@ func runSubgraphUntil(ctx context.Context, eng *Engine, startNodeID, stopNodeID 
 		}
 		eng.cxdbStageFinished(ctx, node, out)
 		if err := ctx.Err(); err != nil {
+			emitCanceledExit(node.ID, out)
 			return parallelBranchResult{
 				HeadSHA:    headSHA,
 				LastNodeID: lastNode,
@@ -125,6 +135,7 @@ func runSubgraphUntil(ctx context.Context, eng *Engine, startNodeID, stopNodeID 
 		lastNode = node.ID
 		lastOutcome = out
 		if err := ctx.Err(); err != nil {
+			emitCanceledExit(node.ID, lastOutcome)
 			return parallelBranchResult{
 				HeadSHA:    headSHA,
 				LastNodeID: lastNode,
@@ -157,6 +168,7 @@ func runSubgraphUntil(ctx context.Context, eng *Engine, startNodeID, stopNodeID 
 			return parallelBranchResult{}, fmt.Errorf("loop_restart not supported in v1")
 		}
 		if err := ctx.Err(); err != nil {
+			emitCanceledExit(node.ID, lastOutcome)
 			return parallelBranchResult{
 				HeadSHA:    headSHA,
 				LastNodeID: lastNode,

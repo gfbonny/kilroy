@@ -269,10 +269,21 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 
 	// If the backend/agent wrote a worktree status.json, surface it to the engine by
 	// copying it into the authoritative stage directory location.
+	source := statusSourceNone
 	if len(worktreeStatusPaths) > 0 {
-		if _, err := copyFirstValidFallbackStatus(stageStatusPath, worktreeStatusPaths); err != nil {
+		var err error
+		source, err = copyFirstValidFallbackStatus(stageStatusPath, worktreeStatusPaths)
+		if err != nil {
 			return runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()}, nil
 		}
+	}
+	if exec != nil && exec.Engine != nil {
+		exec.Engine.appendProgress(map[string]any{
+			"event":   "status_ingestion_decision",
+			"node_id": node.ID,
+			"source":  string(source),
+			"copied":  source == statusSourceWorktree || source == statusSourceDotAI,
+		})
 	}
 
 	if out != nil {

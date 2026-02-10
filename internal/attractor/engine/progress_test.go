@@ -74,3 +74,23 @@ func TestEngine_appendProgress_WritesNDJSONAndLiveSnapshot(t *testing.T) {
 	}
 }
 
+func TestProgressIncludesStatusIngestionDecisionEvent(t *testing.T) {
+	events := runStatusIngestionProgressFixture(t)
+	if !hasEvent(events, "status_ingestion_decision") {
+		t.Fatal("missing status_ingestion_decision event")
+	}
+}
+
+func TestProgressIncludesSubgraphCycleBreakEvent(t *testing.T) {
+	events := runSubgraphCycleProgressFixture(t)
+	if !hasEvent(events, "subgraph_deterministic_failure_cycle_breaker") {
+		t.Fatal("missing subgraph cycle breaker event")
+	}
+}
+
+func TestProgressIncludesCancellationExitEvent(t *testing.T) {
+	events := runSubgraphCancelProgressFixture(t)
+	if !hasEvent(events, "subgraph_canceled_exit") {
+		t.Fatal("missing subgraph cancellation exit event")
+	}
+}
