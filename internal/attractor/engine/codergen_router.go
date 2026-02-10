@@ -906,6 +906,7 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 		if idleTimedOut {
 			inv["failure_trigger"] = "idle_timeout"
 			inv["idle_timeout_seconds"] = int(idleTimeout.Seconds())
+			_ = writeJSON(filepath.Join(stageDir, "cli_invocation.json"), inv)
 		}
 		return runErr, exitCode, dur, nil
 	}

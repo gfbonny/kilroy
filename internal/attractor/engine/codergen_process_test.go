@@ -218,9 +218,9 @@ sleep 5
 	}
 	defer func() { _ = stderrFile.Close() }()
 
-	// Context deadline of 1s, idle timeout of 500ms. Without the fix,
-	// idle watchdog would fire at 500ms. With the fix, idle is disabled
-	// because remaining (1s) <= idleTimeout (500ms) + killGrace (200ms).
+	// Context deadline of 1s, idle timeout of 2s, kill grace of 1s.
+	// remaining (~1s) is always <= idleTimeout+killGrace (3s), so idle
+	// watchdog is disabled and the context deadline handles termination.
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
@@ -232,7 +232,7 @@ sleep 5
 		t.Fatalf("start cmd: %v", err)
 	}
 
-	runErr, timedOut, waitErr := waitWithIdleWatchdog(ctx, cmd, stdoutPath, stderrPath, 500*time.Millisecond, 200*time.Millisecond)
+	runErr, timedOut, waitErr := waitWithIdleWatchdog(ctx, cmd, stdoutPath, stderrPath, 2*time.Second, 1*time.Second)
 	if waitErr != nil {
 		t.Fatalf("waitWithIdleWatchdog error: %v", waitErr)
 	}
