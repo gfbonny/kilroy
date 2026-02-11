@@ -1516,6 +1516,60 @@
       "expiration_date": null
     },
     {
+      "id": "anthropic/claude-sonnet-4-5-20250929",
+      "canonical_slug": "anthropic/claude-4.5-sonnet-20250929",
+      "hugging_face_id": "",
+      "name": "Anthropic: Claude Sonnet 4.5 (dated)",
+      "created": 1759161676,
+      "description": "Claude Sonnet 4.5 (dated variant). Same model as anthropic/claude-sonnet-4.5, using the CLI-compatible dated model identifier.",
+      "context_length": 1000000,
+      "architecture": {
+        "modality": "text+image+file->text",
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tokenizer": "Claude",
+        "instruct_type": null
+      },
+      "pricing": {
+        "prompt": "0.000003",
+        "completion": "0.000015",
+        "web_search": "0.01",
+        "input_cache_read": "0.0000003",
+        "input_cache_write": "0.00000375"
+      },
+      "top_provider": {
+        "context_length": 1000000,
+        "max_completion_tokens": 64000,
+        "is_moderated": false
+      },
+      "per_request_limits": null,
+      "supported_parameters": [
+        "include_reasoning",
+        "max_tokens",
+        "reasoning",
+        "response_format",
+        "stop",
+        "structured_outputs",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_k",
+        "top_p"
+      ],
+      "default_parameters": {
+        "temperature": 1,
+        "top_p": 1,
+        "frequency_penalty": null
+      },
+      "expiration_date": null
+    },
+    {
       "id": "arcee-ai/coder-large",
       "canonical_slug": "arcee-ai/coder-large",
       "hugging_face_id": "",

@@ -1,0 +1,17 @@
+digraph Simple {
+    graph [
+        goal="Run tests and report",
+        rankdir=LR,
+        model_stylesheet="
+            * { llm_model: claude-sonnet-4-5-20250929; llm_provider: anthropic; }
+        "
+    ]
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    run_tests [shape=box, label="Run Tests", prompt="Run the test suite and report results"]
+    report    [shape=box, label="Report", prompt="Summarize the test results"]
+
+    start -> run_tests -> report -> exit
+}
