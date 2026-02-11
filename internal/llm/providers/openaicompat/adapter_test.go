@@ -243,6 +243,224 @@ func TestAdapter_Stream_UsageOnlyChunkPreservesTokenAccounting(t *testing.T) {
 	}
 }
 
+func TestFromChatCompletions_ExtractsReasoningContentDeepSeek(t *testing.T) {
+	raw := map[string]any{
+		"id":    "r1",
+		"model": "deepseek-r1",
+		"choices": []any{map[string]any{
+			"finish_reason": "stop",
+			"message": map[string]any{
+				"role":              "assistant",
+				"content":           "The answer is 42.",
+				"reasoning_content": "Let me think step by step...",
+			},
+		}},
+		"usage": map[string]any{
+			"prompt_tokens": json.Number("10"), "completion_tokens": json.Number("20"), "total_tokens": json.Number("30"),
+		},
+	}
+	resp, err := fromChatCompletions("deepseek", "deepseek-r1", raw)
+	if err != nil {
+		t.Fatalf("fromChatCompletions: %v", err)
+	}
+	if got := resp.ReasoningText(); got != "Let me think step by step..." {
+		t.Fatalf("reasoning text: got %q", got)
+	}
+	if got := resp.Message.Content[0].Kind; got != llm.ContentThinking {
+		t.Fatalf("first content part: got %q want %q", got, llm.ContentThinking)
+	}
+	if got := resp.Message.Content[1].Text; got != "The answer is 42." {
+		t.Fatalf("text content: got %q", got)
+	}
+}
+
+func TestFromChatCompletions_ExtractsReasoningCerebras(t *testing.T) {
+	raw := map[string]any{
+		"id":    "r2",
+		"model": "zai-glm-4.7",
+		"choices": []any{map[string]any{
+			"finish_reason": "stop",
+			"message": map[string]any{
+				"role":      "assistant",
+				"content":   "Result here.",
+				"reasoning": "Cerebras reasoning trace...",
+			},
+		}},
+		"usage": map[string]any{
+			"prompt_tokens": json.Number("5"), "completion_tokens": json.Number("15"), "total_tokens": json.Number("20"),
+		},
+	}
+	resp, err := fromChatCompletions("cerebras", "zai-glm-4.7", raw)
+	if err != nil {
+		t.Fatalf("fromChatCompletions: %v", err)
+	}
+	if got := resp.ReasoningText(); got != "Cerebras reasoning trace..." {
+		t.Fatalf("reasoning text: got %q", got)
+	}
+}
+
+func TestFromChatCompletions_ExtractsReasoningTokensFromUsage(t *testing.T) {
+	raw := map[string]any{
+		"id":    "r3",
+		"model": "zai-glm-4.7",
+		"choices": []any{map[string]any{
+			"finish_reason": "stop",
+			"message":       map[string]any{"role": "assistant", "content": "ok"},
+		}},
+		"usage": map[string]any{
+			"prompt_tokens": json.Number("10"), "completion_tokens": json.Number("50"), "total_tokens": json.Number("60"),
+			"completion_tokens_details": map[string]any{
+				"reasoning_tokens": json.Number("35"),
+			},
+		},
+	}
+	resp, err := fromChatCompletions("cerebras", "zai-glm-4.7", raw)
+	if err != nil {
+		t.Fatalf("fromChatCompletions: %v", err)
+	}
+	if resp.Usage.ReasoningTokens == nil || *resp.Usage.ReasoningTokens != 35 {
+		t.Fatalf("reasoning tokens: got %v", resp.Usage.ReasoningTokens)
+	}
+}
+
+func TestToChatCompletionsBody_IncludesReasoningEffort(t *testing.T) {
+	effort := "high"
+	body, err := toChatCompletionsBody(llm.Request{
+		Model:           "zai-glm-4.7",
+		Messages:        []llm.Message{llm.User("hi")},
+		ReasoningEffort: &effort,
+	}, "cerebras", chatCompletionsBodyOptions{})
+	if err != nil {
+		t.Fatalf("toChatCompletionsBody: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got, ok := m["reasoning_effort"].(string); !ok || got != "high" {
+		t.Fatalf("reasoning_effort: got %v", m["reasoning_effort"])
+	}
+}
+
+func TestToChatCompletionsMessages_SkipsThinkingParts(t *testing.T) {
+	msgs := []llm.Message{{
+		Role: llm.RoleAssistant,
+		Content: []llm.ContentPart{
+			{Kind: llm.ContentThinking, Thinking: &llm.ThinkingData{Text: "internal reasoning"}},
+			{Kind: llm.ContentText, Text: "visible reply"},
+		},
+	}}
+	out := toChatCompletionsMessages(msgs)
+	if len(out) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(out))
+	}
+	if got := out[0]["content"].(string); got != "visible reply" {
+		t.Fatalf("content: got %q", got)
+	}
+}
+
+func TestAdapter_Stream_ReasoningDeltasDeepSeek(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"step 1\"},\"finish_reason\":null}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\" step 2\"},\"finish_reason\":null}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":10,\"total_tokens\":15}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	a := NewAdapter(Config{Provider: "deepseek", APIKey: "k", BaseURL: srv.URL})
+	stream, err := a.Stream(context.Background(), llm.Request{
+		Provider: "deepseek",
+		Model:    "deepseek-r1",
+		Messages: []llm.Message{llm.User("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer stream.Close()
+
+	var (
+		sawReasoningStart bool
+		sawReasoningEnd   bool
+		reasoningDeltas   strings.Builder
+		finishResp        *llm.Response
+	)
+	for ev := range stream.Events() {
+		switch ev.Type {
+		case llm.StreamEventReasoningStart:
+			sawReasoningStart = true
+		case llm.StreamEventReasoningDelta:
+			reasoningDeltas.WriteString(ev.ReasoningDelta)
+		case llm.StreamEventReasoningEnd:
+			sawReasoningEnd = true
+		case llm.StreamEventFinish:
+			finishResp = ev.Response
+		}
+	}
+	if !sawReasoningStart {
+		t.Fatalf("expected REASONING_START event")
+	}
+	if !sawReasoningEnd {
+		t.Fatalf("expected REASONING_END event")
+	}
+	if got := reasoningDeltas.String(); got != "step 1 step 2" {
+		t.Fatalf("reasoning deltas: got %q", got)
+	}
+	if finishResp == nil {
+		t.Fatalf("expected finish response")
+	}
+	if got := finishResp.ReasoningText(); got != "step 1 step 2" {
+		t.Fatalf("final reasoning text: got %q", got)
+	}
+}
+
+func TestAdapter_Stream_ReasoningDeltasCerebras(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"reasoning\":\"thinking...\"},\"finish_reason\":null}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":8,\"total_tokens\":11,\"completion_tokens_details\":{\"reasoning_tokens\":5}}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	a := NewAdapter(Config{Provider: "cerebras", APIKey: "k", BaseURL: srv.URL})
+	stream, err := a.Stream(context.Background(), llm.Request{
+		Provider: "cerebras",
+		Model:    "zai-glm-4.7",
+		Messages: []llm.Message{llm.User("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer stream.Close()
+
+	var (
+		sawReasoningStart bool
+		reasoningText     strings.Builder
+		finishUsage       *llm.Usage
+	)
+	for ev := range stream.Events() {
+		switch ev.Type {
+		case llm.StreamEventReasoningStart:
+			sawReasoningStart = true
+		case llm.StreamEventReasoningDelta:
+			reasoningText.WriteString(ev.ReasoningDelta)
+		case llm.StreamEventFinish:
+			finishUsage = ev.Usage
+		}
+	}
+	if !sawReasoningStart {
+		t.Fatalf("expected REASONING_START event")
+	}
+	if got := reasoningText.String(); got != "thinking..." {
+		t.Fatalf("reasoning deltas: got %q", got)
+	}
+	if finishUsage == nil || finishUsage.ReasoningTokens == nil || *finishUsage.ReasoningTokens != 5 {
+		t.Fatalf("expected reasoning_tokens=5 in usage, got %+v", finishUsage)
+	}
+}
+
 func TestWithDefaultRequestDeadline_AddsDeadlineWhenMissing(t *testing.T) {
 	ctx, cancel := withDefaultRequestDeadline(context.Background())
 	defer cancel()

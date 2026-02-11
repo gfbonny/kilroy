@@ -137,6 +137,10 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 				return nil
 			}
 			if payload == "[DONE]" {
+				if state.ReasoningStarted {
+					s.Send(llm.StreamEvent{Type: llm.StreamEventReasoningEnd})
+					state.ReasoningStarted = false
+				}
 				if state.TextOpen {
 					s.Send(llm.StreamEvent{Type: llm.StreamEventTextEnd, TextID: state.TextID})
 					state.TextOpen = false
@@ -186,6 +190,9 @@ func toChatCompletionsBody(req llm.Request, optionsKey string, opts chatCompleti
 	}
 	if req.ToolChoice != nil {
 		body["tool_choice"] = toChatCompletionsToolChoice(*req.ToolChoice)
+	}
+	if req.ReasoningEffort != nil && *req.ReasoningEffort != "" {
+		body["reasoning_effort"] = *req.ReasoningEffort
 	}
 	if req.ProviderOptions != nil {
 		if ov, ok := req.ProviderOptions[optionsKey].(map[string]any); ok {
@@ -317,6 +324,18 @@ func fromChatCompletions(provider, model string, raw map[string]any) (llm.Respon
 	msgMap, _ := choice["message"].(map[string]any)
 	msg := llm.Assistant(asString(msgMap["content"]))
 
+	// Extract reasoning/thinking content (DeepSeek: "reasoning_content", Cerebras: "reasoning")
+	reasoningText := asString(msgMap["reasoning_content"])
+	if reasoningText == "" {
+		reasoningText = asString(msgMap["reasoning"])
+	}
+	if reasoningText != "" {
+		msg.Content = append([]llm.ContentPart{{
+			Kind:     llm.ContentThinking,
+			Thinking: &llm.ThinkingData{Text: reasoningText},
+		}}, msg.Content...)
+	}
+
 	if callsAny, ok := msgMap["tool_calls"].([]any); ok {
 		for _, c := range callsAny {
 			cm, _ := c.(map[string]any)
@@ -334,6 +353,16 @@ func fromChatCompletions(provider, model string, raw map[string]any) (llm.Respon
 	}
 
 	usageMap, _ := raw["usage"].(map[string]any)
+	usage := llm.Usage{
+		InputTokens:  intFromAny(usageMap["prompt_tokens"]),
+		OutputTokens: intFromAny(usageMap["completion_tokens"]),
+		TotalTokens:  intFromAny(usageMap["total_tokens"]),
+	}
+	if ctd, ok := usageMap["completion_tokens_details"].(map[string]any); ok {
+		if rt := intFromAny(ctd["reasoning_tokens"]); rt > 0 {
+			usage.ReasoningTokens = &rt
+		}
+	}
 	return llm.Response{
 		ID:       asString(raw["id"]),
 		Model:    firstNonEmpty(model, asString(raw["model"])),
@@ -343,12 +372,8 @@ func fromChatCompletions(provider, model string, raw map[string]any) (llm.Respon
 			Reason: normalizeFinishReason(asString(choice["finish_reason"])),
 			Raw:    asString(choice["finish_reason"]),
 		},
-		Usage: llm.Usage{
-			InputTokens:  intFromAny(usageMap["prompt_tokens"]),
-			OutputTokens: intFromAny(usageMap["completion_tokens"]),
-			TotalTokens:  intFromAny(usageMap["total_tokens"]),
-		},
-		Raw: raw,
+		Usage: usage,
+		Raw:   raw,
 	}, nil
 }
 
@@ -422,12 +447,21 @@ type chatStreamState struct {
 	Tools    map[string]*chatStreamToolCall
 	NextID   int
 
+	Reasoning        strings.Builder
+	ReasoningStarted bool
+
 	Finish llm.FinishReason
 	Usage  llm.Usage
 }
 
 func (st *chatStreamState) FinalResponse() llm.Response {
 	msg := llm.Assistant(st.Text.String())
+	if st.Reasoning.Len() > 0 {
+		msg.Content = append([]llm.ContentPart{{
+			Kind:     llm.ContentThinking,
+			Thinking: &llm.ThinkingData{Text: st.Reasoning.String()},
+		}}, msg.Content...)
+	}
 	for _, key := range st.ToolSeq {
 		tc := st.Tools[key]
 		if tc == nil {
@@ -584,6 +618,11 @@ func emitChatCompletionsChunkEvents(s *llm.ChanStream, st *chatStreamState, chun
 			OutputTokens: intFromAny(usageMap["completion_tokens"]),
 			TotalTokens:  intFromAny(usageMap["total_tokens"]),
 		}
+		if ctd, ok := usageMap["completion_tokens_details"].(map[string]any); ok {
+			if rt := intFromAny(ctd["reasoning_tokens"]); rt > 0 {
+				st.Usage.ReasoningTokens = &rt
+			}
+		}
 	}
 
 	choices, _ := chunk["choices"].([]any)
@@ -592,6 +631,20 @@ func emitChatCompletionsChunkEvents(s *llm.ChanStream, st *chatStreamState, chun
 	}
 	choice, _ := choices[0].(map[string]any)
 	delta, _ := choice["delta"].(map[string]any)
+
+	// Check both field names for reasoning deltas (DeepSeek: "reasoning_content", Cerebras: "reasoning")
+	reasoningDelta, _ := delta["reasoning_content"].(string)
+	if reasoningDelta == "" {
+		reasoningDelta, _ = delta["reasoning"].(string)
+	}
+	if reasoningDelta != "" {
+		if !st.ReasoningStarted {
+			st.ReasoningStarted = true
+			s.Send(llm.StreamEvent{Type: llm.StreamEventReasoningStart})
+		}
+		st.Reasoning.WriteString(reasoningDelta)
+		s.Send(llm.StreamEvent{Type: llm.StreamEventReasoningDelta, ReasoningDelta: reasoningDelta})
+	}
 
 	if text, ok := delta["content"].(string); ok && text != "" {
 		if !st.TextOpen {
@@ -613,6 +666,10 @@ func emitChatCompletionsChunkEvents(s *llm.ChanStream, st *chatStreamState, chun
 
 	if fin := strings.TrimSpace(asString(choice["finish_reason"])); fin != "" {
 		st.Finish = llm.FinishReason{Reason: normalizeFinishReason(fin), Raw: fin}
+		if st.ReasoningStarted {
+			s.Send(llm.StreamEvent{Type: llm.StreamEventReasoningEnd})
+			st.ReasoningStarted = false
+		}
 		if st.TextOpen {
 			s.Send(llm.StreamEvent{Type: llm.StreamEventTextEnd, TextID: st.TextID})
 			st.TextOpen = false

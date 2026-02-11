@@ -86,6 +86,19 @@ var builtinSpecs = map[string]Spec{
 		},
 		Failover: []string{"openai", "kimi"},
 	},
+	"cerebras": {
+		Key:     "cerebras",
+		Aliases: []string{"cerebras-ai"},
+		API: &APISpec{
+			Protocol:           ProtocolOpenAIChatCompletions,
+			DefaultBaseURL:     "https://api.cerebras.ai",
+			DefaultPath:        "/v1/chat/completions",
+			DefaultAPIKeyEnv:   "CEREBRAS_API_KEY",
+			ProviderOptionsKey: "cerebras",
+			ProfileFamily:      "openai",
+		},
+		Failover: []string{"openai", "zai"},
+	},
 }
 
 func Builtin(key string) (Spec, bool) {

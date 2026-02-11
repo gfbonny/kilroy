@@ -4,7 +4,7 @@ import "testing"
 
 func TestBuiltinSpecsIncludeCoreAndNewProviders(t *testing.T) {
 	s := Builtins()
-	for _, key := range []string{"openai", "anthropic", "google", "kimi", "zai"} {
+	for _, key := range []string{"openai", "anthropic", "google", "kimi", "zai", "cerebras"} {
 		if _, ok := s[key]; !ok {
 			t.Fatalf("missing builtin provider %q", key)
 		}
@@ -27,8 +27,30 @@ func TestCanonicalProviderKey_Aliases(t *testing.T) {
 	if got := CanonicalProviderKey("google_ai_studio"); got != "google" {
 		t.Fatalf("google_ai_studio alias: got %q want %q", got, "google")
 	}
+	if got := CanonicalProviderKey("cerebras-ai"); got != "cerebras" {
+		t.Fatalf("cerebras-ai alias: got %q want %q", got, "cerebras")
+	}
 	if got := CanonicalProviderKey("glm"); got != "glm" {
 		t.Fatalf("unknown provider keys should pass through unchanged, got %q", got)
+	}
+}
+
+func TestBuiltinCerebrasDefaultsToOpenAICompatAPI(t *testing.T) {
+	spec, ok := Builtin("cerebras")
+	if !ok {
+		t.Fatalf("expected cerebras builtin")
+	}
+	if spec.API == nil {
+		t.Fatalf("expected cerebras api spec")
+	}
+	if got := spec.API.Protocol; got != ProtocolOpenAIChatCompletions {
+		t.Fatalf("cerebras protocol: got %q want %q", got, ProtocolOpenAIChatCompletions)
+	}
+	if got := spec.API.DefaultBaseURL; got != "https://api.cerebras.ai" {
+		t.Fatalf("cerebras base url: got %q want %q", got, "https://api.cerebras.ai")
+	}
+	if got := spec.API.DefaultAPIKeyEnv; got != "CEREBRAS_API_KEY" {
+		t.Fatalf("cerebras api_key_env: got %q want %q", got, "CEREBRAS_API_KEY")
 	}
 }
 
