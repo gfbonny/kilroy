@@ -30,9 +30,9 @@ func TestBuildCLIArgs(t *testing.T) {
 			},
 			wantExe: "claude",
 			checkArgs: func(t *testing.T, args []string) {
-				assertContains(t, args, "-p")
-				assertContains(t, args, "--output-format")
-				assertContains(t, args, "text")
+				assertNotContains(t, args, "-p")
+				assertNotContains(t, args, "--output-format")
+				assertNotContains(t, args, "--disallowedTools")
 				assertContains(t, args, "--model")
 				assertContains(t, args, "claude-sonnet-4-5")
 				assertContains(t, args, "--append-system-prompt")
