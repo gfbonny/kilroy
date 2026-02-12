@@ -77,7 +77,10 @@ func TestBuildCLIArgs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			exe, args, tmpDir := buildCLIArgs(tt.opts)
+			exe, args, tmpDir, err := buildCLIArgs(tt.opts)
+			if err != nil {
+				t.Fatalf("buildCLIArgs: %v", err)
+			}
 			defer os.RemoveAll(tmpDir)
 			if tt.wantExe != "" && exe != tt.wantExe {
 				t.Errorf("exe = %q, want %q", exe, tt.wantExe)

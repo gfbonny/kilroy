@@ -34,7 +34,6 @@ type Options struct {
 // Result contains the output of an ingestion run.
 type Result struct {
 	DotContent string   // The extracted .dot file content.
-	OutputPath string   // Path to the written .dot file.
 	Warnings   []string // Any validation warnings.
 }
 
@@ -47,7 +46,7 @@ func buildPrompt(requirements string) string {
 	return buf.String()
 }
 
-func buildCLIArgs(opts Options) (string, []string, string) {
+func buildCLIArgs(opts Options) (string, []string, string, error) {
 	exe := envOr("KILROY_CLAUDE_PATH", "claude")
 	maxTurns := opts.MaxTurns
 	if maxTurns <= 0 {
@@ -67,7 +66,10 @@ func buildCLIArgs(opts Options) (string, []string, string) {
 
 	if opts.SkillPath != "" {
 		skillContent, err := os.ReadFile(opts.SkillPath)
-		if err == nil && len(skillContent) > 0 {
+		if err != nil {
+			return "", nil, "", fmt.Errorf("reading skill file: %w", err)
+		}
+		if len(skillContent) > 0 {
 			args = append(args, "--append-system-prompt", string(skillContent))
 		}
 	}
@@ -75,13 +77,13 @@ func buildCLIArgs(opts Options) (string, []string, string) {
 	// Create a temp working directory so Claude writes pipeline.dot here.
 	tmpDir, err := os.MkdirTemp("", "kilroy-ingest-*")
 	if err != nil {
-		tmpDir = os.TempDir()
+		return "", nil, "", fmt.Errorf("creating temp directory: %w", err)
 	}
 
 	// The prompt is appended last as a positional argument.
 	args = append(args, buildPrompt(opts.Requirements))
 
-	return exe, args, tmpDir
+	return exe, args, tmpDir, nil
 }
 
 // Run executes the ingestion: invokes Claude Code interactively with the skill
@@ -93,7 +95,10 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		return nil, fmt.Errorf("skill file not found: %s: %w", opts.SkillPath, err)
 	}
 
-	exe, args, tmpDir := buildCLIArgs(opts)
+	exe, args, tmpDir, err := buildCLIArgs(opts)
+	if err != nil {
+		return nil, err
+	}
 	defer os.RemoveAll(tmpDir)
 
 	cmd := exec.CommandContext(ctx, exe, args...)
@@ -102,8 +107,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	err := cmd.Run()
-	if err != nil {
+	if err = cmd.Run(); err != nil {
 		return nil, fmt.Errorf("claude exited with error: %v", err)
 	}
 
@@ -121,7 +125,6 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 
 	result := &Result{
 		DotContent: dotContent,
-		OutputPath: dotPath,
 	}
 
 	// Optionally validate.
