@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/strongdm/kilroy/internal/attractor/model"
@@ -29,7 +31,22 @@ func (e *Engine) cxdbRunStarted(ctx context.Context, baseSHA string) error {
 		data["graph_dot"] = string(e.DotSource)
 	}
 	_, _, err := e.CXDB.Append(ctx, "com.kilroy.attractor.RunStarted", 1, data)
-	return err
+	if err != nil {
+		return err
+	}
+	// Required artifacts.
+	_, _ = e.CXDB.PutArtifactFile(ctx, "", "manifest.json", filepath.Join(e.LogsRoot, "manifest.json"))
+	if _, err := os.Stat(filepath.Join(e.LogsRoot, "run_config.json")); err == nil {
+		_, _ = e.CXDB.PutArtifactFile(ctx, "", "run_config.json", filepath.Join(e.LogsRoot, "run_config.json"))
+	}
+	openrouterCatalogPath := filepath.Join(e.LogsRoot, "modeldb", "openrouter_models.json")
+	if _, err := os.Stat(openrouterCatalogPath); err == nil {
+		_, _ = e.CXDB.PutArtifactFile(ctx, "", "modeldb/openrouter_models.json", openrouterCatalogPath)
+	}
+	if _, err := os.Stat(filepath.Join(e.LogsRoot, "graph.dot")); err == nil {
+		_, _ = e.CXDB.PutArtifactFile(ctx, "", "graph.dot", filepath.Join(e.LogsRoot, "graph.dot"))
+	}
+	return nil
 }
 
 func (e *Engine) cxdbPrompt(ctx context.Context, nodeID, text string) {
@@ -70,11 +87,72 @@ func (e *Engine) cxdbStageFinished(ctx context.Context, node *model.Node, out ru
 		"notes":              out.Notes,
 		"suggested_next_ids": out.SuggestedNextIDs,
 	})
+
+	// Stage artifact mapping (metaspec): prompt/response/status and any additional stage files.
+	stageDir := filepath.Join(e.LogsRoot, node.ID)
+	// Convenience tarball (metaspec SHOULD): stage.tgz.
+	stageTar := filepath.Join(stageDir, "stage.tgz")
+	if _, err := os.Stat(stageTar); err != nil {
+		_ = writeTarGz(stageTar, stageDir, includeInStageArchive)
+	}
+	if _, err := os.Stat(filepath.Join(stageDir, "prompt.md")); err == nil {
+		_, _ = e.CXDB.PutArtifactFile(ctx, node.ID, "prompt.md", filepath.Join(stageDir, "prompt.md"))
+	}
+	if _, err := os.Stat(filepath.Join(stageDir, "response.md")); err == nil {
+		_, _ = e.CXDB.PutArtifactFile(ctx, node.ID, "response.md", filepath.Join(stageDir, "response.md"))
+	}
+	if _, err := os.Stat(filepath.Join(stageDir, "status.json")); err == nil {
+		_, _ = e.CXDB.PutArtifactFile(ctx, node.ID, "status.json", filepath.Join(stageDir, "status.json"))
+	}
+	if _, err := os.Stat(filepath.Join(stageDir, "parallel_results.json")); err == nil {
+		_, _ = e.CXDB.PutArtifactFile(ctx, node.ID, "parallel_results.json", filepath.Join(stageDir, "parallel_results.json"))
+	}
+	// Backend-native traces and agent loop logs (best-effort).
+	for _, name := range []string{
+		"stage.tgz",
+		"events.ndjson",
+		"events.json",
+		"stdout.log",
+		"stderr.log",
+		"panic.txt",
+		"output.json",
+		"output_schema.json",
+		"diff.patch",
+		"api_request.json",
+		"api_response.json",
+		"cli_invocation.json",
+		"cli_timing.json",
+		"tool_invocation.json",
+		"tool_timing.json",
+	} {
+		if _, err := os.Stat(filepath.Join(stageDir, name)); err == nil {
+			_, _ = e.CXDB.PutArtifactFile(ctx, node.ID, name, filepath.Join(stageDir, name))
+		}
+	}
 }
 
 func (e *Engine) cxdbCheckpointSaved(ctx context.Context, nodeID string, status runtime.StageStatus, sha string) {
-	// Checkpoint bookkeeping is kilroy plumbing — files are persisted to disk
-	// but not emitted to the CXDB turn chain.
+	if e == nil || e.CXDB == nil {
+		return
+	}
+	_, _, _ = e.CXDB.Append(ctx, "com.kilroy.attractor.GitCheckpoint", 1, map[string]any{
+		"run_id":         e.Options.RunID,
+		"node_id":        nodeID,
+		"status":         string(status),
+		"git_commit_sha": sha,
+		"timestamp_ms":   nowMS(),
+	})
+	cpPath := filepath.Join(e.LogsRoot, "checkpoint.json")
+	if _, err := os.Stat(cpPath); err == nil {
+		_, _ = e.CXDB.PutArtifactFile(ctx, "", "checkpoint.json", cpPath)
+	}
+	_, _, _ = e.CXDB.Append(ctx, "com.kilroy.attractor.CheckpointSaved", 1, map[string]any{
+		"run_id":            e.Options.RunID,
+		"timestamp_ms":      nowMS(),
+		"checkpoint_path":   cpPath,
+		"cxdb_context_id":   e.CXDB.ContextID,
+		"cxdb_head_turn_id": e.CXDB.HeadTurnID,
+	})
 }
 
 func (e *Engine) cxdbRunCompleted(ctx context.Context, finalSHA string) (string, error) {

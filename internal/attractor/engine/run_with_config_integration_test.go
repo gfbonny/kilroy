@@ -405,8 +405,29 @@ digraph G {
 	hasRunStarted := false
 	hasRunStartedLogsRoot := false
 	hasRunStartedGraphDot := false
+	hasGitCheckpoint := false
+	hasCheckpointSaved := false
+	hasArtifact := false
 	hasPrompt := false
 	var promptText string
+	wantArtifacts := map[string]bool{
+		"manifest.json":                  true,
+		"checkpoint.json":                true,
+		"final.json":                     true,
+		"modeldb/openrouter_models.json": true,
+		"prompt.md":                      true,
+		"response.md":                    true,
+		"status.json":                    true,
+		"events.ndjson":                  true,
+		"events.json":                    true,
+		"cli_invocation.json":            true,
+		"stdout.log":                     true,
+		"output.json":                    true,
+		"output_schema.json":             true,
+		"stage.tgz":                      true,
+		"run.tgz":                        true,
+	}
+	seenArtifacts := map[string]bool{}
 	for _, tr := range turns {
 		if tr["type_id"] == "com.kilroy.attractor.RunStarted" {
 			hasRunStarted = true
@@ -425,15 +446,20 @@ digraph G {
 				promptText = anyToString(p["text"])
 			}
 		}
-		// Plumbing turns must not appear in CXDB (files still on disk).
-		if tr["type_id"] == "com.kilroy.attractor.Artifact" {
-			t.Fatalf("unexpected Artifact turn in CXDB chain")
-		}
 		if tr["type_id"] == "com.kilroy.attractor.GitCheckpoint" {
-			t.Fatalf("unexpected GitCheckpoint turn in CXDB chain")
+			hasGitCheckpoint = true
 		}
 		if tr["type_id"] == "com.kilroy.attractor.CheckpointSaved" {
-			t.Fatalf("unexpected CheckpointSaved turn in CXDB chain")
+			hasCheckpointSaved = true
+		}
+		if tr["type_id"] == "com.kilroy.attractor.Artifact" {
+			hasArtifact = true
+			if p, ok := tr["payload"].(map[string]any); ok {
+				name := strings.Trim(strings.TrimSpace(anyToString(p["name"])), "\"")
+				if name != "" {
+					seenArtifacts[name] = true
+				}
+			}
 		}
 	}
 	if !hasRunStarted {
@@ -444,6 +470,20 @@ digraph G {
 	}
 	if !hasRunStartedGraphDot {
 		t.Fatalf("expected RunStarted.graph_dot to contain .dot file content")
+	}
+	if !hasGitCheckpoint {
+		t.Fatalf("expected GitCheckpoint turns")
+	}
+	if !hasCheckpointSaved {
+		t.Fatalf("expected CheckpointSaved turns")
+	}
+	if !hasArtifact {
+		t.Fatalf("expected Artifact turns")
+	}
+	for name := range wantArtifacts {
+		if !seenArtifacts[name] {
+			t.Fatalf("missing expected artifact %q; saw=%v", name, seenArtifacts)
+		}
 	}
 	if !hasPrompt {
 		t.Fatalf("expected Prompt turn for orchestrator-to-agent prompt")
