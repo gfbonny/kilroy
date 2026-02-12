@@ -33,6 +33,7 @@ func KilroyAttractorRegistryBundle() (bundleID string, bundle RegistryBundle, sh
 				"9":  field("goal", "string", opt()),
 				"10": field("modeldb_catalog_sha256", "string", opt()),
 				"11": field("modeldb_catalog_source", "string", opt()),
+				"12": field("graph_dot", "string", opt()),
 			}),
 			"com.kilroy.attractor.RunCompleted": typeDef(map[string]any{
 				"1": field("run_id", "string"),
@@ -106,6 +107,22 @@ func KilroyAttractorRegistryBundle() (bundleID string, bundle RegistryBundle, sh
 				"3": field("checkpoint_path", "string"),
 				"4": field("cxdb_context_id", "string"),
 				"5": field("cxdb_head_turn_id", "string"),
+			}),
+			"com.kilroy.attractor.AssistantMessage": typeDef(map[string]any{
+				"1": field("run_id", "string"),
+				"2": field("node_id", "string", opt()),
+				"3": field("text", "string", opt()),
+				"4": field("model", "string", opt()),
+				"5": fieldSemantic("input_tokens", "u64", "count", opt()),
+				"6": fieldSemantic("output_tokens", "u64", "count", opt()),
+				"7": field("tool_use_count", "u32", opt()),
+				"8": fieldSemantic("timestamp_ms", "u64", "unix_ms"),
+			}),
+			"com.kilroy.attractor.Prompt": typeDef(map[string]any{
+				"1": field("run_id", "string"),
+				"2": field("node_id", "string"),
+				"3": field("text", "string"),
+				"4": fieldSemantic("timestamp_ms", "u64", "unix_ms"),
 			}),
 			"com.kilroy.attractor.BackendTraceRef": typeDef(map[string]any{
 				"1": field("run_id", "string"),

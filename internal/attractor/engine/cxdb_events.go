@@ -14,7 +14,7 @@ func (e *Engine) cxdbRunStarted(ctx context.Context, baseSHA string) error {
 	if e == nil || e.CXDB == nil {
 		return nil
 	}
-	_, _, err := e.CXDB.Append(ctx, "com.kilroy.attractor.RunStarted", 1, map[string]any{
+	data := map[string]any{
 		"run_id":                 e.Options.RunID,
 		"timestamp_ms":           nowMS(),
 		"repo_path":              e.Options.RepoPath,
@@ -26,7 +26,11 @@ func (e *Engine) cxdbRunStarted(ctx context.Context, baseSHA string) error {
 		"goal":                   e.Graph.Attrs["goal"],
 		"modeldb_catalog_sha256": e.ModelCatalogSHA,
 		"modeldb_catalog_source": e.ModelCatalogSource,
-	})
+	}
+	if len(e.DotSource) > 0 {
+		data["graph_dot"] = string(e.DotSource)
+	}
+	_, _, err := e.CXDB.Append(ctx, "com.kilroy.attractor.RunStarted", 1, data)
 	if err != nil {
 		return err
 	}
@@ -43,6 +47,18 @@ func (e *Engine) cxdbRunStarted(ctx context.Context, baseSHA string) error {
 		_, _ = e.CXDB.PutArtifactFile(ctx, "", "graph.dot", filepath.Join(e.LogsRoot, "graph.dot"))
 	}
 	return nil
+}
+
+func (e *Engine) cxdbPrompt(ctx context.Context, nodeID, text string) {
+	if e == nil || e.CXDB == nil {
+		return
+	}
+	_, _, _ = e.CXDB.Append(ctx, "com.kilroy.attractor.Prompt", 1, map[string]any{
+		"run_id":       e.Options.RunID,
+		"node_id":      nodeID,
+		"text":         text,
+		"timestamp_ms": nowMS(),
+	})
 }
 
 func (e *Engine) cxdbStageStarted(ctx context.Context, node *model.Node) {

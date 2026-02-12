@@ -404,9 +404,12 @@ digraph G {
 	}
 	hasRunStarted := false
 	hasRunStartedLogsRoot := false
+	hasRunStartedGraphDot := false
 	hasGitCheckpoint := false
 	hasCheckpointSaved := false
 	hasArtifact := false
+	hasPrompt := false
+	var promptText string
 	wantArtifacts := map[string]bool{
 		"manifest.json":                  true,
 		"checkpoint.json":                true,
@@ -432,6 +435,15 @@ digraph G {
 				if strings.TrimSpace(anyToString(p["logs_root"])) == strings.TrimSpace(res.LogsRoot) {
 					hasRunStartedLogsRoot = true
 				}
+				if strings.TrimSpace(anyToString(p["graph_dot"])) != "" {
+					hasRunStartedGraphDot = true
+				}
+			}
+		}
+		if tr["type_id"] == "com.kilroy.attractor.Prompt" {
+			hasPrompt = true
+			if p, ok := tr["payload"].(map[string]any); ok {
+				promptText = anyToString(p["text"])
 			}
 		}
 		if tr["type_id"] == "com.kilroy.attractor.GitCheckpoint" {
@@ -456,6 +468,9 @@ digraph G {
 	if !hasRunStartedLogsRoot {
 		t.Fatalf("expected RunStarted.logs_root to equal logs_root=%q", res.LogsRoot)
 	}
+	if !hasRunStartedGraphDot {
+		t.Fatalf("expected RunStarted.graph_dot to contain .dot file content")
+	}
 	if !hasGitCheckpoint {
 		t.Fatalf("expected GitCheckpoint turns")
 	}
@@ -469,6 +484,12 @@ digraph G {
 		if !seenArtifacts[name] {
 			t.Fatalf("missing expected artifact %q; saw=%v", name, seenArtifacts)
 		}
+	}
+	if !hasPrompt {
+		t.Fatalf("expected Prompt turn for orchestrator-to-agent prompt")
+	}
+	if strings.TrimSpace(promptText) == "" {
+		t.Fatalf("expected Prompt turn text to be non-empty")
 	}
 
 	// final.json includes CXDB context + head turn id (metaspec).
