@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -50,7 +51,7 @@ func New(cfg Config) *Server {
 	mux.HandleFunc("POST /pipelines/{id}/questions/{qid}/answer", s.handleAnswerQuestion)
 
 	s.httpSrv = &http.Server{
-		Handler:      mux,
+		Handler:      csrfProtect(mux, cfg.Addr),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 0, // SSE requires no write timeout
 		IdleTimeout:  120 * time.Second,
@@ -78,6 +79,33 @@ func (s *Server) ListenAndServe() error {
 		return nil
 	}
 	return err
+}
+
+// csrfProtect rejects cross-origin POST requests. Browsers automatically set
+// the Origin header on cross-origin requests, so checking it blocks CSRF from
+// malicious web pages while allowing CLI/programmatic callers (which either
+// omit Origin or set it to match the server).
+func csrfProtect(next http.Handler, _ string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			origin := r.Header.Get("Origin")
+			if origin != "" {
+				u, err := url.Parse(origin)
+				if err != nil {
+					http.Error(w, `{"error":"invalid Origin header"}`, http.StatusForbidden)
+					return
+				}
+				// Allow only localhost-family origins. This blocks browser-based
+				// CSRF from remote pages while allowing local web UIs.
+				host := u.Hostname()
+				if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+					http.Error(w, `{"error":"cross-origin request blocked"}`, http.StatusForbidden)
+					return
+				}
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Shutdown gracefully stops the server and all running pipelines.

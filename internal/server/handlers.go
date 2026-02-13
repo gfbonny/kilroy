@@ -6,11 +6,16 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/strongdm/kilroy/internal/attractor/engine"
 )
+
+// validRunID matches ULIDs, UUIDs, and other safe identifiers.
+// Only alphanumeric, dashes, and underscores are allowed.
+var validRunID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -68,6 +73,10 @@ func (s *Server) handleSubmitPipeline(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		runID = id
+	}
+	if !validRunID.MatchString(runID) {
+		writeError(w, http.StatusBadRequest, "run_id must be alphanumeric with dashes/underscores, 1-128 chars")
+		return
 	}
 
 	// Create pipeline components.
@@ -195,12 +204,7 @@ func (s *Server) handleGetQuestions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pq := ps.Interviewer.Pending()
-	if pq == nil {
-		writeJSON(w, http.StatusOK, []PendingQuestion{})
-		return
-	}
-	writeJSON(w, http.StatusOK, []PendingQuestion{*pq})
+	writeJSON(w, http.StatusOK, ps.Interviewer.Pending())
 }
 
 func (s *Server) handleAnswerQuestion(w http.ResponseWriter, r *http.Request) {

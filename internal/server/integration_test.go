@@ -466,6 +466,92 @@ func TestIntegration_AnswerWrongQuestion(t *testing.T) {
 	}
 }
 
+func TestIntegration_CSRFBlocksCrossOrigin(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	// POST with cross-origin Origin header should be blocked.
+	req, _ := http.NewRequest("POST", ts.URL+"/pipelines", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "https://evil.com")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for cross-origin POST, got %d", resp.StatusCode)
+	}
+}
+
+func TestIntegration_CSRFAllowsNoOrigin(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	// POST without Origin header should pass through (programmatic caller).
+	// Will fail at validation (empty body), but NOT at CSRF.
+	req, _ := http.NewRequest("POST", ts.URL+"/pipelines", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	// No Origin header set.
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Should get 400 (validation error), not 403 (CSRF block).
+	if resp.StatusCode == http.StatusForbidden {
+		t.Fatal("expected CSRF to allow requests without Origin header")
+	}
+}
+
+func TestIntegration_CSRFAllowsLocalhostOrigin(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	// POST with localhost Origin should be allowed.
+	req, _ := http.NewRequest("POST", ts.URL+"/pipelines", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", ts.URL) // httptest uses 127.0.0.1:PORT
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Should get 400 (validation), not 403 (CSRF).
+	if resp.StatusCode == http.StatusForbidden {
+		t.Fatal("expected CSRF to allow same-origin localhost requests")
+	}
+}
+
+func TestIntegration_RunIDPathTraversal(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	tests := []struct {
+		name  string
+		runID string
+	}{
+		{"path traversal", "../../../etc/passwd"},
+		{"absolute path", "/tmp/evil"},
+		{"dot segment", ".."},
+		{"slash in id", "foo/bar"},
+		{"empty after trim", "  "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := fmt.Sprintf(`{"dot_source":"digraph{}","config_path":"/tmp/run.yaml","run_id":%q}`, tt.runID)
+			resp, err := http.Post(ts.URL+"/pipelines", "application/json", strings.NewReader(body))
+			if err != nil {
+				t.Fatalf("POST: %v", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Errorf("expected 400 for run_id=%q, got %d", tt.runID, resp.StatusCode)
+			}
+		})
+	}
+}
+
 func TestIntegration_FailedPipelineStatus(t *testing.T) {
 	srv, ts := newTestServer(t)
 	runID := "test-fail-001"

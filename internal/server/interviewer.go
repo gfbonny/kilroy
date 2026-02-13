@@ -12,11 +12,11 @@ import (
 // HTTP client answers them. The engine goroutine blocks on Ask() until an
 // answer is posted via Answer() or the timeout expires.
 //
-// There is at most one pending question at a time since the engine is
-// single-threaded per pipeline (runLoop calls Interviewer.Ask synchronously).
+// Multiple questions can be pending concurrently — this happens when parallel
+// branches in the engine each hit a human gate simultaneously.
 type WebInterviewer struct {
 	mu       sync.Mutex
-	pending  *pendingQuestion
+	pending  map[string]*pendingQuestion // keyed by question ID
 	timeout  time.Duration
 	qidSeq   uint64
 	cancelCh chan struct{}
@@ -35,10 +35,15 @@ func NewWebInterviewer(timeout time.Duration) *WebInterviewer {
 	if timeout <= 0 {
 		timeout = 30 * time.Minute
 	}
-	return &WebInterviewer{timeout: timeout, cancelCh: make(chan struct{})}
+	return &WebInterviewer{
+		timeout:  timeout,
+		cancelCh: make(chan struct{}),
+		pending:  make(map[string]*pendingQuestion),
+	}
 }
 
 // Ask implements engine.Interviewer. It blocks until an answer is posted or timeout.
+// Safe for concurrent use — each call gets its own question ID.
 func (wi *WebInterviewer) Ask(q engine.Question) engine.Answer {
 	wi.mu.Lock()
 	wi.qidSeq++
@@ -50,14 +55,12 @@ func (wi *WebInterviewer) Ask(q engine.Question) engine.Answer {
 		AskedAt:  time.Now().UTC(),
 		answerCh: ch,
 	}
-	wi.pending = pq
+	wi.pending[qid] = pq
 	wi.mu.Unlock()
 
 	defer func() {
 		wi.mu.Lock()
-		if wi.pending == pq {
-			wi.pending = nil
-		}
+		delete(wi.pending, qid)
 		wi.mu.Unlock()
 	}()
 
@@ -74,29 +77,30 @@ func (wi *WebInterviewer) Ask(q engine.Question) engine.Answer {
 	}
 }
 
-// Pending returns the current pending question, or nil if none.
-func (wi *WebInterviewer) Pending() *PendingQuestion {
+// Pending returns all currently pending questions (may be more than one when
+// parallel branches hit human gates concurrently). Returns empty slice if none.
+func (wi *WebInterviewer) Pending() []PendingQuestion {
 	wi.mu.Lock()
 	defer wi.mu.Unlock()
-	if wi.pending == nil {
-		return nil
+	out := make([]PendingQuestion, 0, len(wi.pending))
+	for _, pq := range wi.pending {
+		opts := make([]QuestionOption, len(pq.Question.Options))
+		for i, o := range pq.Question.Options {
+			opts[i] = QuestionOption{Key: o.Key, Label: o.Label, To: o.To}
+		}
+		out = append(out, PendingQuestion{
+			QuestionID: pq.ID,
+			Type:       string(pq.Question.Type),
+			Text:       pq.Question.Text,
+			Stage:      pq.Question.Stage,
+			Options:    opts,
+			AskedAt:    pq.AskedAt,
+		})
 	}
-	pq := wi.pending
-	opts := make([]QuestionOption, len(pq.Question.Options))
-	for i, o := range pq.Question.Options {
-		opts[i] = QuestionOption{Key: o.Key, Label: o.Label, To: o.To}
-	}
-	return &PendingQuestion{
-		QuestionID: pq.ID,
-		Type:       string(pq.Question.Type),
-		Text:       pq.Question.Text,
-		Stage:      pq.Question.Stage,
-		Options:    opts,
-		AskedAt:    pq.AskedAt,
-	}
+	return out
 }
 
-// Cancel unblocks any in-flight Ask() call, causing it to return a TimedOut answer.
+// Cancel unblocks all in-flight Ask() calls, causing them to return TimedOut answers.
 // Safe to call multiple times.
 func (wi *WebInterviewer) Cancel() {
 	wi.mu.Lock()
@@ -109,17 +113,18 @@ func (wi *WebInterviewer) Cancel() {
 	}
 }
 
-// Answer delivers an answer to the pending question. Returns false if qid
-// doesn't match or no question is pending.
+// Answer delivers an answer to a pending question by ID. Returns false if qid
+// doesn't match any pending question or is already answered.
 func (wi *WebInterviewer) Answer(qid string, ans engine.Answer) bool {
 	wi.mu.Lock()
 	defer wi.mu.Unlock()
-	if wi.pending == nil || wi.pending.ID != qid {
+	pq, ok := wi.pending[qid]
+	if !ok {
 		return false
 	}
 	select {
-	case wi.pending.answerCh <- ans:
-		wi.pending = nil // prevent duplicate answers via race with Ask()'s defer
+	case pq.answerCh <- ans:
+		delete(wi.pending, qid) // prevent duplicate answers
 		return true
 	default:
 		return false // already answered

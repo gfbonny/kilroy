@@ -1,11 +1,26 @@
 package server
 
 import (
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/strongdm/kilroy/internal/attractor/engine"
 )
+
+// waitForPending polls until at least n questions are pending, returning them.
+func waitForPending(t *testing.T, wi *WebInterviewer, n int) []PendingQuestion {
+	t.Helper()
+	for i := 0; i < 100; i++ {
+		pqs := wi.Pending()
+		if len(pqs) >= n {
+			return pqs
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("expected at least %d pending question(s), got %d", n, len(wi.Pending()))
+	return nil
+}
 
 func TestWebInterviewer_AskAndAnswer(t *testing.T) {
 	wi := NewWebInterviewer(5 * time.Second)
@@ -24,18 +39,8 @@ func TestWebInterviewer_AskAndAnswer(t *testing.T) {
 		done <- ans
 	}()
 
-	// Wait for question to be parked.
-	var pq *PendingQuestion
-	for i := 0; i < 50; i++ {
-		pq = wi.Pending()
-		if pq != nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if pq == nil {
-		t.Fatal("expected pending question")
-	}
+	pqs := waitForPending(t, wi, 1)
+	pq := pqs[0]
 	if pq.Text != "Approve?" {
 		t.Fatalf("unexpected question text: %s", pq.Text)
 	}
@@ -46,7 +51,6 @@ func TestWebInterviewer_AskAndAnswer(t *testing.T) {
 		t.Fatalf("unexpected stage: %s", pq.Stage)
 	}
 
-	// Answer it.
 	ok := wi.Answer(pq.QuestionID, engine.Answer{Value: "y"})
 	if !ok {
 		t.Fatal("answer should have succeeded")
@@ -64,9 +68,8 @@ func TestWebInterviewer_AskAndAnswer(t *testing.T) {
 		t.Fatal("timed out waiting for Ask to return")
 	}
 
-	// After answering, Pending should be nil.
-	if wi.Pending() != nil {
-		t.Fatal("expected no pending question after answer")
+	if len(wi.Pending()) != 0 {
+		t.Fatal("expected no pending questions after answer")
 	}
 }
 
@@ -95,15 +98,8 @@ func TestWebInterviewer_AnswerWrongQID(t *testing.T) {
 		wi.Ask(engine.Question{Text: "test"})
 	}()
 
-	// Wait for question to be parked.
-	for i := 0; i < 50; i++ {
-		if wi.Pending() != nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForPending(t, wi, 1)
 
-	// Answer with wrong ID.
 	ok := wi.Answer("wrong-id", engine.Answer{Value: "x"})
 	if ok {
 		t.Fatal("answer with wrong QID should return false")
@@ -112,8 +108,8 @@ func TestWebInterviewer_AnswerWrongQID(t *testing.T) {
 
 func TestWebInterviewer_NoPending(t *testing.T) {
 	wi := NewWebInterviewer(5 * time.Second)
-	if wi.Pending() != nil {
-		t.Fatal("expected no pending question initially")
+	if len(wi.Pending()) != 0 {
+		t.Fatal("expected no pending questions initially")
 	}
 
 	ok := wi.Answer("q-1", engine.Answer{Value: "x"})
@@ -123,20 +119,14 @@ func TestWebInterviewer_NoPending(t *testing.T) {
 }
 
 func TestWebInterviewer_Cancel(t *testing.T) {
-	wi := NewWebInterviewer(30 * time.Minute) // long timeout, cancel should preempt
+	wi := NewWebInterviewer(30 * time.Minute)
 
 	done := make(chan engine.Answer, 1)
 	go func() {
 		done <- wi.Ask(engine.Question{Text: "will be canceled"})
 	}()
 
-	// Wait for question to be parked.
-	for i := 0; i < 50; i++ {
-		if wi.Pending() != nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForPending(t, wi, 1)
 
 	start := time.Now()
 	wi.Cancel()
@@ -156,7 +146,6 @@ func TestWebInterviewer_Cancel(t *testing.T) {
 
 func TestWebInterviewer_CancelIdempotent(t *testing.T) {
 	wi := NewWebInterviewer(5 * time.Second)
-	// Should not panic on double cancel.
 	wi.Cancel()
 	wi.Cancel()
 }
@@ -168,28 +157,117 @@ func TestWebInterviewer_DuplicateAnswerReturnsFalse(t *testing.T) {
 		wi.Ask(engine.Question{Text: "dup test"})
 	}()
 
-	// Wait for question.
-	var pq *PendingQuestion
-	for i := 0; i < 50; i++ {
-		pq = wi.Pending()
-		if pq != nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if pq == nil {
-		t.Fatal("no pending question")
-	}
+	pqs := waitForPending(t, wi, 1)
+	pq := pqs[0]
 
-	// First answer succeeds.
 	ok1 := wi.Answer(pq.QuestionID, engine.Answer{Value: "a"})
 	if !ok1 {
 		t.Fatal("first answer should succeed")
 	}
 
-	// Second answer to same QID: channel is full, should return false.
 	ok2 := wi.Answer(pq.QuestionID, engine.Answer{Value: "b"})
 	if ok2 {
 		t.Fatal("duplicate answer should return false")
+	}
+}
+
+func TestWebInterviewer_ConcurrentAsk(t *testing.T) {
+	wi := NewWebInterviewer(5 * time.Second)
+
+	// Launch 3 concurrent Ask() calls (simulates parallel branches).
+	const n = 3
+	answers := make([]engine.Answer, n)
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			answers[i] = wi.Ask(engine.Question{
+				Text:  "Approve branch?",
+				Stage: "gate",
+			})
+		}()
+	}
+
+	// Wait for all 3 to be pending.
+	pqs := waitForPending(t, wi, n)
+	if len(pqs) != n {
+		t.Fatalf("expected %d pending questions, got %d", n, len(pqs))
+	}
+
+	// Verify all question IDs are unique.
+	ids := make(map[string]bool)
+	for _, pq := range pqs {
+		if ids[pq.QuestionID] {
+			t.Fatalf("duplicate question ID: %s", pq.QuestionID)
+		}
+		ids[pq.QuestionID] = true
+	}
+
+	// Answer each with a distinct value.
+	for i, pq := range pqs {
+		ok := wi.Answer(pq.QuestionID, engine.Answer{Value: pq.QuestionID})
+		if !ok {
+			t.Fatalf("answer %d should have succeeded", i)
+		}
+	}
+
+	// Wait for all Ask() goroutines to return.
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("concurrent Ask() calls did not all return")
+	}
+
+	// Verify each received an answer (not timed out).
+	for i, ans := range answers {
+		if ans.TimedOut {
+			t.Fatalf("answer %d timed out unexpectedly", i)
+		}
+		if ans.Value == "" {
+			t.Fatalf("answer %d has empty value", i)
+		}
+	}
+
+	if len(wi.Pending()) != 0 {
+		t.Fatalf("expected 0 pending after all answered, got %d", len(wi.Pending()))
+	}
+}
+
+func TestWebInterviewer_CancelUnblocksAllConcurrent(t *testing.T) {
+	wi := NewWebInterviewer(30 * time.Minute)
+
+	const n = 3
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			ans := wi.Ask(engine.Question{Text: "blocked"})
+			if !ans.TimedOut {
+				t.Errorf("expected TimedOut=true on cancel")
+			}
+		}()
+	}
+
+	waitForPending(t, wi, n)
+
+	wi.Cancel()
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Cancel() did not unblock all concurrent Ask() calls")
 	}
 }
