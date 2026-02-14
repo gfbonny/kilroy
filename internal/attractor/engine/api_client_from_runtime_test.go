@@ -90,6 +90,30 @@ func TestNewAPIClientFromProviderRuntimes_RegistersAnthropicCompatForKimiCoding(
 	}
 }
 
+func TestNewAPIClientFromProviderRuntimes_RegistersMinimaxViaOpenAICompat(t *testing.T) {
+	runtimes := map[string]ProviderRuntime{
+		"minimax": {
+			Key:     "minimax",
+			Backend: BackendAPI,
+			API: providerspec.APISpec{
+				Protocol:           providerspec.ProtocolOpenAIChatCompletions,
+				DefaultBaseURL:     "http://127.0.0.1:0",
+				DefaultPath:        "/v1/chat/completions",
+				DefaultAPIKeyEnv:   "MINIMAX_API_KEY",
+				ProviderOptionsKey: "minimax",
+			},
+		},
+	}
+	t.Setenv("MINIMAX_API_KEY", "test-key")
+	c, err := newAPIClientFromProviderRuntimes(runtimes)
+	if err != nil {
+		t.Fatalf("newAPIClientFromProviderRuntimes: %v", err)
+	}
+	if len(c.ProviderNames()) != 1 || c.ProviderNames()[0] != "minimax" {
+		t.Fatalf("expected minimax adapter, got %v", c.ProviderNames())
+	}
+}
+
 func TestResolveBuiltInBaseURLOverride_MinimaxUsesEnvOverride(t *testing.T) {
 	t.Setenv("MINIMAX_BASE_URL", "http://127.0.0.1:8888")
 	got := resolveBuiltInBaseURLOverride("minimax", "https://api.minimax.io")
