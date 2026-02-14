@@ -12,6 +12,7 @@ import (
 
 	"github.com/strongdm/kilroy/internal/attractor/engine"
 	"github.com/strongdm/kilroy/internal/providerspec"
+	"github.com/strongdm/kilroy/internal/version"
 )
 
 func signalCancelContext() (context.Context, func()) {
@@ -44,6 +45,9 @@ func main() {
 	}
 
 	switch os.Args[1] {
+	case "--version", "-v", "version":
+		fmt.Printf("kilroy %s\n", version.Version)
+		os.Exit(0)
 	case "attractor":
 		attractor(os.Args[2:])
 	default:
