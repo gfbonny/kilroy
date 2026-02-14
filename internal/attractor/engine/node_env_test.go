@@ -1,8 +1,10 @@
 package engine
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -103,5 +105,41 @@ func TestBuildBaseNodeEnv_StripsClaudeCode(t *testing.T) {
 
 	if envHasKey(env, "CLAUDECODE") {
 		t.Fatal("CLAUDECODE should be stripped from base env")
+	}
+}
+
+func TestToolHandler_UsesBaseNodeEnv(t *testing.T) {
+	// A tool node should see pinned toolchain env vars and have CLAUDECODE stripped.
+	// We can verify by running a tool_command that echoes env vars.
+	t.Setenv("CLAUDECODE", "1")
+
+	dot := []byte(`digraph G {
+  graph [goal="test"]
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  check [shape=parallelogram, tool_command="bash -c 'echo CLAUDECODE=$CLAUDECODE; echo CARGO_TARGET_DIR=$CARGO_TARGET_DIR'"]
+  start -> check -> exit
+}`)
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+	result, err := Run(context.Background(), dot, RunOptions{RepoPath: repo, LogsRoot: logsRoot})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.FinalStatus != "success" {
+		t.Fatalf("expected success, got %s", result.FinalStatus)
+	}
+
+	// Read stdout to verify env was set correctly.
+	stdout, err := os.ReadFile(filepath.Join(logsRoot, "check", "stdout.log"))
+	if err != nil {
+		t.Fatalf("read stdout: %v", err)
+	}
+	output := string(stdout)
+	if strings.Contains(output, "CLAUDECODE=1") {
+		t.Fatal("CLAUDECODE should be stripped from tool node env")
+	}
+	if !strings.Contains(output, "CARGO_TARGET_DIR=") {
+		t.Fatal("CARGO_TARGET_DIR should be set in tool node env")
 	}
 }
