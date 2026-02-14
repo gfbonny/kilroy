@@ -106,18 +106,17 @@ digraph G {
   start -> a -> exit
 }
 `)
+	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "api-no-shim-gate", LogsRoot: t.TempDir()})
-	if err == nil {
-		t.Fatalf("expected error, got nil")
-	}
-	if strings.Contains(err.Error(), "--allow-test-shim") {
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "api-no-shim-gate", LogsRoot: logsRoot})
+	// The test_shim gate should NOT apply to API-only providers.
+	if err != nil && strings.Contains(err.Error(), "--allow-test-shim") {
 		t.Fatalf("did not expect test_shim gate for api-only run: %v", err)
 	}
-	want := "preflight: llm_provider=openai backend=api model=gpt-5.3-codex not present in run catalog"
-	if !strings.Contains(err.Error(), want) {
-		t.Fatalf("expected provider/model catalog error %q, got %v", want, err)
+	// Catalog miss is now a warn (not hard fail), so it should not be the error.
+	if err != nil && strings.Contains(err.Error(), "not present in run catalog") {
+		t.Fatalf("catalog miss should be a warning not a hard failure, got %v", err)
 	}
 }
 

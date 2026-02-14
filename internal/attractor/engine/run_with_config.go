@@ -280,10 +280,13 @@ func validateProviderModelPairs(g *model.Graph, runtimes map[string]ProviderRunt
 			checks = append(checks, providerPreflightCheck{
 				Name:     "provider_model_catalog",
 				Provider: provider,
-				Status:   preflightStatusFail,
-				Message:  fmt.Sprintf("llm_provider=%s backend=%s model=%s not present in run catalog", provider, backend, modelID),
+				Status:   preflightStatusWarn,
+				Message:  fmt.Sprintf("llm_provider=%s backend=%s model=%s not present in run catalog (catalog may be stale; prompt probe will validate)", provider, backend, modelID),
+				Details: map[string]any{
+					"model":   modelID,
+					"backend": string(backend),
+				},
 			})
-			return checks, fmt.Errorf("preflight: llm_provider=%s backend=%s model=%s not present in run catalog", provider, backend, modelID)
 		}
 	}
 	return checks, nil

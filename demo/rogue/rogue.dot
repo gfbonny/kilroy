@@ -10,9 +10,9 @@ digraph rogue {
         provenance_file_1="path=demo/rogue/rogue-prompt.txt;git_sha=f0ae5b4a",
         provenance_file_2="path=demo/rogue/original-rogue/;git_sha=f0ae5b4a",
         model_stylesheet="
-            * { llm_model: gpt-5.2-codex; llm_provider: openai; reasoning_effort: high; }
-            .hard { llm_model: gpt-5.2-codex; llm_provider: openai; reasoning_effort: high; }
-            .verify { llm_model: gpt-5.2-codex; llm_provider: openai; reasoning_effort: high; }
+            * { llm_model: gpt-5.3-codex; llm_provider: openai; reasoning_effort: high; }
+            .hard { llm_model: gpt-5.3-codex; llm_provider: openai; reasoning_effort: high; }
+            .verify { llm_model: gpt-5.3-codex; llm_provider: openai; reasoning_effort: high; }
             .branch-a { llm_model: claude-opus-4-6; llm_provider: anthropic; }
             .branch-b { llm_model: gpt-5.2; llm_provider: openai; reasoning_effort: high; }
             .branch-c { llm_model: gemini-3-pro-preview; llm_provider: google; }

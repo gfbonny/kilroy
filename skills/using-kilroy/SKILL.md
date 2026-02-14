@@ -256,6 +256,49 @@ On resume, Kilroy:
 - Requires clean repo before continuing.
 - Uses the run's snapshotted model catalog from `logs_root/modeldb/openrouter_models.json`.
 
+## Run-Config Immutability Guard
+
+Once a user asks you to run or launch a Kilroy pipeline, the following files are **frozen** — do NOT modify them without explicit user permission:
+
+- The graph file (`.dot`)
+- The run config file (`run.yaml` / `run.json`)
+- Any model configuration (catalog files, model IDs in the graph)
+- The preferences file (`preferences.yaml`)
+
+If preflight or launch fails, **diagnose and present options** — never silently fix the inputs. See "Preflight Failure Playbook" below.
+
+This guard applies from the moment you begin building or executing a `kilroy attractor run` command until the user explicitly asks for changes. It does NOT apply during graph authoring/editing phases before a run is requested.
+
+## Preflight Failure Playbook
+
+When preflight checks fail, follow this sequence:
+
+1. **Read the preflight report**: `cat <logs_root>/preflight_report.json`
+2. **Diagnose** each failure/warning and identify the root cause.
+3. **Present options to the user** with your recommendation:
+
+| Failure | Likely Cause | Options |
+|---------|-------------|---------|
+| Model not in catalog | Pinned catalog is stale; model is new | (a) Switch run.yaml to `on_run_start` to fetch live catalog (b) Manually update pinned catalog (c) User confirms model ID is wrong |
+| CLI binary not found | Provider CLI not installed | (a) Install the CLI tool (b) Switch provider to `backend: api` (c) Use a different provider |
+| API key missing | Env var not set | (a) Set the env var (b) Switch to CLI backend (c) Use a different provider |
+| Prompt probe timeout | Provider is slow/down | (a) Increase `preflight.prompt_probes.timeout_ms` (b) Retry (c) Disable probes for this run |
+| CLAUDECODE conflict | Running inside Claude Code session | (a) Engine strips it automatically (post-fix); rebuild if on old binary |
+| Repo not clean | Uncommitted changes | (a) Commit changes (b) Stash changes (c) Set `git.require_clean: false` |
+
+4. **Wait for user decision** before making any changes.
+5. After user approves a fix, apply it and re-run.
+
+**Never do any of the following without asking:**
+- Downgrade a model ID (the model may be valid but absent from a stale catalog)
+- Change the graph topology or node shapes
+- Switch provider backends
+- Modify prompt text
+
+## CLAUDECODE Environment Variable
+
+When Kilroy runs inside a Claude Code session, the `CLAUDECODE` env var is set. This causes the Claude CLI to refuse to launch (nested session protection). The engine strips `CLAUDECODE` from subprocess environments automatically (both preflight probes and codergen CLI invocations). If you encounter this error on an older binary, rebuild with `go build -o ./kilroy ./cmd/kilroy`.
+
 ## Frequent Failures
 
 - `missing llm.providers.<provider>.backend`: add explicit backend in config.

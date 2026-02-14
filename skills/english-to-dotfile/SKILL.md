@@ -497,7 +497,13 @@ For very large tasks where other approaches have failed:
 
 ##### Custom multi-outcome steering
 
-The skill's default impl→verify→check pattern uses binary `outcome=success`/`outcome=fail`. But prompts can define any custom outcome values, and edges can route on them. Use this for workflows with skip/acknowledge/escalate paths:
+The skill's default impl→verify→check pattern uses binary `outcome=success`/`outcome=fail`. But prompts can define any custom outcome values, and edges can route on them. Use this for workflows with skip/acknowledge/escalate paths.
+
+**Critical: diamond vs box for steering nodes.**
+- `shape=diamond` (conditional handler) is a **pure pass-through router**. It reads the `outcome` from the *previous* node's context and routes based on edge conditions. It never executes a prompt. Use diamond for `check_X` nodes that route on a preceding verify node's outcome.
+- `shape=box` (codergen handler) **executes a prompt** via an LLM and writes its own outcome. Use box for nodes that need to analyze something, make a decision, and write a custom outcome.
+
+If you need a node that evaluates something and writes `outcome=port`/`outcome=skip`/`outcome=done`, it **must** be `shape=box`. If you just need to forward a prior node's outcome to different edges, use `shape=diamond`.
 
 ```
 analyze [
@@ -866,7 +872,7 @@ Common repairs (use validator output; do not guess blindly):
 | `Mdiamond` | start | Entry point. Exactly one. |
 | `Msquare` | exit | Exit point. Exactly one. |
 | `box` | codergen | LLM task (default for all nodes). |
-| `diamond` | conditional | Pass-through routing point. Routes based on edge conditions against current context. |
+| `diamond` | conditional | **Pure pass-through** routing point. Routes based on edge conditions against current context. **Never executes prompts** — any `prompt` attribute on a diamond node is ignored. If you need a node that executes an LLM prompt AND routes on the result, use `shape=box` instead. |
 | `hexagon` | wait.human | Human approval gate (only for interactive runners). |
 | `component` | parallel | Fan-out: executes outgoing branches concurrently. |
 | `tripleoctagon` | parallel.fan_in | Fan-in: waits for branches, selects best result. |
@@ -976,6 +982,7 @@ Each fan-out branch prompt should include:
 29. **Parallel code-writing in a shared worktree (default disallowed).** Do NOT run multiple programming/implementation nodes in parallel that touch the same codebase state. If implementation fan-out is required, enforce strict isolation (disjoint write scopes, shared files read-only) and converge via an explicit integration/merge node.
 30. **Generating DOTs from scratch when a validated template exists.** For production-quality runs, start from `skills/english-to-dotfile/reference_template.dot` and make minimal, validated edits. New topologies are allowed, but they are higher-risk and must be validated early/cheap to avoid expensive runaway loops.
 31. **Setting `max_agent_turns` without production data.** Do not guess turn limits. Use `timeout` as the primary safety guard. Add `max_agent_turns` only as a secondary clamp once you have observed turn-count distributions from production runs — a wrong turn limit kills productive work and wastes every turn the agent already completed.
+32. **Putting prompts on diamond (conditional) nodes.** Diamond nodes are pure pass-through routers handled by `ConditionalHandler` — they forward the previous node's outcome to edge conditions and never execute prompts. A `prompt` attribute on a diamond node is dead code. If the node needs to run an LLM prompt and write its own outcome, use `shape=box`. The Kilroy validator warns on this (`prompt_on_conditional_node`).
 
 ## Notes on Reference Dotfile Conventions
 

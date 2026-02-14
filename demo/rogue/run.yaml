@@ -55,7 +55,9 @@ llm:
 
 modeldb:
   openrouter_model_info_path: /home/user/code/kilroy/internal/attractor/modeldb/pinned/openrouter_models.json
-  openrouter_model_info_update_policy: pinned
+  openrouter_model_info_update_policy: on_run_start
+  openrouter_model_info_url: https://openrouter.ai/api/v1/models
+  openrouter_model_info_fetch_timeout_ms: 10000
 
 git:
   require_clean: false

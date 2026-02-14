@@ -1569,7 +1569,8 @@ func scrubPreflightProbeEnv(base []string) []string {
 		if strings.HasPrefix(key, "KILROY_TEST_") ||
 			strings.HasPrefix(key, "KILROY_WATCHDOG_") ||
 			strings.HasPrefix(key, "KILROY_CANCEL_") ||
-			key == "KILROY_CALL_COUNT_FILE" {
+			key == "KILROY_CALL_COUNT_FILE" ||
+			key == "CLAUDECODE" {
 			continue
 		}
 		out = append(out, entry)

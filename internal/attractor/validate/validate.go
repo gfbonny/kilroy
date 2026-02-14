@@ -46,6 +46,7 @@ func Validate(g *model.Graph) []Diagnostic {
 	diags = append(diags, lintGoalGateHasRetry(g)...)
 	diags = append(diags, lintFidelityValid(g)...)
 	diags = append(diags, lintPromptOnCodergenNodes(g)...)
+	diags = append(diags, lintPromptOnConditionalNodes(g)...)
 	diags = append(diags, lintPromptFileConflict(g)...)
 	diags = append(diags, lintLLMProviderPresent(g)...)
 	diags = append(diags, lintLoopRestartFailureClassGuard(g)...)
@@ -452,6 +453,31 @@ func lintPromptOnCodergenNodes(g *model.Graph) []Diagnostic {
 				Rule:     "prompt_on_llm_nodes",
 				Severity: SeverityWarning,
 				Message:  "codergen node has empty prompt (label will be used)",
+				NodeID:   id,
+			})
+		}
+	}
+	return diags
+}
+
+func lintPromptOnConditionalNodes(g *model.Graph) []Diagnostic {
+	var diags []Diagnostic
+	for id, n := range g.Nodes {
+		if n == nil {
+			continue
+		}
+		if n.Shape() != "diamond" {
+			continue
+		}
+		// Diamond nodes use the ConditionalHandler, which is a pure
+		// pass-through that never executes prompts.  A prompt attribute
+		// on a diamond is almost certainly a mistake — the author likely
+		// intended shape=box (codergen) so the prompt actually runs.
+		if strings.TrimSpace(n.Prompt()) != "" {
+			diags = append(diags, Diagnostic{
+				Rule:     "prompt_on_conditional_node",
+				Severity: SeverityWarning,
+				Message:  "diamond (conditional) node has a prompt that will be ignored; use shape=box if the prompt should execute",
 				NodeID:   id,
 			})
 		}

@@ -1443,11 +1443,15 @@ func mergeEnvWithOverrides(base []string, overrides map[string]string) []string 
 // by default; an inherited ANTHROPIC_API_KEY causes it to attempt (and fail)
 // external API key authentication instead.
 func conflictingProviderEnvKeys(providerKey string) []string {
+	// CLAUDECODE prevents the Claude CLI from launching (nested session
+	// protection). Strip it for all providers so preflight probes and
+	// codergen runs succeed when Kilroy is invoked from inside Claude Code.
+	common := []string{"CLAUDECODE"}
 	switch normalizeProviderKey(providerKey) {
 	case "anthropic":
-		return []string{"ANTHROPIC_API_KEY"}
+		return append(common, "ANTHROPIC_API_KEY")
 	default:
-		return nil
+		return common
 	}
 }
 

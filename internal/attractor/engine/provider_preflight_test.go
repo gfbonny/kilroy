@@ -86,7 +86,8 @@ func TestRunProviderCapabilityProbe_RespectsParentContextCancel(t *testing.T) {
 	waitForPIDToExit(t, childPID, 5*time.Second)
 }
 
-func TestRunWithConfig_FailsFast_WhenCLIModelNotInCatalogForProvider(t *testing.T) {
+func TestRunWithConfig_WarnsWhenCLIModelNotInCatalogForProvider(t *testing.T) {
+	t.Setenv("KILROY_PREFLIGHT_PROMPT_PROBES", "off")
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
   "data": [
@@ -94,29 +95,31 @@ func TestRunWithConfig_FailsFast_WhenCLIModelNotInCatalogForProvider(t *testing.
   ]
 }`)
 
+	// Use API backend to isolate the catalog check from CLI binary presence.
 	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
-		"google": BackendCLI,
+		"google": BackendAPI,
 	})
 	dot := singleProviderDot("google", "gemini-3-pro")
 
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-fail", LogsRoot: logsRoot, AllowTestShim: true})
-	if err == nil {
-		t.Fatalf("expected preflight error, got nil")
-	}
-	want := "preflight: llm_provider=google backend=cli model=gemini-3-pro not present in run catalog"
-	if !strings.Contains(err.Error(), want) {
-		t.Fatalf("expected preflight error containing %q, got %v", want, err)
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-warn", LogsRoot: logsRoot, AllowTestShim: true})
+	// Catalog miss is now a warning, not a failure. The run should proceed
+	// past preflight and fail downstream (e.g. CXDB connect) instead.
+	if err != nil && strings.Contains(err.Error(), "not present in run catalog") {
+		t.Fatalf("catalog miss should be a warning not a hard failure, got %v", err)
 	}
 	report := mustReadPreflightReport(t, logsRoot)
-	if report.Summary.Fail == 0 {
-		t.Fatalf("expected preflight report with failure summary, got %+v", report.Summary)
+	if report.Summary.Fail != 0 {
+		t.Fatalf("expected no preflight failures for catalog miss (should be warn), got %+v", report.Summary)
+	}
+	if report.Summary.Warn == 0 {
+		t.Fatalf("expected preflight warn for catalog miss, got %+v", report.Summary)
 	}
 }
 
-func TestRunWithConfig_FailsFast_WhenAPIModelNotInCatalogForProvider(t *testing.T) {
+func TestRunWithConfig_WarnsWhenAPIModelNotInCatalogForProvider(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
   "data": [
@@ -133,17 +136,18 @@ func TestRunWithConfig_FailsFast_WhenAPIModelNotInCatalogForProvider(t *testing.
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-api-fail", LogsRoot: logsRoot, AllowTestShim: true})
-	if err == nil {
-		t.Fatalf("expected preflight error, got nil")
-	}
-	want := "preflight: llm_provider=openai backend=api model=gpt-5.3-codex not present in run catalog"
-	if !strings.Contains(err.Error(), want) {
-		t.Fatalf("expected preflight error containing %q, got %v", want, err)
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-api-warn", LogsRoot: logsRoot, AllowTestShim: true})
+	// Catalog miss is now a warning, not a failure. The run proceeds past
+	// preflight; the prompt probe or actual API call will catch invalid models.
+	if err != nil && strings.Contains(err.Error(), "not present in run catalog") {
+		t.Fatalf("catalog miss should be a warning not a hard failure, got %v", err)
 	}
 	report := mustReadPreflightReport(t, logsRoot)
-	if report.Summary.Fail == 0 {
-		t.Fatalf("expected preflight report with failure summary, got %+v", report.Summary)
+	if report.Summary.Fail != 0 {
+		t.Fatalf("expected no preflight failures for catalog miss (should be warn), got %+v", report.Summary)
+	}
+	if report.Summary.Warn == 0 {
+		t.Fatalf("expected preflight warn for catalog miss, got %+v", report.Summary)
 	}
 }
 
@@ -236,7 +240,7 @@ func TestRunWithConfig_ForceModel_BypassesCatalogGate(t *testing.T) {
 	}
 }
 
-func TestRunWithConfig_UsesModelFallbackAttributeForCatalogValidation(t *testing.T) {
+func TestRunWithConfig_WarnsForModelFallbackAttributeCatalogMiss(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
   "data": [
@@ -252,13 +256,14 @@ func TestRunWithConfig_UsesModelFallbackAttributeForCatalogValidation(t *testing
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-model-attr-fail", LogsRoot: logsRoot, AllowTestShim: true})
-	if err == nil {
-		t.Fatalf("expected preflight error, got nil")
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-model-attr-warn", LogsRoot: logsRoot, AllowTestShim: true})
+	// Catalog miss is now a warning. The error (if any) should be from downstream, not catalog.
+	if err != nil && strings.Contains(err.Error(), "not present in run catalog") {
+		t.Fatalf("catalog miss should be a warning not a hard failure, got %v", err)
 	}
-	want := "preflight: llm_provider=google backend=cli model=gemini-3-pro not present in run catalog"
-	if !strings.Contains(err.Error(), want) {
-		t.Fatalf("expected preflight error containing %q, got %v", want, err)
+	report := mustReadPreflightReport(t, logsRoot)
+	if report.Summary.Warn == 0 {
+		t.Fatalf("expected preflight warn for catalog miss, got %+v", report.Summary)
 	}
 }
 
