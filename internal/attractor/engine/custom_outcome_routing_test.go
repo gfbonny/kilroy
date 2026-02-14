@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/strongdm/kilroy/internal/attractor/runtime"
+	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
 
 // TestRun_BoxNodeCustomOutcome_RoutesWithoutRetry verifies that a shape=box

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/strongdm/kilroy/internal/attractor/runtime"
+	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
 
 // TestResume_NoMatchingFailEdge_FallsBackToRetryTarget verifies that the resume
