@@ -1094,6 +1094,16 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 			return out, nil
 		}
 
+		// Spec §3.3: custom (non-canonical) outcomes are routing decisions, not failures.
+		// If the outcome matches any outgoing edge condition, return it as-is so the
+		// main loop's edge selection can route on it. Reference dotfiles
+		// (consensus_task.dot, semport.dot) use this pattern for multi-way branching
+		// from box nodes (e.g. outcome=needs_dod, outcome=process, outcome=port).
+		if !out.Status.IsCanonical() && hasMatchingOutgoingCondition(e.Graph, node.ID, out, e.Context) {
+			retries[node.ID] = 0
+			return out, nil
+		}
+
 		failureClass := classifyFailureClass(out)
 		canRetry := false
 		if attempt < maxAttempts {
@@ -1678,6 +1688,34 @@ func selectNextEdge(g *model.Graph, from string, out runtime.Outcome, ctx *runti
 		return nil, nil
 	}
 	return bestEdge(edges), nil
+}
+
+// hasMatchingOutgoingCondition returns true if any outgoing edge from the given
+// node has a condition that matches the outcome. Used by executeWithRetry to
+// recognize custom outcomes (e.g. "needs_dod", "process") as routing decisions
+// rather than failures requiring retry. A snapshot of the live context is used
+// with the outcome's context_updates applied, mirroring what the main loop does
+// before edge selection (engine.go §523-525).
+func hasMatchingOutgoingCondition(g *model.Graph, nodeID string, out runtime.Outcome, ctx *runtime.Context) bool {
+	// Clone the context and apply the outcome's updates so that conditions
+	// referencing context.* keys set by this node evaluate correctly.
+	evalCtx := ctx.Clone()
+	evalCtx.ApplyUpdates(out.ContextUpdates)
+	evalCtx.Set("outcome", string(out.Status))
+	for _, e := range g.Outgoing(nodeID) {
+		if e == nil {
+			continue
+		}
+		c := strings.TrimSpace(e.Condition())
+		if c == "" {
+			continue
+		}
+		ok, err := cond.Evaluate(c, out, evalCtx)
+		if err == nil && ok {
+			return true
+		}
+	}
+	return false
 }
 
 // selectAllEligibleEdges returns all edges that are eligible for traversal from the given node.
