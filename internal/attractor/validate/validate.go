@@ -470,7 +470,7 @@ func outcomeEqualsStatuses(condExpr string) []runtime.StageStatus {
 	var out []runtime.StageStatus
 	for _, clause := range strings.Split(condExpr, "&&") {
 		clause = strings.TrimSpace(clause)
-		if clause == "" || strings.Contains(clause, "!=") || !strings.Contains(clause, "=") {
+		if clause == "" || !strings.Contains(clause, "=") || strings.Contains(clause, "!=") || strings.Contains(clause, "==") {
 			continue
 		}
 		parts := strings.SplitN(clause, "=", 2)

@@ -135,19 +135,19 @@ digraph reference_template {
     review_a [
         shape=box,
         class="branch-a",
-        prompt="Goal: $goal\n\nReview the implementation against .ai/definition_of_done.md.\nCheck build, completeness, correctness, tests.\nWrite review to .ai/review_a.md with PASS or FAIL verdict.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success if meets DoD, outcome=fail with failure_reason and specific gaps."
+        prompt="Goal: $goal\n\nReview the implementation against .ai/definition_of_done.md.\nCheck build, completeness, correctness, tests.\nWrite review to .ai/review_a.md with APPROVED or REJECTED verdict.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success if meets DoD, outcome=fail with failure_reason and specific gaps."
     ]
 
     review_b [
         shape=box,
         class="branch-b",
-        prompt="Goal: $goal\n\nReview the implementation against .ai/definition_of_done.md.\nCheck build, completeness, correctness, tests.\nWrite review to .ai/review_b.md with PASS or FAIL verdict.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success if meets DoD, outcome=fail with failure_reason and specific gaps."
+        prompt="Goal: $goal\n\nReview the implementation against .ai/definition_of_done.md.\nCheck build, completeness, correctness, tests.\nWrite review to .ai/review_b.md with APPROVED or REJECTED verdict.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success if meets DoD, outcome=fail with failure_reason and specific gaps."
     ]
 
     review_c [
         shape=box,
         class="branch-c",
-        prompt="Goal: $goal\n\nReview the implementation against .ai/definition_of_done.md.\nCheck build, completeness, correctness, tests.\nWrite review to .ai/review_c.md with PASS or FAIL verdict.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success if meets DoD, outcome=fail with failure_reason and specific gaps."
+        prompt="Goal: $goal\n\nReview the implementation against .ai/definition_of_done.md.\nCheck build, completeness, correctness, tests.\nWrite review to .ai/review_c.md with APPROVED or REJECTED verdict.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success if meets DoD, outcome=fail with failure_reason and specific gaps."
     ]
 
     // =========================================================================
@@ -156,7 +156,7 @@ digraph reference_template {
     review_consensus [
         shape=box,
         goal_gate=true,
-        prompt="Goal: $goal\n\nSynthesize .ai/review_a.md, .ai/review_b.md, .ai/review_c.md.\nRead .ai/definition_of_done.md for criteria.\n\nIf 2+ reviewers PASS and no critical gaps: outcome=success.\nOtherwise: outcome=retry with failure_reason listing specific issues.\n\nWrite consensus to .ai/review_consensus.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success or outcome=retry with failure_reason."
+        prompt="Goal: $goal\n\nSynthesize .ai/review_a.md, .ai/review_b.md, .ai/review_c.md.\nRead .ai/definition_of_done.md for criteria.\n\nIf 2+ reviewers APPROVED and no critical gaps: outcome=success.\nOtherwise: outcome=retry with failure_reason listing specific issues.\n\nWrite consensus to .ai/review_consensus.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success or outcome=retry with failure_reason."
     ]
 
     // =========================================================================
