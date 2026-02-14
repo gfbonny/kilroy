@@ -1743,3 +1743,145 @@ exit 1
 		t.Fatalf("expected warn check with skip_reason=codex_chatgpt_auth in preflight report; got: %+v", report.Checks)
 	}
 }
+
+func TestProviderPreflight_CLIOnlyModelWithAPIBackend_Fails(t *testing.T) {
+	t.Setenv("KILROY_PREFLIGHT_PROMPT_PROBES", "off")
+	repo := initTestRepo(t)
+	catalog := writeCatalogForPreflight(t, `{
+  "data": [
+    {"id": "openai/gpt-5.3-codex-spark"}
+  ]
+}`)
+	// openai configured as API backend — should fail for CLI-only model.
+	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
+		"openai": BackendAPI,
+	})
+	dot := singleProviderDot("openai", "gpt-5.3-codex-spark")
+
+	logsRoot := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "cli-only-api-fail", LogsRoot: logsRoot, AllowTestShim: true})
+	if err == nil {
+		t.Fatal("expected preflight error for CLI-only model with API backend, got nil")
+	}
+	if !strings.Contains(err.Error(), "CLI-only") {
+		t.Fatalf("expected error to mention 'CLI-only', got: %v", err)
+	}
+
+	report := mustReadPreflightReport(t, logsRoot)
+	if report.Summary.Fail == 0 {
+		t.Fatalf("expected preflight failure for CLI-only model with API backend, got %+v", report.Summary)
+	}
+	found := false
+	for _, c := range report.Checks {
+		if c.Name == "cli_only_model_backend" && c.Status == "fail" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected cli_only_model_backend fail check in report, got: %+v", report.Checks)
+	}
+}
+
+func TestProviderPreflight_CLIOnlyModelWithCLIBackend_Passes(t *testing.T) {
+	t.Setenv("KILROY_PREFLIGHT_PROMPT_PROBES", "off")
+	repo := initTestRepo(t)
+	catalog := writeCatalogForPreflight(t, `{
+  "data": [
+    {"id": "openai/gpt-5.3-codex-spark"}
+  ]
+}`)
+	// openai configured as CLI backend — should pass the CLI-only check.
+	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
+		"openai": BackendCLI,
+	})
+	dot := singleProviderDot("openai", "gpt-5.3-codex-spark")
+
+	logsRoot := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "cli-only-cli-pass", LogsRoot: logsRoot, AllowTestShim: true})
+	// May fail downstream (e.g., no CLI binary) but should NOT fail with CLI-only error.
+	if err != nil && strings.Contains(err.Error(), "CLI-only") {
+		t.Fatalf("CLI-only model with CLI backend should not fail CLI-only check, got: %v", err)
+	}
+
+	report, reportErr := readPreflightReport(t, logsRoot)
+	if reportErr != nil {
+		// If report can't be read, the run failed before preflight wrote it.
+		// Check error is not CLI-only related.
+		return
+	}
+	for _, c := range report.Checks {
+		if c.Name == "cli_only_model_backend" && c.Status == "fail" {
+			t.Fatalf("expected cli_only_model_backend to pass for CLI backend, got fail: %s", c.Message)
+		}
+	}
+}
+
+func TestProviderPreflight_CLIOnlyModel_ForceModelOverridesToRegular_NoFail(t *testing.T) {
+	t.Setenv("KILROY_PREFLIGHT_PROMPT_PROBES", "off")
+	repo := initTestRepo(t)
+	catalog := writeCatalogForPreflight(t, `{
+  "data": [
+    {"id": "openai/gpt-5.3-codex-spark"},
+    {"id": "openai/gpt-5.2-codex"}
+  ]
+}`)
+	// openai configured as API backend with a CLI-only model in the graph,
+	// but force-model overrides to a regular model. Should NOT fail.
+	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
+		"openai": BackendAPI,
+	})
+	dot := singleProviderDot("openai", "gpt-5.3-codex-spark")
+
+	logsRoot := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{
+		RunID:         "cli-only-force-regular",
+		LogsRoot:      logsRoot,
+		AllowTestShim: true,
+		ForceModels:   map[string]string{"openai": "gpt-5.2-codex"},
+	})
+	// Should NOT fail with CLI-only error — force-model replaces Spark with
+	// a regular model.
+	if err != nil && strings.Contains(err.Error(), "CLI-only") {
+		t.Fatalf("force-model to regular model should bypass CLI-only check, got: %v", err)
+	}
+}
+
+func TestProviderPreflight_ForceModelInjectsCLIOnly_WithAPIBackend_Fails(t *testing.T) {
+	t.Setenv("KILROY_PREFLIGHT_PROMPT_PROBES", "off")
+	repo := initTestRepo(t)
+	catalog := writeCatalogForPreflight(t, `{
+  "data": [
+    {"id": "openai/gpt-5.2-codex"},
+    {"id": "openai/gpt-5.3-codex-spark"}
+  ]
+}`)
+	// openai configured as API backend, graph uses a regular model, but
+	// force-model injects a CLI-only model. Should fail.
+	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
+		"openai": BackendAPI,
+	})
+	dot := singleProviderDot("openai", "gpt-5.2-codex")
+
+	logsRoot := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{
+		RunID:         "force-cli-only-api-fail",
+		LogsRoot:      logsRoot,
+		AllowTestShim: true,
+		ForceModels:   map[string]string{"openai": "gpt-5.3-codex-spark"},
+	})
+	if err == nil {
+		t.Fatal("expected preflight error when force-model injects CLI-only model with API backend, got nil")
+	}
+	if !strings.Contains(err.Error(), "CLI-only") {
+		t.Fatalf("expected error to mention 'CLI-only', got: %v", err)
+	}
+}
