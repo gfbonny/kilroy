@@ -44,7 +44,7 @@ Expected: no output
 **Step 5: Commit**
 
 ```bash
-git add -A
+git add -u
 git commit -m "refactor: rename module path from strongdm/kilroy to danshapiro/kilroy
 
 The Go module path must match the actual GitHub repo for go install to
@@ -135,10 +135,6 @@ version: 2
 
 project_name: kilroy
 
-before:
-  hooks:
-    - go mod tidy
-
 builds:
   - id: kilroy
     main: ./cmd/kilroy
@@ -171,6 +167,9 @@ checksum:
 changelog:
   disable: true
 
+# NOTE: `brews` is the current goreleaser v2 config key for Homebrew formulas.
+# If goreleaser deprecates it in favor of a new key, it will warn at release
+# time. Update the key name if that happens.
 brews:
   - name: kilroy
     repository:
@@ -474,5 +473,5 @@ After all tasks are complete:
 1. `./kilroy --version` prints `kilroy dev`
 2. `go build -ldflags "-X github.com/danshapiro/kilroy/internal/version.Version=0.1.0" -o ./kilroy ./cmd/kilroy && ./kilroy --version` prints `kilroy 0.1.0`
 3. `goreleaser check` (if installed) reports valid config
-4. `grep -r 'strongdm/kilroy' --include='*.go' --include='go.mod' .` returns nothing
+4. `grep -r 'strongdm/kilroy' --include='*.go' --include='go.mod' --include='*.md' .` returns nothing
 5. `.github/workflows/release.yml` exists and is valid YAML
