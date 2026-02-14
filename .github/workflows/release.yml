@@ -40,6 +40,16 @@ jobs:
             exit 1
           fi
 
+      - name: Verify version.go matches tag
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CODE_VERSION=$(grep 'var Version' internal/version/version.go | sed 's/.*"\(.*\)".*/\1/')
+          if [ "$TAG_VERSION" != "$CODE_VERSION" ]; then
+            echo "::error::version.go ($CODE_VERSION) does not match tag ($TAG_VERSION)."
+            echo "Bump internal/version/version.go before tagging. See skills/release-kilroy/SKILL.md step 5."
+            exit 1
+          fi
+
       - name: Run tests
         run: go test ./...
 

@@ -460,8 +460,8 @@ func TestVersion_PrintsVersionAndExitsZero(t *testing.T) {
 			if code != 0 {
 				t.Fatalf("exit code: got %d want 0\n%s", code, out)
 			}
-			if !strings.Contains(out, "kilroy dev") {
-				t.Fatalf("expected version output to contain 'kilroy dev', got:\n%s", out)
+			if !strings.Contains(out, "kilroy ") {
+				t.Fatalf("expected version output to contain 'kilroy ', got:\n%s", out)
 			}
 		})
 	}

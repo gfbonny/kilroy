@@ -74,7 +74,9 @@ For the **first release** (no previous tag), derive notes from the full project 
 
 ## Version Number
 
-Kilroy uses semver. The version is injected at build time by goreleaser from the git tag. The file `internal/version/version.go` has `var Version = "dev"` as the default for local builds — do NOT manually edit this for releases.
+Kilroy uses semver. The canonical version lives in `internal/version/version.go` as `var Version = "X.Y.Z"`. This is the version all builds see — source, binary, and Homebrew. goreleaser also injects it from the git tag at build time via ldflags (belt and suspenders).
+
+Bump this file as part of release prep (step 5). The CI workflow verifies that `version.go` matches the git tag — a mismatch fails the release.
 
 Decide the bump with the user, but offer a recommendation:
 
@@ -142,9 +144,10 @@ scripts/check-using-kilroy-skill.sh
 
 All of these are committed to the release branch:
 
-1. **Write release notes** to `RELEASE_NOTES.md` in the repo root (following the guidelines above). The GitHub Actions workflow passes `--release-notes=RELEASE_NOTES.md` to goreleaser, which publishes it as the GitHub release body. This file is committed (not gitignored) so it is present at the tagged commit.
-2. **Update README** with any approved changes (version is injected by goreleaser from the tag — no file to bump)
-3. **Commit** with message like `release: vX.Y.Z`
+1. **Bump version** in `internal/version/version.go` to the new version
+2. **Write release notes** to `RELEASE_NOTES.md` in the repo root (following the guidelines above). The GitHub Actions workflow passes `--release-notes=RELEASE_NOTES.md` to goreleaser, which publishes it as the GitHub release body. This file is committed (not gitignored) so it is present at the tagged commit.
+3. **Update README** with any approved changes
+4. **Commit** with message like `release: vX.Y.Z`
 
 ### 6. Fast-forward main
 

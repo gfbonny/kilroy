@@ -1,11 +1,16 @@
 package version
 
-import "testing"
+import (
+	"regexp"
+	"testing"
+)
 
-func TestVersionDefault(t *testing.T) {
-	// When built without ldflags (i.e. go test), Version must be "dev".
-	// goreleaser overrides this at build time via -X ldflags.
-	if Version != "dev" {
-		t.Fatalf("expected Version=%q in test builds, got %q", "dev", Version)
+func TestVersionIsSemver(t *testing.T) {
+	// Version must be a valid semver string (MAJOR.MINOR.PATCH).
+	// goreleaser also injects it from the git tag at build time via ldflags,
+	// but source builds must have a real version for the auto-updater.
+	semver := regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+	if !semver.MatchString(Version) {
+		t.Fatalf("Version=%q does not match semver pattern MAJOR.MINOR.PATCH", Version)
 	}
 }
