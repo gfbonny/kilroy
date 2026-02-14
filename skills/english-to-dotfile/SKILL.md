@@ -126,6 +126,11 @@ Determine, for each provider, whether **API** and/or **CLI** execution is feasib
 - Anthropic: API key present? CLI executable present?
 - Gemini/Google: API key present? CLI executable present?
 - Cerebras: API key present? (API-only, no CLI agent)
+- Kimi: API key present (`KIMI_API_KEY`)? (API-only, no CLI agent)
+- Zai (GLM): API key present (`ZAI_API_KEY`)? (API-only, no CLI agent)
+- Minimax: API key present (`MINIMAX_API_KEY`)? (API-only, no CLI agent)
+
+Also check the run config (if one exists or is being generated alongside the DOT) for provider entries — providers configured there with `backend: api` and API credentials are available even if not in the list above.
 
 If a provider has neither API nor CLI available, you MUST NOT propose models from that provider.
 
@@ -170,15 +175,15 @@ Do not hardcode a brittle mapping. Use best judgment and keep it consistent with
 
 Before generating DOT, present exactly these three options in a single table:
 
-- **Low:** cheapest current model plan (no older models). Minimal thinking. No parallelism.
+- **Low:** cheapest current API providers. Use kimi (kimi-k2.5) as default/hard, with 3-way fan-out across kimi, zai (glm-4.7), and minimax (minimax-m2.5) for thinking stages (DoD, planning, review). Minimal thinking. All API — no CLI agents.
 - **Medium:** best current model plan (avoid "middle" choices when there's a clear best and a clear cheapest). Thinking per Weather Report / strong defaults. No parallelism.
 - **High:** 3 best current models in parallel for thinking-heavy stages (plan/review), then synthesize. Maximum thinking.
 
 The table MUST include:
-- Which model(s) you'd use for `impl`, `verify`, and `review` (and for High, the 3 parallel branches + the synthesis model).
+- Which model(s) you'd use for `impl`, `verify`, and `review` (and for Low/High, the 3 parallel branches + the synthesis model).
 - Parallelism behavior (none vs 3-way).
 - Thinking approach (brief).
-- Executor availability and recommendation **for OpenAI, Anthropic, and Gemini** (account for both API+CLI where available; use the `executor` value from the preferences file to pick the preferred one, unless the user specifies otherwise).
+- Executor availability and recommendation for all detected providers (account for both API+CLI where available; use the `executor` value from the preferences file to pick the preferred one, unless the user specifies otherwise).
 
 After the table, ask:
 "Pick `low`, `medium`, or `high`, or reply with overrides (providers/models/executor/parallel/thinking)."
