@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -282,10 +283,10 @@ func TestToolRegistry_TruncationLines_UsesHeadTailAndOmittedMarker(t *testing.T)
 
 func TestDefaultToolLimit_MatchesSpecTable(t *testing.T) {
 	type want struct {
-		tool   string
-		chars  int
-		lines  int
-		strat  TruncationStrategy
+		tool  string
+		chars int
+		lines int
+		strat TruncationStrategy
 	}
 	cases := []want{
 		{tool: "read_file", chars: 50_000, lines: 0, strat: TruncHeadTail},
@@ -302,5 +303,36 @@ func TestDefaultToolLimit_MatchesSpecTable(t *testing.T) {
 		if lim.MaxChars != tc.chars || lim.MaxLines != tc.lines || lim.Strategy != tc.strat {
 			t.Fatalf("%s: got=%+v want MaxChars=%d MaxLines=%d Strategy=%s", tc.tool, lim, tc.chars, tc.lines, tc.strat)
 		}
+	}
+}
+
+func TestCompileSchema_DoesNotDependOnGetwd(t *testing.T) {
+	temp := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(temp); err != nil {
+		t.Fatalf("chdir temp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+	if err := os.RemoveAll(temp); err != nil {
+		t.Fatalf("remove temp: %v", err)
+	}
+
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"file_path": map[string]any{"type": "string"},
+		},
+		"required": []string{"file_path"},
+	}
+
+	compiled, err := compileSchema(schema)
+	if err != nil {
+		t.Fatalf("compileSchema: %v", err)
+	}
+	if err := compiled.Validate(map[string]any{"file_path": "x"}); err != nil {
+		t.Fatalf("validate: %v", err)
 	}
 }

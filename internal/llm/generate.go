@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,6 +9,8 @@ import (
 	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v5"
+
+	"github.com/danshapiro/kilroy/internal/jsonschemautil"
 )
 
 type Tool struct {
@@ -256,16 +257,7 @@ func prepareTools(tools []Tool) (map[string]Tool, []ToolDefinition, error) {
 }
 
 func compileSchema(params map[string]any) (*jsonschema.Schema, error) {
-	c := jsonschema.NewCompiler()
-	c.Draft = jsonschema.Draft2020
-	b, err := json.Marshal(params)
-	if err != nil {
-		return nil, err
-	}
-	if err := c.AddResource("schema.json", bytes.NewReader(b)); err != nil {
-		return nil, err
-	}
-	return c.Compile("schema.json")
+	return jsonschemautil.CompileMapSchema(params, jsonschema.Draft2020)
 }
 
 func executeToolCalls(ctx context.Context, toolIndex map[string]Tool, calls []ToolCallData) []ToolResultData {
