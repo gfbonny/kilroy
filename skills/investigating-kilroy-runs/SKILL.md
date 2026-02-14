@@ -86,6 +86,7 @@ To classify run state:
 - Running: `final.json` missing and `live.json`/`progress.ndjson` still changing.
 - Finished: `final.json` present.
 - Likely stalled: no `progress.ndjson` updates for longer than configured stall timeout.
+- `attractor status` can show terminal `fail` while `progress.ndjson` still advances in overlap conditions; timestamp comparison resolves this ambiguity.
 
 To quickly validate terminal state vs liveness, use:
 
@@ -112,7 +113,7 @@ jq -c 'select(.event=="stage_attempt_end")' "$RUN_ROOT/progress.ndjson" | head -
 
 To handle cases where `final.json` exists but `progress.ndjson` still changes:
 
-1. Treat this as a possible resume/overlap situation rather than immediate data corruption.
+1. If `final.json` exists and `progress.ndjson` is newer, this is a possible overlapping-resume state rather than immediate data corruption.
 2. Compare file mtimes and latest event timestamps.
 3. Confirm whether a `run`/`resume` process is currently active.
 
@@ -129,6 +130,27 @@ To determine whether the run is truly active at the OS level:
 [ -f "$RUN_ROOT/run.pid" ] && cat "$RUN_ROOT/run.pid"
 [ -f "$RUN_ROOT/run.pid" ] && ps -fp "$(cat "$RUN_ROOT/run.pid")"
 ps -ef | rg -i 'kilroy attractor (run|resume)' | rg -v rg
+```
+
+If a `resume` process is already active for the same `--logs-root`, launching another `resume` is a possible source of mixed terminal/live state.
+
+A live PID with unchanged tail events across repeated checks is a possible stale/hung process, not active run progress.
+
+```bash
+E1="$(tail -n 1 "$RUN_ROOT/progress.ndjson")"
+sleep 3
+E2="$(tail -n 1 "$RUN_ROOT/progress.ndjson")"
+[ "$E1" = "$E2" ] && echo "no new events" || echo "events advancing"
+```
+
+## Relaunch Hygiene (Single Owner)
+
+When relaunching, quiescing duplicate `resume` processes first and launching one detached `resume` reduces the chance of `stopped by signal terminated` outcomes.
+
+```bash
+ps -ef | rg -i "kilroy attractor resume --logs-root $RUN_ROOT" | rg -v rg
+# If duplicates exist, stop extras before launching a single detached resume.
+setsid -f bash -lc "cd /path/to/repo && ./kilroy attractor resume --logs-root '$RUN_ROOT' >> '$RUN_ROOT/resume.out' 2>&1"
 ```
 
 ## Debug Parallel Fan-In Stalls
@@ -192,6 +214,16 @@ sed -n '1,220p' "$RUN_ROOT/run_config.json"
 
 ```bash
 rg -n 'missing status.json|llm_retry|deterministic_failure_cycle_check|setup_command_|failure_reason' "$RUN_ROOT/progress.ndjson"
+```
+
+## Postmortem Capture (Overlap/Termination)
+
+Capture `final.json` timestamp, latest `progress.ndjson` timestamp, active `resume` PIDs/PPIDs, and termination events (`stopped by signal terminated`, `subgraph_canceled_exit`, `stage_attempt_end`).
+
+```bash
+stat -c '%y %n' "$RUN_ROOT/final.json" "$RUN_ROOT/live.json" "$RUN_ROOT/progress.ndjson" 2>/dev/null
+ps -ef | rg -i "kilroy attractor resume --logs-root $RUN_ROOT" | rg -v rg
+rg -n 'stopped by signal terminated|subgraph_canceled_exit|stage_attempt_end' "$RUN_ROOT/progress.ndjson" | tail -n 80
 ```
 
 ## Report Format
