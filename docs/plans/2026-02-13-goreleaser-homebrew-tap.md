@@ -106,12 +106,10 @@ package version
 import "testing"
 
 func TestVersionDefault(t *testing.T) {
-	if Version == "" {
-		t.Fatal("Version must not be empty")
-	}
-	// Default when built without ldflags is "dev".
+	// When built without ldflags (i.e. go test), Version must be "dev".
+	// goreleaser overrides this at build time via -X ldflags.
 	if Version != "dev" {
-		t.Logf("Version=%q (overridden via ldflags)", Version)
+		t.Fatalf("expected Version=%q in test builds, got %q", "dev", Version)
 	}
 }
 ```
@@ -173,8 +171,6 @@ checksum:
 changelog:
   disable: true
 
-release_notes: RELEASE_NOTES.md
-
 brews:
   - name: kilroy
     repository:
@@ -198,17 +194,17 @@ release:
   prerelease: auto
 ```
 
-**Step 2: Validate the config** (requires goreleaser installed; skip if not available)
+**Step 2: Validate the config locally (if goreleaser is installed)**
 
 Run:
 ```bash
 if command -v goreleaser &>/dev/null; then
   goreleaser check
 else
-  echo "goreleaser not installed, skipping config validation"
+  echo "goreleaser not installed locally — config will be validated in CI by the 'Validate GoReleaser config' workflow step"
 fi
 ```
-Expected: `config is valid` if goreleaser is installed, or the skip message if not. If goreleaser IS installed and reports errors, fix the config before proceeding.
+Expected: `config is valid` if goreleaser is installed. If goreleaser IS installed and reports errors, fix the config before proceeding. If goreleaser is not installed locally, the GitHub Actions workflow includes a mandatory `goreleaser check` step that will catch any config errors before the release runs.
 
 ---
 
@@ -253,12 +249,19 @@ jobs:
       - name: Run tests
         run: go test ./...
 
+      - name: Validate GoReleaser config
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean
+          args: release --clean --release-notes=RELEASE_NOTES.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
@@ -266,7 +269,7 @@ jobs:
 
 ---
 
-### Task 6: Add `/dist/` and `RELEASE_NOTES.md` to `.gitignore`
+### Task 6: Add `/dist/` to `.gitignore`
 
 **Files:**
 - Modify: `.gitignore`
@@ -278,8 +281,6 @@ Add to the end of `.gitignore`:
 ```
 # GoReleaser build output
 /dist/
-# Release notes consumed by goreleaser (written fresh each release)
-/RELEASE_NOTES.md
 ```
 
 **Step 2: Commit Tasks 2-6 together**
@@ -294,10 +295,11 @@ git commit -m "feat(release): add goreleaser config, GitHub Actions workflow, an
 - internal/version/version_test.go: test that Version is non-empty.
 - .goreleaser.yaml: cross-platform builds (linux/darwin/windows x
   amd64/arm64), Homebrew tap (danshapiro/homebrew-kilroy), hand-crafted
-  release notes via RELEASE_NOTES.md.
-- .github/workflows/release.yml: triggered on v* tag push, runs tests
-  then goreleaser. Uses HOMEBREW_TAP_GITHUB_TOKEN secret for tap push.
-- .gitignore: exclude goreleaser dist/ output and RELEASE_NOTES.md."
+  release notes via --release-notes flag.
+- .github/workflows/release.yml: triggered on v* tag push, validates
+  config, runs tests, then goreleaser. Uses HOMEBREW_TAP_GITHUB_TOKEN
+  secret for tap push.
+- .gitignore: exclude goreleaser dist/ output."
 ```
 
 ---
@@ -332,7 +334,7 @@ Replace:
 
 With:
 ```
-1. **Write release notes** to `RELEASE_NOTES.md` in the repo root (following the guidelines above). goreleaser reads this file and publishes it as the GitHub release body.
+1. **Write release notes** to `RELEASE_NOTES.md` in the repo root (following the guidelines above). The GitHub Actions workflow passes `--release-notes=RELEASE_NOTES.md` to goreleaser, which publishes it as the GitHub release body. This file is committed (not gitignored) so it is present at the tagged commit.
 2. **Update README** with any approved changes (version is injected by goreleaser from the tag — no file to bump)
 3. **Commit** with message like `release: vX.Y.Z`
 ```
