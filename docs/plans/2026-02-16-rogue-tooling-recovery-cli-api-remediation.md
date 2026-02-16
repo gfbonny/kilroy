@@ -49,8 +49,15 @@ import (
 )
 
 func TestBuildAgentLoopOverrides_UsesBaseNodeEnvContract(t *testing.T) {
-	t.Setenv("CLAUDECODE", "1")
+	origTarget, hadTarget := os.LookupEnv("CARGO_TARGET_DIR")
 	_ = os.Unsetenv("CARGO_TARGET_DIR")
+	t.Cleanup(func() {
+		if hadTarget {
+			_ = os.Setenv("CARGO_TARGET_DIR", origTarget)
+			return
+		}
+		_ = os.Unsetenv("CARGO_TARGET_DIR")
+	})
 	worktree := t.TempDir()
 	env := buildAgentLoopOverrides(worktree, map[string]string{"KILROY_STAGE_STATUS_PATH": "/tmp/status.json"})
 
@@ -59,9 +66,6 @@ func TestBuildAgentLoopOverrides_UsesBaseNodeEnvContract(t *testing.T) {
 	}
 	if env["KILROY_STAGE_STATUS_PATH"] != "/tmp/status.json" {
 		t.Fatal("stage status env must be preserved")
-	}
-	if _, ok := env["CLAUDECODE"]; ok {
-		t.Fatal("overrides must not inject CLAUDECODE")
 	}
 }
 ```
@@ -80,6 +84,7 @@ func TestLocalExecutionEnvironment_ExecCommand_StripsConfiguredEnvKeys(t *testin
 ```
 
 Assert `CLAUDECODE` is absent from `env` output inside executed command when strip list contains it.
+Set `CLAUDECODE=1` in the parent process for the test so the assertion proves stripping from inherited `os.Environ()`, not only from override maps.
 
 **Step 4: Commit red tests**
 
@@ -136,6 +141,8 @@ In `internal/agent/env_local.go`:
 - add constructor `NewLocalExecutionEnvironmentWithPolicy(rootDir string, baseEnv map[string]string, stripKeys []string)`
 - keep `NewLocalExecutionEnvironmentWithBaseEnv` as wrapper to preserve callers
 - update `filteredEnv(...)` signature to accept strip keys, and remove strip keys from both inherited `os.Environ()` entries and extra env maps.
+
+Root-cause note: this is required because `filteredEnv(...)` currently re-hydrates `os.Environ()` regardless of engine-side env shaping.
 
 **Step 3: Wire `runAPI(..., mode=agent_loop)` to helper + strip policy**
 
@@ -235,6 +242,7 @@ Implement one of:
 - split commit into `AddAllWithExcludes(...)` + `CommitOnlyAllowEmpty(...)`.
 
 Recommended: `CommitAllowEmptyWithExcludes(...)` to keep checkpoint callsites simple and preserve old helper behavior for non-checkpoint callers.
+Thread excludes from `e.RunConfig.Git.CheckpointExcludeGlobs` into this checkpoint commit path explicitly.
 
 **Step 5: Add engine test proving excluded artifacts are not checkpointed**
 
@@ -286,6 +294,9 @@ Concrete shape:
 ```go
 var raw map[string]any
 if err := json.Unmarshal(b, &raw); err == nil {
+	if o.Meta == nil {
+		o.Meta = map[string]any{}
+	}
 	if fc := strings.TrimSpace(fmt.Sprint(raw["failure_class"])); fc != "" && fc != "<nil>" {
 		o.Meta["failure_class"] = fc
 	}
@@ -296,6 +307,7 @@ if err := json.Unmarshal(b, &raw); err == nil {
 ```
 
 Placement requirement: run this promotion in the canonical parse path **after** successful `json.Unmarshal(b, &o)` and **before** returning `o.Canonicalize()`.
+This requires restructuring the current early-return branch so promotion executes before canonical return.
 
 **Step 3: Implement signature override in cycle-breaker keying**
 
@@ -401,7 +413,7 @@ Use a new warning rule name:
 - `fail_loop_failure_class_guard`
 
 Heuristic:
-- From a diamond node, detect outgoing fail edges to earlier impl nodes.
+- From a diamond node, detect outgoing fail edges that return to predecessor nodes (nodes that can reach the diamond in forward traversal from start).
 - If edge condition lacks `context.failure_class` predicate, emit warning.
 
 **Step 3: Run validator tests**
