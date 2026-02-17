@@ -77,6 +77,12 @@ func TestReferenceTemplate_ImplementFailureRoutedBeforeVerify(t *testing.T) {
 	}
 
 	if !hasImplementToCheck || !hasCheckFailTransient || !hasCheckFailDeterministic || !hasCheckSuccessToVerify {
-		t.Fatalf("missing implement failure-routing guardrails")
+		t.Fatalf(
+			"missing implement failure-routing guardrails: implement_to_check=%v transient_fail=%v deterministic_fail=%v success_to_verify=%v",
+			hasImplementToCheck,
+			hasCheckFailTransient,
+			hasCheckFailDeterministic,
+			hasCheckSuccessToVerify,
+		)
 	}
 }

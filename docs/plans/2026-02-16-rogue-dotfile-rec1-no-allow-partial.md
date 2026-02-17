@@ -79,7 +79,8 @@ func TestReferenceTemplate_ImplementFailureRoutedBeforeVerify(t *testing.T) {
     }
 
     if !hasImplementToCheck || !hasCheckFailTransient || !hasCheckFailDeterministic || !hasCheckSuccessToVerify {
-        t.Fatalf("missing implement failure-routing guardrails")
+        t.Fatalf("missing implement failure-routing guardrails: implement_to_check=%v transient_fail=%v deterministic_fail=%v success_to_verify=%v",
+            hasImplementToCheck, hasCheckFailTransient, hasCheckFailDeterministic, hasCheckSuccessToVerify)
     }
 }
 ```
@@ -120,7 +121,6 @@ check_implement [shape=diamond, label="Implement OK?"]
 
 implement -> check_implement
 check_implement -> verify_fmt [condition="outcome=success"]
-check_implement -> verify_fmt [condition="outcome=partial_success"]
 check_implement -> implement [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
 check_implement -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
 ```
@@ -205,7 +205,6 @@ check_implement [shape=diamond, label="Implement OK?"]
 plan -> implement
 implement -> check_implement
 check_implement -> verify_fmt [condition="outcome=success"]
-check_implement -> verify_fmt [condition="outcome=partial_success"]
 check_implement -> implement [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
 check_implement -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
 ```
