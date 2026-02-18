@@ -302,10 +302,11 @@ func sortedStringSetKeys(set map[string]struct{}) []string {
 
 func envListLookup(env []string, key string) string {
 	prefix := key + "="
+	val := ""
 	for _, entry := range env {
 		if strings.HasPrefix(entry, prefix) {
-			return strings.TrimPrefix(entry, prefix)
+			val = strings.TrimPrefix(entry, prefix)
 		}
 	}
-	return ""
+	return val
 }
