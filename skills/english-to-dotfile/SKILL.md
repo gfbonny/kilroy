@@ -21,7 +21,8 @@ Primary references for behavior:
 ## When to Use
 
 Use this skill when:
-- The user wants a DOT pipeline from plain English requirements.
+- The user wants a DOT pipeline from plain English requirements (or a spec).
+- The user wants to revise or improve an existing Attractor DOT pipeline.
 - The output target is `kilroy attractor ingest` or `kilroy attractor run`.
 - You need to choose models/providers and routing structure safely.
 
@@ -100,6 +101,26 @@ Loop and routing rules:
 - Deterministic failures should route to repair/postmortem, not blind restarts.
 - For `goal_gate=true` nodes routing to terminal, use `condition="outcome=success"` or `condition="outcome=partial_success"`.
 
+#### Deterministic vs Transient Failures (Failure Classification)
+
+Attractor’s retry and cycle-breaking semantics depend on `failure_class` (see `docs/strongdm/attractor/attractor-spec.md`).
+
+Use these definitions:
+- **Deterministic** (`failure_class=deterministic`): Re-running the same node with the same inputs will not succeed. Examples: tests failing due to incorrect code, compilation errors due to code changes, missing required files, invalid config, auth/permission errors, invalid request/model-not-found.
+- **Transient infra** (`failure_class=transient_infra`): A wait-and-retry might succeed. Examples: rate limits, timeouts, network errors, provider 5xx/unavailability.
+- **Structural** (`failure_class=structural`): The pipeline/graph itself is broken (usually caught by validation). Examples: missing start/exit, invalid condition syntax, missing required node attributes.
+- **Canceled** (`failure_class=canceled`): The run was canceled; do not treat as retryable or as a deterministic cycle signal.
+- **Budget exhausted** (`failure_class=budget_exhausted`): Failure due to budget/limits; only retry if there is a clear escalation path (smaller scope, different model, explicit user approval).
+- **Compilation loop** (`failure_class=compilation_loop`): Repeated build/test failure patterns that indicate an unproductive loop; only retry if you change approach (repair/escalate), not by blind restart.
+
+Heuristic:
+- If success is plausible after waiting/retrying, it’s usually `transient_infra`.
+- If success requires changing code/config/graph/prompt/context, it’s usually `deterministic` (or `structural` for pipeline-definition problems).
+
+Routing implications:
+- Only use `loop_restart=true` on edges that are guarded by `context.failure_class=transient_infra`.
+- Always provide a non-restart failure path for deterministic/structural failures (repair/postmortem/re-plan), so the pipeline doesn’t “spin” on permanent errors.
+
 Guardrails:
 - Do not set `allow_partial=true` on the primary implementation node in the hill-climbing profile.
 - Do not add `max_agent_turns` by default.
@@ -163,20 +184,69 @@ Every generated codergen prompt must include:
 2. What files to read.
 3. What files to write.
 4. Acceptance checks.
-5. Explicit outcome contract.
+5. Explicit status/outcome contract.
 
 Mandatory status contract text (or equivalent) in generated prompts:
 - Write status JSON to `$KILROY_STAGE_STATUS_PATH` (absolute path).
 - If unavailable, use `$KILROY_STAGE_STATUS_FALLBACK_PATH`.
 - Do not write nested `status.json` files after `cd`.
+- Use the canonical schema: `{"status":"..."}`
+- Routing conditions use `condition="outcome=..."` on edges; `outcome` is set to the stage's `status` value.
 
 Failure payload contract:
-- For `outcome=fail` or `outcome=retry`, include both `failure_reason` and `details`.
+- For `status=fail` or `status=retry`, include both `failure_reason` and `details`.
 - For deterministic verification failures, include `failure_class` where applicable.
 
 Handoff rules:
 - Use `.ai/*` files for substantial inter-node artifacts (plans, reviews, postmortems).
 - Keep file reads/writes consistent: every read path must have an upstream producer or explicit repo-source justification.
+
+### Definition Of Done (DoD) Rubric (Required)
+
+In Kilroy attractor pipelines, the project DoD is the acceptance contract for the whole iteration. It must be strong enough to prevent "looks done" failures, but general enough that it does not proscribe an implementation path.
+
+A good DoD is:
+- Outcome-focused: states what must be true, not what must be done, or how to implement it.
+- Verifiable: every criterion is checkable with clear evidence (pass/fail or observed result).
+- Complete for the risk surface: it closes obvious loopholes where someone could skip something important and still claim success.
+- Appropriately scoped: avoids forcing repo-wide checks or unnecessary redesigns; focuses on the change's blast radius.
+- Explicit about non-goals: clearly states what is intentionally not being done (deferrals) so reviewers do not assume it was missed.
+
+Minimum DoD sections (recommended markdown headings):
+- Scope (in-scope / out-of-scope / assumptions)
+- Deliverables (artifacts, behaviors, interfaces, docs that must exist after completion)
+- Acceptance Criteria (observable functional requirements)
+- Verification (how to verify, including commands/steps appropriate to the project; include any setup required)
+- Quality/Safety Gates (project-appropriate outcomes like build/tests/lint/docs/compatibility/security, phrased as evidence)
+- Non-Goals / Deferrals (explicitly deferred work)
+
+Coverage checklist: the DoD must explicitly address each of these (either include criteria, or explicitly mark N/A with a short reason):
+- Build/package/install correctness (or equivalent for the project type)
+- Automated tests (or explicit manual verification steps when automation is not feasible)
+- Lint/format/static analysis (or explicit N/A)
+- Documentation/user guidance (or explicit N/A)
+- Compatibility/breaking changes/migrations (or explicit N/A)
+- Security/privacy considerations (or explicit N/A)
+- Operational readiness (logging, error handling, observability, rollback safety) when relevant
+- Performance/reliability considerations when relevant
+
+DoD anti-patterns (reject as "missing DoD"):
+- Purely vague language: "works", "is correct", "clean code", "high quality" with no evidence criteria.
+- Pure implementation plan: "refactor X", "use library Y", "implement in Go" without specifying acceptance outcomes.
+- Lack of concrete tests that prove doneness.
+- Over-prescription: requiring or assuming tools/approaches that were not required by the user's spec (turning DoD into how, instead of what).
+- Loophole criteria: only checking one happy path ("demo runs once") with no regression/quality gates when those would better achieve the goal.
+
+### Parallel Fan-Out Artifact Contract (Required When Using `shape=component`)
+
+When using true parallel fan-out (`shape=component`), each branch runs in an isolated git worktree. Branch-written `.ai/*` files are not automatically visible in the main worktree where the join/consolidation node runs.
+
+Therefore, any consolidator node that needs branch outputs MUST:
+- Read `$KILROY_LOGS_ROOT/<fanout_node_id>/parallel_results.json`.
+- Use each branch's `worktree_dir` from that JSON to read the branch outputs (for example `<worktree_dir>/.ai/plan_a.md`).
+- Fall back to reading `.ai/*` from the current worktree only when `parallel_results.json` is missing (for example, no fan-out topology).
+
+Important: `shape=tripleoctagon` is a parallel fan-in handler that selects a single winning branch and fast-forwards the main worktree. If you need to consolidate text outputs from all branches (plans, DoDs, reviews), do not use `tripleoctagon`; converge edges onto a normal box consolidator node and read branch outputs via `parallel_results.json` + `worktree_dir`.
 
 Verification scoping rules:
 - Scope required checks to project/module paths.

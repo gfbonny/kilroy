@@ -63,6 +63,9 @@ type Outcome struct {
 	ContextUpdates   map[string]any `json:"context_updates,omitempty"`
 	Notes            string         `json:"notes,omitempty"`
 	FailureReason    string         `json:"failure_reason,omitempty"`
+	// Details is optional structured information for failures (or for debugging).
+	// The engine does not use it for routing, but it must be preserved when present.
+	Details any `json:"details,omitempty"`
 	// Optional: handler-specific metadata (not used for routing).
 	Meta map[string]any `json:"meta,omitempty"`
 }
@@ -140,6 +143,7 @@ func DecodeOutcomeJSON(b []byte) (Outcome, error) {
 		ContextUpdates:   legacy.ContextUpdates,
 		Notes:            legacy.Notes,
 		FailureReason:    legacyFailureReason(status, legacy.FailureReason, legacy.Details, legacy.Notes),
+		Details:          legacy.Details,
 	}
 	return o.Canonicalize()
 }
