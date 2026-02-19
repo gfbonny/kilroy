@@ -10,7 +10,7 @@ description: Use when turning English requirements into a runnable Kilroy Attrac
 This skill converts English requirements into a valid Attractor `.dot` graph.
 
 Core principle:
-- Prefer a validated template and minimal edits over novel graph design.
+- Prefer a validated template that has extensive and detailed instructions in an idiomatic default template graph, over novel graph design.
 - Optimize for a graph that runs reliably, not a graph that looks clever.
 
 Primary references for behavior:
