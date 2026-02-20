@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"testing"
 )
 
@@ -201,6 +202,42 @@ func TestResolveDefaultIngestSkillPath_UsesGoInstallModuleCacheFallback(t *testi
 	}
 }
 
+func TestResolveDefaultIngestSkillPath_UsesModuleCacheWhenBuildVersionIsDevel(t *testing.T) {
+	tmp := t.TempDir()
+	moduleDir := filepath.Join(tmp, "pkg", "mod", "github.com", "danshapiro", "kilroy@v0.0.0-20260219062932-c5e2760d4aae")
+	moduleSkill := filepath.Join(moduleDir, "skills", "english-to-dotfile", "SKILL.md")
+	binaryPath := filepath.Join(tmp, "bin", "kilroy")
+
+	if err := os.MkdirAll(filepath.Dir(moduleSkill), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(moduleSkill, []byte("# module-cache skill"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(binaryPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binaryPath, []byte(""), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("GOMODCACHE", filepath.Join(tmp, "pkg", "mod"))
+	oldExe := osExecutable
+	osExecutable = func() (string, error) { return binaryPath, nil }
+	t.Cleanup(func() { osExecutable = oldExe })
+
+	oldBuildInfo := readBuildInfo
+	readBuildInfo = func() (*debug.BuildInfo, bool) {
+		return &debug.BuildInfo{Main: debug.Module{Path: "github.com/danshapiro/kilroy", Version: "(devel)"}}, true
+	}
+	t.Cleanup(func() { readBuildInfo = oldBuildInfo })
+
+	got := resolveDefaultIngestSkillPath(filepath.Join(tmp, "repo-without-skill"))
+	if canonicalPath(got) != canonicalPath(moduleSkill) {
+		t.Fatalf("resolveDefaultIngestSkillPath() = %q, want %q", got, moduleSkill)
+	}
+}
+
 func canonicalPath(p string) string {
 	p = filepath.Clean(p)
 	if abs, err := filepath.Abs(p); err == nil {
@@ -210,4 +247,28 @@ func canonicalPath(p string) string {
 		return filepath.Clean(resolved)
 	}
 	return filepath.Clean(p)
+}
+
+func TestRunIngest_EmptySkillPathReturnsHelpfulError(t *testing.T) {
+	_, err := runIngest(&ingestOptions{
+		requirements: "Build a solitaire game",
+		repoPath:     t.TempDir(),
+		model:        "claude-sonnet-4-5",
+		validate:     true,
+	})
+	if err == nil {
+		t.Fatal("expected error for missing default skill")
+	}
+	if got := err.Error(); !containsAll(got, "no default skill file found", "--skill") {
+		t.Fatalf("unexpected error: %q", got)
+	}
+}
+
+func containsAll(s string, needles ...string) bool {
+	for _, n := range needles {
+		if !strings.Contains(s, n) {
+			return false
+		}
+	}
+	return true
 }

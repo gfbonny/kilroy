@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -180,31 +181,66 @@ func defaultIngestSkillCandidates(repoPath string) []string {
 		}
 	}
 
-	if moduleDir := moduleCacheRootForInstalledBinary(); moduleDir != "" {
+	for _, moduleDir := range moduleCacheCandidateRootsForInstalledBinary() {
 		add(skillPathUnder(moduleDir))
 	}
 
 	return out
 }
 
-func moduleCacheRootForInstalledBinary() string {
+func moduleCacheCandidateRootsForInstalledBinary() []string {
 	info, ok := readBuildInfo()
 	if !ok || info == nil {
-		return ""
+		return nil
 	}
 	modulePath := strings.TrimSpace(info.Main.Path)
 	moduleVersion := strings.TrimSpace(info.Main.Version)
-	if modulePath == "" || moduleVersion == "" || moduleVersion == "(devel)" {
-		return ""
+	if modulePath == "" {
+		return nil
 	}
 	cacheRoot := strings.TrimSpace(os.Getenv("GOMODCACHE"))
 	if cacheRoot == "" {
 		cacheRoot = defaultGoModCacheRoot()
 	}
 	if cacheRoot == "" {
-		return ""
+		return nil
 	}
-	return filepath.Join(cacheRoot, filepath.FromSlash(modulePath)+"@"+moduleVersion)
+
+	seen := map[string]bool{}
+	out := make([]string, 0, 4)
+	add := func(root string) {
+		root = filepath.Clean(strings.TrimSpace(root))
+		if root == "" || seen[root] {
+			return
+		}
+		seen[root] = true
+		out = append(out, root)
+	}
+
+	moduleRootPrefix := filepath.FromSlash(modulePath)
+	if moduleVersion != "" && moduleVersion != "(devel)" {
+		add(filepath.Join(cacheRoot, moduleRootPrefix+"@"+moduleVersion))
+	}
+
+	globPattern := filepath.Join(cacheRoot, moduleRootPrefix+"@*")
+	matches, _ := filepath.Glob(globPattern)
+	if len(matches) > 1 {
+		sort.Slice(matches, func(i, j int) bool {
+			iInfo, iErr := os.Stat(matches[i])
+			jInfo, jErr := os.Stat(matches[j])
+			if iErr == nil && jErr == nil {
+				if !iInfo.ModTime().Equal(jInfo.ModTime()) {
+					return iInfo.ModTime().After(jInfo.ModTime())
+				}
+			}
+			return matches[i] > matches[j]
+		})
+	}
+	for _, m := range matches {
+		add(m)
+	}
+
+	return out
 }
 
 func defaultGoModCacheRoot() string {
@@ -225,6 +261,14 @@ func defaultGoModCacheRoot() string {
 }
 
 func runIngest(opts *ingestOptions) (string, error) {
+	if strings.TrimSpace(opts.skillPath) == "" {
+		candidates := defaultIngestSkillCandidates(opts.repoPath)
+		if len(candidates) == 0 {
+			return "", fmt.Errorf("no default skill file found; pass --skill <path>")
+		}
+		return "", fmt.Errorf("no default skill file found; checked: %s; pass --skill <path>", strings.Join(candidates, ", "))
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 
