@@ -768,7 +768,8 @@ func lintLoopRestartFailureClassGuard(g *model.Graph) []Diagnostic {
 			if strings.EqualFold(strings.TrimSpace(e.Attr("loop_restart", "false")), "true") {
 				continue
 			}
-			if conditionMentionsFailureOutcome(strings.TrimSpace(e.Condition())) {
+			condExpr := strings.TrimSpace(e.Condition())
+			if conditionMentionsFailureOutcome(condExpr) && !conditionHasTransientInfraGuard(condExpr) {
 				hasDeterministicFallback = true
 				break
 			}
