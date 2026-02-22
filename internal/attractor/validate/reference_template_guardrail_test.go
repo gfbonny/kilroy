@@ -247,7 +247,22 @@ func TestReferenceTemplate_PostmortemPromptClarifiesStatusContract(t *testing.T)
 	if pm == nil {
 		t.Fatal("missing postmortem node")
 	}
-	if !strings.Contains(string(template), "status reflects analysis completion, not implementation state") {
+	templateText := string(template)
+	const startMarker = "// PROMPT: postmortem"
+	const endMarker = "postmortem []"
+	const requiredText = "status reflects analysis completion, not implementation state"
+
+	start := strings.Index(templateText, startMarker)
+	if start < 0 {
+		t.Fatal("missing postmortem prompt guidance block in reference template")
+	}
+	section := templateText[start:]
+	end := strings.Index(section, endMarker)
+	if end < 0 {
+		t.Fatal("missing postmortem node declaration after guidance block")
+	}
+
+	if !strings.Contains(section[:end], requiredText) {
 		t.Fatal("postmortem template guidance must clarify that status reflects analysis completion, not implementation state")
 	}
 }
