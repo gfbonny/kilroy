@@ -177,6 +177,15 @@ type ArtifactVerifyConfig struct {
 }
 ```
 
+`artifact_policy.env.managed_roots` normative key contract:
+- `tool_cache_root`: generic cache root namespace for toolchains; resolver maps profile defaults under this root.
+- `cargo_home`, `rustup_home`, `cargo_target_dir`
+- `gopath`, `gomodcache`
+- `npm_cache`, `pnpm_home`
+- `pip_cache_dir`
+- `gradle_user_home`, `maven_repo_local`
+- unknown keys: validation error (deterministic config failure).
+
 - [ ] **Step 4: Remove old config default coupling and route defaults through new policy**
 
 ```go
@@ -239,7 +248,7 @@ Built-in profile detection contract (must be implemented exactly):
 - `node` markers: `package.json`, `pnpm-lock.yaml`, `yarn.lock`, `package-lock.json`
 - `python` markers: `pyproject.toml`, `requirements.txt`, `setup.py`
 - `java` markers: `pom.xml`, `build.gradle`, `settings.gradle`
-- detection scope: repository root + recursive scan to depth 6, deterministic lexical ordering
+- detection scope: repository/worktree root + recursive scan with no fixed depth cap; skip known heavy directories (`.git`, `node_modules`, `.cargo-target*`, `target`) and keep deterministic lexical ordering
 - no markers found: fallback profile `generic`
 - `profiles.mode=explicit`: use only `profiles.explicit` after validation
 - `profiles.mode=disabled`: disable profile-derived env defaults only; preserve explicit verify/checkpoint rules from config
@@ -318,6 +327,17 @@ func TestResolveArtifactPolicy_ResolveRootFallsBackToRepoPathWhenWorktreeMissing
         LogsRoot:   t.TempDir(),
         WorktreeDir: filepath.Join(t.TempDir(), "missing-worktree"),
     })
+    if err != nil { t.Fatal(err) }
+    if !reflect.DeepEqual(rp.ActiveProfiles, []string{"go"}) {
+        t.Fatalf("profiles: got %v want [go]", rp.ActiveProfiles)
+    }
+}
+
+func TestResolveArtifactPolicy_AutoDetectsDeepMarkerPaths(t *testing.T) {
+    repo := setupRepoWithFiles(t, []string{"a/b/c/d/e/f/g/h/i/j/go.mod"})
+    cfg := validMinimalRunConfigForTest()
+    cfg.Repo.Path = repo
+    rp, err := ResolveArtifactPolicy(cfg, ResolveArtifactPolicyInput{LogsRoot: t.TempDir(), WorktreeDir: repo})
     if err != nil { t.Fatal(err) }
     if !reflect.DeepEqual(rp.ActiveProfiles, []string{"go"}) {
         t.Fatalf("profiles: got %v want [go]", rp.ActiveProfiles)
@@ -499,12 +519,16 @@ if h, err := e.ArtifactPolicy.Hash(); err == nil {
 
 ```go
 // resume.go
+cfgLoadErr := error(nil)
 if _, statErr := os.Stat(cfgPath); statErr == nil {
     loaded, loadErr := LoadRunConfigFile(cfgPath)
     if loadErr != nil {
-        return nil, fmt.Errorf("resume: load run config snapshot: %w", loadErr)
+        cfgLoadErr = fmt.Errorf("resume: load run config snapshot: %w", loadErr)
+        // Checkpoint-first stance: continue when checkpoint carries resolved policy.
+        warnEngine(eng, cfgLoadErr.Error())
+    } else {
+        cfg = loaded
     }
-    cfg = loaded
 }
 
 if raw := cp.Extra["artifact_policy_resolved"]; raw != nil {
@@ -524,6 +548,9 @@ if raw := cp.Extra["artifact_policy_resolved"]; raw != nil {
     eng.ArtifactPolicy = restored
 } else {
     // fallback for old checkpoints only
+    if cfg == nil {
+        return nil, fmt.Errorf("resume: checkpoint lacks artifact policy snapshot and run config is unavailable: %w", cfgLoadErr)
+    }
     rp, err := ResolveArtifactPolicy(cfg, ResolveArtifactPolicyInput{LogsRoot: logsRoot, WorktreeDir: eng.WorktreeDir})
     if err != nil { return nil, err }
     eng.ArtifactPolicy = rp
@@ -803,11 +830,11 @@ Expected: FAIL.
 verify_artifacts [
     shape=parallelogram,
     type="verify.artifacts",
-    max_retries=1
+    max_retries=0
 ]
 ```
 
-Use `max_retries=1` specifically to permit one retry when the handler returns `status=retry` for transient `git status`/filesystem infra failures.
+Keep `max_retries=0` to preserve deterministic-gate contract and existing guardrail expectations. Transient infra failures from `verify.artifacts` must route through `failure_class=transient_infra` paths, not per-node retries.
 
 - [ ] **Step 4: Update `@english-to-dotfile` instructions and run template YAML**
 
