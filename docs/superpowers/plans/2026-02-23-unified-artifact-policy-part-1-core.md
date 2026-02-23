@@ -38,6 +38,8 @@ This is a standalone, shippable phase. It intentionally excludes artifact verifi
   Responsibility: run-config schema, defaults, validation hooks.
 - Modify: `internal/attractor/engine/config_runtime_policy_test.go`  
   Responsibility: config defaults/validation tests (including checkpoint exclude migration assertions).
+- Modify: `internal/attractor/engine/checkpoint_exclude_test.go`  
+  Responsibility: migrate integration test input from legacy git excludes to artifact policy excludes in Chunk 1 so early commits stay green.
 - Modify: `internal/attractor/engine/engine.go`  
   Responsibility: runtime field to hold resolved artifact policy.
 - Modify: `internal/attractor/engine/run_with_config.go`  
@@ -50,8 +52,12 @@ This is a standalone, shippable phase. It intentionally excludes artifact verifi
   Responsibility: env behavior regression tests (Rust and non-Rust).
 - Modify: `internal/attractor/engine/tool_hooks.go`  
   Responsibility: pass resolved policy into env builders at call sites.
-- Modify: `internal/attractor/engine/checkpoint_exclude_test.go`  
-  Responsibility: checkpoint exclusion behavior regression tests.
+- Modify: `internal/attractor/engine/handlers.go`  
+  Responsibility: update `buildBaseNodeEnv` caller for new signature.
+- Modify: `internal/attractor/engine/codergen_router.go`  
+  Responsibility: update env-builder callers and agent-loop override invocation for policy-aware signatures.
+- Modify: `internal/attractor/engine/api_env_parity_test.go`  
+  Responsibility: keep API/CLI env parity tests aligned after `buildAgentLoopOverrides` changes.
 - Modify: `skills/english-to-dotfile/reference_run_template.yaml`  
   Responsibility: minimal authoring surface for new run-config contract.
 
@@ -64,6 +70,7 @@ This is a standalone, shippable phase. It intentionally excludes artifact verifi
 - Create: `internal/attractor/engine/artifact_policy_test_helpers_test.go`
 - Modify: `internal/attractor/engine/config.go`
 - Test: `internal/attractor/engine/config_runtime_policy_test.go`
+- Test: `internal/attractor/engine/checkpoint_exclude_test.go`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -160,6 +167,19 @@ func applyArtifactPolicyDefaults(cfg *RunConfigFile) {
 }
 
 func validateArtifactPolicyConfig(cfg *RunConfigFile) error {
+	allowedProfiles := map[string]struct{}{
+		"generic": {},
+		"rust":    {},
+		"go":      {},
+		"node":    {},
+		"python":  {},
+		"java":    {},
+	}
+	for _, p := range cfg.ArtifactPolicy.Profiles {
+		if _, ok := allowedProfiles[p]; !ok {
+			return fmt.Errorf("artifact_policy.profiles contains unsupported profile %q", p)
+		}
+	}
 	if len(cfg.Git.CheckpointExcludeGlobs) > 0 {
 		return fmt.Errorf("git.checkpoint_exclude_globs is not supported in Part 1; use artifact_policy.checkpoint.exclude_globs")
 	}
@@ -203,7 +223,26 @@ Migration sequencing requirement:
 - In `applyConfigDefaults`, stop auto-populating `cfg.Git.CheckpointExcludeGlobs`.
 - Keep the legacy field empty by default.
 - Populate defaults in `cfg.ArtifactPolicy.Checkpoint.ExcludeGlobs` instead.
-- Update `internal/attractor/engine/config_runtime_policy_test.go` to assert the new default location.
+- Replace `TestApplyConfigDefaults_CheckpointExcludeGlobs` in `internal/attractor/engine/config_runtime_policy_test.go` with:
+
+```go
+func TestApplyConfigDefaults_ArtifactPolicyCheckpointExcludeGlobs(t *testing.T) {
+	cfg := &RunConfigFile{}
+	applyConfigDefaults(cfg)
+	if len(cfg.ArtifactPolicy.Checkpoint.ExcludeGlobs) == 0 {
+		t.Fatal("expected non-empty artifact_policy.checkpoint.exclude_globs defaults")
+	}
+	if len(cfg.Git.CheckpointExcludeGlobs) != 0 {
+		t.Fatal("legacy git.checkpoint_exclude_globs must remain empty")
+	}
+}
+```
+
+- In the same commit, migrate `internal/attractor/engine/checkpoint_exclude_test.go` setup from:
+  - `cfg.Git.CheckpointExcludeGlobs = ...`
+  to:
+  - `cfg.ArtifactPolicy.Checkpoint.ExcludeGlobs = ...`
+  so Chunk 1 remains test-green.
 
 Profile whitelist for Part 1: `generic`, `rust`, `go`, `node`, `python`, `java`.
 
@@ -212,13 +251,17 @@ Profile whitelist for Part 1: `generic`, `rust`, `go`, `node`, `python`, `java`.
 Run: `go test ./internal/attractor/engine -run '(ArtifactPolicy.*(Initialized|ProfilesDefault|RejectsUnknownProfile|RejectsLegacyGitCheckpointExcludes)|LegacyGitCheckpointExcludesNotAutoPopulated)' -count=1`  
 Expected: PASS.
 
+Run: `go test ./internal/attractor/engine -run 'CheckpointExcludesConfiguredArtifacts' -count=1`  
+Expected: PASS (ensures Chunk 1 migration did not break existing integration coverage).
+
 - [ ] **Step 5: Commit**
 
 ```bash
 git add internal/attractor/engine/config.go \
   internal/attractor/engine/artifact_policy.go \
   internal/attractor/engine/artifact_policy_test_helpers_test.go \
-  internal/attractor/engine/config_runtime_policy_test.go
+  internal/attractor/engine/config_runtime_policy_test.go \
+  internal/attractor/engine/checkpoint_exclude_test.go
 git commit -m "engine/config: add minimal artifact_policy run-config contract"
 ```
 
@@ -278,11 +321,27 @@ Resolver contract for Part 1:
 - Resolution happens once in `run_with_config.go`.
 - Precedence for env values: OS env > run-config `env.overrides` (active profiles) > profile defaults.
 - Relative `managed_roots.*` values are rooted at `{logs_root}/policy-managed-roots/<value>`.
+- Profile default templates like `{managed_roots.tool_cache_root}/cargo-target` must be expanded after managed-root resolution and before OS-env precedence is applied.
 - Checkpoint excludes are computed from `artifact_policy.checkpoint.exclude_globs`.
 
 Built-in profile defaults must be explicit in `artifact_policy_resolve.go`:
 
 ```go
+type ResolvedArtifactPolicy struct {
+	Profiles   []string
+	ManagedRoots map[string]string
+	Env        ResolvedArtifactEnv
+	Checkpoint ResolvedArtifactCheckpoint
+}
+
+type ResolvedArtifactEnv struct {
+	Vars map[string]string
+}
+
+type ResolvedArtifactCheckpoint struct {
+	ExcludeGlobs []string
+}
+
 var profileDefaultEnv = map[string]map[string]string{
 	"generic": {},
 	"rust": {
@@ -341,6 +400,9 @@ git commit -m "engine/runtime: resolve artifact policy once and restore on resum
 - Modify: `internal/attractor/engine/node_env_test.go`
 - Modify: `internal/attractor/engine/engine.go`
 - Modify: `internal/attractor/engine/tool_hooks.go`
+- Modify: `internal/attractor/engine/handlers.go`
+- Modify: `internal/attractor/engine/codergen_router.go`
+- Modify: `internal/attractor/engine/api_env_parity_test.go`
 - Modify: `internal/attractor/engine/checkpoint_exclude_test.go`
 
 - [ ] **Step 1: Write failing regression tests for Rust de-specialization**
@@ -413,7 +475,8 @@ Expected: FAIL while Rust hardcoded branches are still present.
 Required edits:
 - `node_env.go`: change `buildBaseNodeEnv` signature to accept resolved policy (`buildBaseNodeEnv(worktreeDir string, rp ResolvedArtifactPolicy)`), delete Rust/Go-specific env branch logic, and merge `rp.Env.Vars` deterministically.
 - `node_env.go`: replace hardcoded `buildAgentLoopOverrides` keep-map with policy-driven forwarding derived from resolved env vars.
-- `tool_hooks.go`: update call sites to pass resolved policy into `buildBaseNodeEnv`.
+- `tool_hooks.go`, `handlers.go`, and `codergen_router.go`: update all call sites to pass resolved policy into `buildBaseNodeEnv`.
+- `codergen_router.go` and `api_env_parity_test.go`: update `buildAgentLoopOverrides` call/expectation to use policy-aware signature.
 - `engine.go`: source checkpoint `:(exclude)` pathspec globs only from `Engine.ArtifactPolicy.Checkpoint.ExcludeGlobs`.
 - ensure deterministic ordering of excludes for stable tests.
 
@@ -429,6 +492,9 @@ git add internal/attractor/engine/node_env.go \
   internal/attractor/engine/node_env_test.go \
   internal/attractor/engine/engine.go \
   internal/attractor/engine/tool_hooks.go \
+  internal/attractor/engine/handlers.go \
+  internal/attractor/engine/codergen_router.go \
+  internal/attractor/engine/api_env_parity_test.go \
   internal/attractor/engine/checkpoint_exclude_test.go
 git commit -m "engine: remove hardcoded Rust/Go artifact handling in env and checkpoint paths"
 ```
