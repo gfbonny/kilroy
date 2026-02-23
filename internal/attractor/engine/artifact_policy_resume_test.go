@@ -15,7 +15,7 @@ func TestResume_RestoreArtifactPolicy_UsesCheckpointSnapshot(t *testing.T) {
 		},
 	}
 	cfg := validMinimalRunConfigForTest()
-	rp, err := restoreArtifactPolicyForResume(cp, cfg, ResolveArtifactPolicyInput{LogsRoot: t.TempDir(), WorktreeDir: t.TempDir()})
+	rp, err := restoreArtifactPolicyForResume(cp, cfg, ResolveArtifactPolicyInput{LogsRoot: t.TempDir()})
 	if err != nil {
 		t.Fatalf("restoreArtifactPolicyForResume: %v", err)
 	}
@@ -28,7 +28,7 @@ func TestResume_RestoreArtifactPolicy_FallsBackToResolverWhenSnapshotMissing(t *
 	cp := runtime.NewCheckpoint() // no artifact_policy_resolved in Extra
 	cfg := validMinimalRunConfigForTest()
 	cfg.ArtifactPolicy.Profiles = []string{"rust"}
-	rp, err := restoreArtifactPolicyForResume(cp, cfg, ResolveArtifactPolicyInput{LogsRoot: t.TempDir(), WorktreeDir: t.TempDir()})
+	rp, err := restoreArtifactPolicyForResume(cp, cfg, ResolveArtifactPolicyInput{LogsRoot: t.TempDir()})
 	if err != nil {
 		t.Fatalf("restoreArtifactPolicyForResume: %v", err)
 	}

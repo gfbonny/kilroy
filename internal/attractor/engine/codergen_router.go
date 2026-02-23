@@ -217,7 +217,7 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 		for k, v := range buildStageRuntimeEnv(execCtx, node.ID) {
 			stageEnv[k] = v
 		}
-		overrides := buildAgentLoopOverrides(execCtx.WorktreeDir, artifactPolicyFromExecution(execCtx), stageEnv)
+		overrides := buildAgentLoopOverrides(artifactPolicyFromExecution(execCtx), stageEnv)
 		env := agent.NewLocalExecutionEnvironmentWithPolicy(execCtx.WorktreeDir, overrides, []string{"CLAUDECODE"})
 		text, used, err := r.withFailoverText(ctx, execCtx, node, client, provider, modelID, func(prov string, mid string) (string, error) {
 			var profile agent.ProviderProfile
@@ -972,7 +972,7 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 	codexSemantics := usesCodexCLISemantics(providerKey, exe)
 
 	// Build the base env once — used by codex initial + retries and non-codex paths.
-	baseEnv := buildBaseNodeEnv(execCtx.WorktreeDir, artifactPolicyFromExecution(execCtx))
+	baseEnv := buildBaseNodeEnv(artifactPolicyFromExecution(execCtx))
 
 	var isolatedEnv []string
 	var isolatedMeta map[string]any

@@ -27,8 +27,7 @@ type ResolvedArtifactCheckpoint struct {
 }
 
 type ResolveArtifactPolicyInput struct {
-	LogsRoot    string `json:"logs_root,omitempty"`
-	WorktreeDir string `json:"worktree_dir,omitempty"`
+	LogsRoot string `json:"logs_root,omitempty"`
 }
 
 type artifactPolicyResolvedEnvelope struct {

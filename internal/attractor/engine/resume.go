@@ -210,8 +210,7 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 		return nil, fmt.Errorf("resume: unable to derive run_branch_prefix from manifest/config")
 	}
 	resolvedArtifactPolicy, err := restoreArtifactPolicyForResume(cp, cfg, ResolveArtifactPolicyInput{
-		LogsRoot:    logsRoot,
-		WorktreeDir: filepath.Join(logsRoot, "worktree"),
+		LogsRoot: logsRoot,
 	})
 	if err != nil {
 		return nil, err

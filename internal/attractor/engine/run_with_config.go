@@ -107,8 +107,7 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 		opts.RequireClean = *cfg.Git.RequireClean
 	}
 	resolvedArtifactPolicy, err := ResolveArtifactPolicy(cfg, ResolveArtifactPolicyInput{
-		LogsRoot:    opts.LogsRoot,
-		WorktreeDir: opts.WorktreeDir,
+		LogsRoot: opts.LogsRoot,
 	})
 	if err != nil {
 		return nil, err

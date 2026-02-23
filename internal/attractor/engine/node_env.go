@@ -15,15 +15,9 @@ const (
 )
 
 // buildBaseNodeEnv constructs the base environment for any node execution.
-// It:
-//   - Starts from os.Environ()
-//   - Strips CLAUDECODE (nested session protection)
-//   - Applies resolved artifact policy env vars
-//
-// Both ToolHandler and CodergenRouter should use this as their starting env,
-// then apply handler-specific overrides on top.
-func buildBaseNodeEnv(worktreeDir string, rp ResolvedArtifactPolicy) []string {
-	_ = worktreeDir
+// It starts from os.Environ(), strips CLAUDECODE, then applies resolved
+// artifact policy environment variables.
+func buildBaseNodeEnv(rp ResolvedArtifactPolicy) []string {
 	base := os.Environ()
 	base = stripEnvKey(base, "CLAUDECODE")
 
@@ -109,8 +103,8 @@ func buildStageRuntimePreamble(execCtx *Execution, nodeID string) string {
 // buildAgentLoopOverrides extracts the subset of base-node environment
 // invariants needed by the API agent_loop path and merges contract env vars.
 // It bridges buildBaseNodeEnv's []string format to agent.BaseEnv's map format.
-func buildAgentLoopOverrides(worktreeDir string, rp ResolvedArtifactPolicy, contractEnv map[string]string) map[string]string {
-	base := buildBaseNodeEnv(worktreeDir, rp)
+func buildAgentLoopOverrides(rp ResolvedArtifactPolicy, contractEnv map[string]string) map[string]string {
+	base := buildBaseNodeEnv(rp)
 	normalized := normalizeResolvedArtifactPolicy(rp)
 	keep := make(map[string]bool, len(normalized.Env.Vars))
 	for k := range normalized.Env.Vars {

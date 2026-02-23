@@ -38,7 +38,7 @@ func TestResolveArtifactPolicy_OSOverridesProfileDefaults(t *testing.T) {
 func TestResolveArtifactPolicy_CheckpointExcludesMirrorConfig(t *testing.T) {
 	cfg := validMinimalRunConfigForTest()
 	cfg.ArtifactPolicy.Checkpoint.ExcludeGlobs = []string{"**/.cargo-target*/**"}
-	rp, err := ResolveArtifactPolicy(cfg, ResolveArtifactPolicyInput{LogsRoot: t.TempDir(), WorktreeDir: t.TempDir()})
+	rp, err := ResolveArtifactPolicy(cfg, ResolveArtifactPolicyInput{LogsRoot: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}

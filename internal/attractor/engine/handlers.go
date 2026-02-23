@@ -559,7 +559,7 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 	defer cancel()
 	cmd := exec.CommandContext(cctx, "bash", "-c", cmdStr)
 	cmd.Dir = execCtx.WorktreeDir
-	cmd.Env = buildBaseNodeEnv(execCtx.WorktreeDir, artifactPolicyFromExecution(execCtx))
+	cmd.Env = buildBaseNodeEnv(artifactPolicyFromExecution(execCtx))
 	// Avoid hanging on interactive reads; tool_command doesn't provide a way to supply stdin.
 	cmd.Stdin = strings.NewReader("")
 	stdoutPath := filepath.Join(stageDir, "stdout.log")

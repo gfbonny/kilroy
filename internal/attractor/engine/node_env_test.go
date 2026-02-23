@@ -17,7 +17,7 @@ func TestBuildBaseNodeEnv_RustVarsComeFromResolvedPolicy(t *testing.T) {
 			},
 		},
 	}
-	env := buildBaseNodeEnv(t.TempDir(), rp)
+	env := buildBaseNodeEnv(rp)
 	if !containsEnv(env, "CARGO_TARGET_DIR=/tmp/policy-target") {
 		t.Fatal("expected CARGO_TARGET_DIR from resolved artifact policy")
 	}
@@ -39,7 +39,7 @@ func TestBuildBaseNodeEnv_NoImplicitRustOrGoInjectionWithoutPolicy(t *testing.T)
 	unset("GOPATH")
 	unset("GOMODCACHE")
 
-	env := buildBaseNodeEnv(t.TempDir(), ResolvedArtifactPolicy{})
+	env := buildBaseNodeEnv(ResolvedArtifactPolicy{})
 	if findEnvPrefix(env, "CARGO_TARGET_DIR=") != "" {
 		t.Fatal("unexpected implicit Rust env injection")
 	}
@@ -53,7 +53,7 @@ func TestBuildBaseNodeEnv_NoImplicitRustOrGoInjectionWithoutPolicy(t *testing.T)
 
 func TestBuildBaseNodeEnv_StripsClaudeCode(t *testing.T) {
 	t.Setenv("CLAUDECODE", "1")
-	env := buildBaseNodeEnv(t.TempDir(), ResolvedArtifactPolicy{})
+	env := buildBaseNodeEnv(ResolvedArtifactPolicy{})
 	if envHasKey(env, "CLAUDECODE") {
 		t.Fatal("CLAUDECODE should be stripped from base env")
 	}
@@ -77,7 +77,7 @@ func TestBuildBaseNodeEnv_PreservesExplicitToolchainPaths(t *testing.T) {
 			},
 		},
 	}
-	env := buildBaseNodeEnv(t.TempDir(), rp)
+	env := buildBaseNodeEnv(rp)
 
 	if got := envLookup(env, "CARGO_HOME"); got != cargoHome {
 		t.Fatalf("CARGO_HOME: got %q want %q", got, cargoHome)
@@ -149,8 +149,7 @@ func TestBuildCodexIsolatedEnv_PreservesToolchainPaths(t *testing.T) {
 	}
 
 	stageDir := t.TempDir()
-	worktree := t.TempDir()
-	env, _, err := buildCodexIsolatedEnv(stageDir, buildBaseNodeEnv(worktree, rp))
+	env, _, err := buildCodexIsolatedEnv(stageDir, buildBaseNodeEnv(rp))
 	if err != nil {
 		t.Fatalf("buildCodexIsolatedEnv: %v", err)
 	}
@@ -192,8 +191,7 @@ func TestBuildCodexIsolatedEnvWithName_RetryPreservesToolchainPaths(t *testing.T
 	}
 
 	stageDir := t.TempDir()
-	worktree := t.TempDir()
-	baseEnv := buildBaseNodeEnv(worktree, rp)
+	baseEnv := buildBaseNodeEnv(rp)
 
 	for attempt := 1; attempt <= 3; attempt++ {
 		name := fmt.Sprintf("codex-home-retry%d", attempt)
