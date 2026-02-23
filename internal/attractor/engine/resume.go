@@ -209,8 +209,16 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 	if strings.TrimSpace(prefix) == "" {
 		return nil, fmt.Errorf("resume: unable to derive run_branch_prefix from manifest/config")
 	}
+	resolvedArtifactPolicy, err := restoreArtifactPolicyForResume(cp, cfg, ResolveArtifactPolicyInput{
+		LogsRoot:    logsRoot,
+		WorktreeDir: filepath.Join(logsRoot, "worktree"),
+	})
+	if err != nil {
+		return nil, err
+	}
 	eng = newBaseEngine(g, dotSource, opts)
 	eng.RunConfig = cfg
+	eng.ArtifactPolicy = resolvedArtifactPolicy
 	eng.CodergenBackend = backend
 	eng.CXDB = sink
 	eng.ModelCatalogSHA = func() string {

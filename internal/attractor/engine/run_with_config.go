@@ -106,6 +106,13 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	if cfg.Git.RequireClean != nil {
 		opts.RequireClean = *cfg.Git.RequireClean
 	}
+	resolvedArtifactPolicy, err := ResolveArtifactPolicy(cfg, ResolveArtifactPolicyInput{
+		LogsRoot:    opts.LogsRoot,
+		WorktreeDir: opts.WorktreeDir,
+	})
+	if err != nil {
+		return nil, err
+	}
 
 	// Repo validation: cheap local checks that must pass before any expensive
 	// preflight work (provider probes, model catalog fetch, CXDB startup).
@@ -226,6 +233,7 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	eng := newBaseEngine(g, dotSource, opts)
 	eng.Registry = reg // reuse the registry from validation (avoids creating a duplicate)
 	eng.RunConfig = cfg
+	eng.ArtifactPolicy = resolvedArtifactPolicy
 	eng.Context = NewContextWithGraphAttrs(g)
 	eng.CodergenBackend = NewCodergenRouterWithRuntimes(cfg, catalog, runtimes)
 	eng.CXDB = sink

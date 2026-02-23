@@ -134,6 +134,10 @@ type Engine struct {
 	// Optional: config used to start the run (metaspec run config schema). Snapshotted to logs_root for resume.
 	RunConfig *RunConfigFile
 
+	// Resolved once per run (or restored from checkpoint on resume) so
+	// artifact behavior is deterministic across retries and resumes.
+	ArtifactPolicy ResolvedArtifactPolicy
+
 	RunBranch string
 
 	WorktreeDir string
@@ -1358,6 +1362,10 @@ func (e *Engine) checkpoint(nodeID string, out runtime.Outcome, completed []stri
 			cp.Extra["last_thread_key"] = e.lastResolvedThreadKey
 		}
 	}
+	cp.Extra[artifactPolicyResolvedExtraKey] = artifactPolicyResolvedEnvelope{
+		Version: artifactPolicyResolvedVersion,
+		Policy:  normalizeResolvedArtifactPolicy(e.ArtifactPolicy),
+	}
 	if err := cp.Save(filepath.Join(e.LogsRoot, "checkpoint.json")); err != nil {
 		return "", err
 	}
@@ -1365,10 +1373,10 @@ func (e *Engine) checkpoint(nodeID string, out runtime.Outcome, completed []stri
 }
 
 func (e *Engine) checkpointExcludeGlobs() []string {
-	if e == nil || e.RunConfig == nil {
+	if e == nil {
 		return nil
 	}
-	return append([]string{}, e.RunConfig.ArtifactPolicy.Checkpoint.ExcludeGlobs...)
+	return append([]string{}, e.ArtifactPolicy.Checkpoint.ExcludeGlobs...)
 }
 
 func (e *Engine) writeManifest(baseSHA string) error {
