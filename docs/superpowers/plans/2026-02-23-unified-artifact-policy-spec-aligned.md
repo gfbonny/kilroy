@@ -114,13 +114,12 @@ func TestValidateConfig_ArtifactPolicy_InvalidMode(t *testing.T) {
     }
 }
 
-func TestApplyConfigDefaults_ArtifactPolicy_MigratesLegacyCheckpointExcludes(t *testing.T) {
-    cfg := &RunConfigFile{}
+func TestValidateConfig_ArtifactPolicy_RejectsLegacyCheckpointExcludeField(t *testing.T) {
+    cfg := validMinimalRunConfigForTest()
     cfg.Git.CheckpointExcludeGlobs = []string{"**/legacy-cache/**"}
-    applyConfigDefaults(cfg)
-
-    if !slices.Contains(cfg.ArtifactPolicy.Checkpoint.ExcludeGlobs, "**/legacy-cache/**") {
-        t.Fatalf("legacy git.checkpoint_exclude_globs not migrated: %v", cfg.ArtifactPolicy.Checkpoint.ExcludeGlobs)
+    cfg.ArtifactPolicy.Checkpoint.ExcludeGlobs = nil
+    if err := validateConfig(cfg); err == nil {
+        t.Fatal("expected validation failure when git.checkpoint_exclude_globs is used without artifact_policy.checkpoint.exclude_globs")
     }
 }
 ```
@@ -143,7 +142,7 @@ type ArtifactPolicyConfig struct {
 }
 
 type ArtifactProfilesConfig struct {
-    Mode     string   `json:"mode,omitempty" yaml:"mode,omitempty"` // auto|explicit
+    Mode     string   `json:"mode,omitempty" yaml:"mode,omitempty"` // auto|explicit|disabled
     Explicit []string `json:"explicit,omitempty" yaml:"explicit,omitempty"`
 }
 
@@ -170,12 +169,6 @@ func applyArtifactPolicyDefaults(cfg *RunConfigFile) {
         cfg.ArtifactPolicy.Profiles.Mode = "auto"
     }
 
-    // Legacy bridge for existing run files: if artifact_policy checkpoint rules
-    // are unset but git.checkpoint_exclude_globs has values, promote them.
-    if len(trimNonEmpty(cfg.ArtifactPolicy.Checkpoint.ExcludeGlobs)) == 0 && len(trimNonEmpty(cfg.Git.CheckpointExcludeGlobs)) > 0 {
-        cfg.ArtifactPolicy.Checkpoint.ExcludeGlobs = append([]string{}, trimNonEmpty(cfg.Git.CheckpointExcludeGlobs)...)
-    }
-
     cfg.ArtifactPolicy.Checkpoint.ExcludeGlobs = trimNonEmpty(cfg.ArtifactPolicy.Checkpoint.ExcludeGlobs)
     if len(cfg.ArtifactPolicy.Checkpoint.ExcludeGlobs) == 0 {
         cfg.ArtifactPolicy.Checkpoint.ExcludeGlobs = []string{
@@ -188,6 +181,16 @@ func applyArtifactPolicyDefaults(cfg *RunConfigFile) {
         cfg.ArtifactPolicy.Verify.DenyGlobs = append([]string{}, cfg.ArtifactPolicy.Checkpoint.ExcludeGlobs...)
     }
     cfg.ArtifactPolicy.Verify.AllowGlobs = trimNonEmpty(cfg.ArtifactPolicy.Verify.AllowGlobs)
+
+    // Zero-compatibility stance: validation rejects legacy field usage instead
+    // of silently merging or ignoring values.
+}
+
+func validateArtifactPolicyConfig(cfg *RunConfigFile) error {
+    if len(trimNonEmpty(cfg.Git.CheckpointExcludeGlobs)) > 0 && len(trimNonEmpty(cfg.ArtifactPolicy.Checkpoint.ExcludeGlobs)) == 0 {
+        return fmt.Errorf("git.checkpoint_exclude_globs is legacy; use artifact_policy.checkpoint.exclude_globs")
+    }
+    return nil
 }
 ```
 
@@ -253,6 +256,27 @@ Expected: FAIL because resolver/detector does not exist.
 - [ ] **Step 3: Implement resolver algorithm and precedence contract**
 
 ```go
+type ResolvedArtifactPolicy struct {
+    ActiveProfiles []string
+    Env            ResolvedArtifactEnv
+    ManagedRoots   map[string]string
+    Checkpoint     ResolvedArtifactCheckpoint
+    Verify         ResolvedArtifactVerify
+}
+
+type ResolvedArtifactEnv struct {
+    Vars map[string]string
+}
+
+type ResolvedArtifactCheckpoint struct {
+    ExcludeGlobs []string
+}
+
+type ResolvedArtifactVerify struct {
+    DenyGlobs  []string
+    AllowGlobs []string
+}
+
 // Resolution precedence:
 // 1) explicit OS env value
 // 2) profile override in artifact_policy.env.overrides
@@ -261,8 +285,22 @@ Expected: FAIL because resolver/detector does not exist.
 //
 // Note: `github.com/bmatcuk/doublestar/v4` is already in this repo's module graph,
 // so no new dependency bootstrap step is required for glob evaluation.
+//
+// Managed root path rule:
+// - absolute value => use as-is
+// - relative value => resolve under {logs_root}/artifacts/managed-roots/{value}
 
 func ResolveArtifactPolicy(cfg *RunConfigFile, in ResolveArtifactPolicyInput) (ResolvedArtifactPolicy, error) {
+    if strings.EqualFold(strings.TrimSpace(cfg.ArtifactPolicy.Profiles.Mode), "disabled") {
+        return ResolvedArtifactPolicy{
+            ActiveProfiles: nil,
+            Env:            ResolvedArtifactEnv{Vars: map[string]string{}},
+            ManagedRoots:   map[string]string{},
+            Checkpoint:     ResolvedArtifactCheckpoint{ExcludeGlobs: trimNonEmpty(cfg.ArtifactPolicy.Checkpoint.ExcludeGlobs)},
+            Verify:         ResolvedArtifactVerify{DenyGlobs: nil, AllowGlobs: nil},
+        }, nil
+    }
+
     profiles, err := resolveProfiles(cfg.ArtifactPolicy.Profiles, cfg.Repo.Path)
     if err != nil { return ResolvedArtifactPolicy{}, err }
 
@@ -278,6 +316,24 @@ func ResolveArtifactPolicy(cfg *RunConfigFile, in ResolveArtifactPolicyInput) (R
         Checkpoint:     ResolvedArtifactCheckpoint{ExcludeGlobs: checkpoint},
         Verify:         verify,
     }, nil
+}
+
+func (rp ResolvedArtifactPolicy) Hash() string {
+    b, _ := json.Marshal(rp) // canonical struct encoding for deterministic checkpoints
+    sum := sha256.Sum256(b)
+    return fmt.Sprintf("%x", sum[:])
+}
+
+func decodeResolvedArtifactPolicy(raw any) (ResolvedArtifactPolicy, error) {
+    b, err := json.Marshal(raw) // map[string]any -> JSON
+    if err != nil {
+        return ResolvedArtifactPolicy{}, err
+    }
+    var rp ResolvedArtifactPolicy
+    if err := json.Unmarshal(b, &rp); err != nil {
+        return ResolvedArtifactPolicy{}, err
+    }
+    return rp, nil
 }
 ```
 
@@ -337,7 +393,10 @@ cp.Extra["artifact_policy_resolved_sha256"] = e.ArtifactPolicy.Hash()
 ```go
 // resume.go
 if raw := cp.Extra["artifact_policy_resolved"]; raw != nil {
-    restored := mustDecodeResolvedArtifactPolicy(raw)
+    restored, err := decodeResolvedArtifactPolicy(raw)
+    if err != nil {
+        return nil, fmt.Errorf("resume: decode artifact policy snapshot: %w", err)
+    }
     if want := strings.TrimSpace(fmt.Sprint(cp.Extra["artifact_policy_resolved_sha256"])); want != "" && restored.Hash() != want {
         return nil, fmt.Errorf("resume: artifact policy snapshot hash mismatch")
     }
@@ -400,18 +459,17 @@ Expected: FAIL due to old signature/behavior.
 
 ```go
 func buildBaseNodeEnv(worktreeDir string, rp ResolvedArtifactPolicy) []string {
-    base := stripEnvKey(os.Environ(), "CLAUDECODE")
-    overrides := map[string]string{}
-
-    for k, v := range rp.Env.Vars {
-        if strings.TrimSpace(os.Getenv(k)) != "" {
-            overrides[k] = strings.TrimSpace(os.Getenv(k)) // explicit env wins
-            continue
-        }
-        overrides[k] = v
-    }
-
-    return mergeEnvWithOverrides(base, overrides)
+    // Keep existing toolchain pinning behavior (CARGO_HOME, RUSTUP_HOME,
+    // GOPATH, GOMODCACHE, CARGO_TARGET_DIR) and layer policy env on top.
+    // `buildLegacyPinnedToolchainEnv` is the current pre-refactor function body
+    // moved verbatim to avoid behavior drift.
+    // Policy merge order:
+    //   1) explicit OS env
+    //   2) resolved policy vars
+    //   3) existing toolchain fallback derivation
+    env := buildLegacyPinnedToolchainEnv(worktreeDir)
+    env = mergeEnvWithOverrides(env, rp.Env.Vars)
+    return stripEnvKey(env, "CLAUDECODE")
 }
 ```
 
@@ -428,7 +486,10 @@ baseEnv := buildBaseNodeEnv(execCtx.WorktreeDir, execCtx.Engine.ArtifactPolicy)
 env := buildBaseNodeEnv(execCtx.WorktreeDir, execCtx.Engine.ArtifactPolicy)
 
 // node_env.go internal callers
-base := buildBaseNodeEnv(worktreeDir, rp)
+func buildAgentLoopOverrides(worktreeDir string, rp ResolvedArtifactPolicy, contractEnv map[string]string) map[string]string {
+    base := buildBaseNodeEnv(worktreeDir, rp)
+    // ... existing key extraction logic ...
+}
 ```
 
 - [ ] **Step 5: Run tests to verify pass**
@@ -549,6 +610,11 @@ func (h *ArtifactVerifyHandler) Execute(ctx context.Context, execCtx *Execution,
 }
 ```
 
+`collectChangedPaths` contract for this plan:
+- It evaluates repository state *after* the prior node checkpoint commit.
+- Therefore it is expected to surface paths still present because they are excluded from checkpoint staging or remain untracked.
+- This keeps behavior consistent with the current `verify_artifacts` gate intent while moving logic into a typed handler.
+
 - [ ] **Step 4: Register handler type and keep routing contract explicit**
 
 ```go
@@ -589,8 +655,11 @@ git commit -m "engine/handlers: add policy-driven verify.artifacts handler with 
 
 ```go
 func TestReferenceTemplate_VerifyArtifactsUsesBuiltInHandler(t *testing.T) {
-    g := loadReferenceTemplateGraph(t)
-    n := mustNode(t, g, "verify_artifacts")
+    src := loadReferenceTemplate(t)
+    g, err := dot.Parse(src)
+    if err != nil { t.Fatalf("parse reference template: %v", err) }
+    n := g.Nodes["verify_artifacts"]
+    if n == nil { t.Fatal("missing verify_artifacts node") }
     if got := n.Attr("type", ""); got != "verify.artifacts" {
         t.Fatalf("verify_artifacts.type: got %q want verify.artifacts", got)
     }
@@ -622,7 +691,7 @@ artifact_policy:
     mode: auto
   env:
     managed_roots:
-      tool_cache_root: "${KILROY_LOGS_ROOT}/artifacts/managed-roots/tool-cache"
+      tool_cache_root: "tool-cache"
   checkpoint:
     exclude_globs:
       - "**/.cargo-target*/**"
@@ -633,6 +702,10 @@ artifact_policy:
       - "**/node_modules/**"
     allow_globs: []
 ```
+
+Resolver rule for this field:
+- `artifact_policy.env.managed_roots.*` absolute values are used as-is.
+- Relative values are rooted at `{logs_root}/artifacts/managed-roots/` during policy resolution.
 
 - [ ] **Step 5: Run tests to verify pass**
 
@@ -675,9 +748,19 @@ Expected: FAIL.
 
 ```go
 // Example assertion target for failure payload:
-assert.Equal(t, "artifact_policy_violation", out.FailureReason)
-assert.Contains(t, out.Details.(map[string]any), "offending_paths")
-assert.Equal(t, failureClassDeterministic, out.ContextUpdates["failure_class"])
+if out.FailureReason != "artifact_policy_violation" {
+    t.Fatalf("failure_reason: got %q want artifact_policy_violation", out.FailureReason)
+}
+details, ok := out.Details.(map[string]any)
+if !ok {
+    t.Fatalf("details type: got %T want map[string]any", out.Details)
+}
+if _, ok := details["offending_paths"]; !ok {
+    t.Fatalf("missing details.offending_paths: %v", details)
+}
+if got := fmt.Sprint(out.ContextUpdates["failure_class"]); got != failureClassDeterministic {
+    t.Fatalf("failure_class: got %q want %q", got, failureClassDeterministic)
+}
 ```
 
 - [ ] **Step 4: Run targeted tests to verify pass**
