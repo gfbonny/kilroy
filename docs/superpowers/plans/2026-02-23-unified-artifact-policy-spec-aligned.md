@@ -18,7 +18,7 @@ This is one subsystem-level refactor (artifact policy contract + engine integrat
 
 - Do not modify `docs/strongdm/attractor/attractor-spec.md`.
 - Preserve Attractor idioms from the existing spec:
-  - handler contract (`execute(node, context, graph, logs_root) -> Outcome`),
+  - handler contract (spec-level abstract contract + Go implementation contract `Execute(ctx context.Context, exec *Execution, node *model.Node) (runtime.Outcome, error)`),
   - core execution loop order,
   - `Outcome` field semantics,
   - checkpoint/resume model.
@@ -49,6 +49,7 @@ This is one subsystem-level refactor (artifact policy contract + engine integrat
 - Create: `internal/attractor/engine/artifact_policy_resolve_test.go`
 - Create: `internal/attractor/engine/artifact_verify_handler_test.go`
 - Create: `internal/attractor/engine/artifact_policy_resume_test.go`
+- Create: `internal/attractor/engine/artifact_policy_test_helpers_test.go`
 - Modify: `internal/attractor/engine/config.go`
 - Modify: `internal/attractor/engine/config_runtime_policy_test.go`
 - Modify: `internal/attractor/engine/engine.go`
@@ -78,6 +79,11 @@ This is one subsystem-level refactor (artifact policy contract + engine integrat
 6. DOT/template/skill migration.
 7. Integration and regression tests.
 
+## Terminology Boundary
+
+- `artifact_policy` in this plan means run-time hygiene policy for build/cache/temp byproducts (env shaping, checkpoint excludes, verification).
+- `ArtifactStore` in `attractor-spec.md` §5.5 remains unchanged and still means named storage for large stage outputs.
+
 ## Chunk 1: Contracts and Resolution
 
 ### Task 1: Add Modular `artifact_policy` Run-Config Contract
@@ -85,6 +91,7 @@ This is one subsystem-level refactor (artifact policy contract + engine integrat
 **Files:**
 - Modify: `internal/attractor/engine/config.go`
 - Create: `internal/attractor/engine/artifact_policy.go`
+- Create: `internal/attractor/engine/artifact_policy_test_helpers_test.go`
 - Test: `internal/attractor/engine/config_runtime_policy_test.go`
 - Test: `internal/attractor/engine/artifact_policy_test.go`
 
@@ -117,11 +124,18 @@ func TestValidateConfig_ArtifactPolicy_InvalidMode(t *testing.T) {
 func TestValidateConfig_ArtifactPolicy_RejectsLegacyCheckpointExcludeField(t *testing.T) {
     cfg := validMinimalRunConfigForTest()
     cfg.Git.CheckpointExcludeGlobs = []string{"**/legacy-cache/**"}
-    cfg.ArtifactPolicy.Checkpoint.ExcludeGlobs = nil
     if err := validateConfig(cfg); err == nil {
-        t.Fatal("expected validation failure when git.checkpoint_exclude_globs is used without artifact_policy.checkpoint.exclude_globs")
+        t.Fatal("expected validation failure when git.checkpoint_exclude_globs is set (legacy field is forbidden)")
     }
 }
+```
+
+Add missing shared test helpers used across tasks:
+
+```go
+// artifact_policy_test_helpers_test.go
+func validMinimalRunConfigForTest() *RunConfigFile { /* fills required v1 fields */ }
+func setupRepoWithFiles(t *testing.T, relPaths []string) string { /* init git repo + create files */ }
 ```
 
 - [ ] **Step 2: Run tests to verify failure**
@@ -187,8 +201,8 @@ func applyArtifactPolicyDefaults(cfg *RunConfigFile) {
 }
 
 func validateArtifactPolicyConfig(cfg *RunConfigFile) error {
-    if len(trimNonEmpty(cfg.Git.CheckpointExcludeGlobs)) > 0 && len(trimNonEmpty(cfg.ArtifactPolicy.Checkpoint.ExcludeGlobs)) == 0 {
-        return fmt.Errorf("git.checkpoint_exclude_globs is legacy; use artifact_policy.checkpoint.exclude_globs")
+    if len(trimNonEmpty(cfg.Git.CheckpointExcludeGlobs)) > 0 {
+        return fmt.Errorf("git.checkpoint_exclude_globs is legacy and unsupported; use artifact_policy.checkpoint.exclude_globs")
     }
     return nil
 }
@@ -204,6 +218,7 @@ Expected: PASS.
 ```bash
 git add internal/attractor/engine/config.go \
   internal/attractor/engine/artifact_policy.go \
+  internal/attractor/engine/artifact_policy_test_helpers_test.go \
   internal/attractor/engine/config_runtime_policy_test.go \
   internal/attractor/engine/artifact_policy_test.go
 git commit -m "engine/config: add modular artifact_policy schema and defaults"
@@ -215,6 +230,24 @@ git commit -m "engine/config: add modular artifact_policy schema and defaults"
 - Create: `internal/attractor/engine/artifact_policy_profiles.go`
 - Create: `internal/attractor/engine/artifact_policy_resolve.go`
 - Test: `internal/attractor/engine/artifact_policy_resolve_test.go`
+
+Built-in profile detection contract (must be implemented exactly):
+- `rust` markers: `Cargo.toml`, `rust-toolchain.toml`, `rust-toolchain`
+- `go` markers: `go.mod`, `go.work`
+- `node` markers: `package.json`, `pnpm-lock.yaml`, `yarn.lock`, `package-lock.json`
+- `python` markers: `pyproject.toml`, `requirements.txt`, `setup.py`
+- `java` markers: `pom.xml`, `build.gradle`, `settings.gradle`
+- detection scope: repository root + recursive scan to depth 6, deterministic lexical ordering
+- no markers found: fallback profile `generic`
+- `profiles.mode=explicit`: use only `profiles.explicit` after validation
+- `profiles.mode=disabled`: disable profile-derived env/verify defaults
+
+Built-in profile env contract (default vars when not explicitly set in OS env):
+- `rust`: `CARGO_HOME`, `RUSTUP_HOME`, `CARGO_TARGET_DIR`
+- `go`: `GOPATH`, `GOMODCACHE` (derived from first GOPATH entry + `/pkg/mod`)
+- `node`: `npm_config_cache`, `PNPM_HOME`
+- `python`: `PIP_CACHE_DIR`
+- `java`: `GRADLE_USER_HOME`, `MAVEN_OPTS` cache path support
 
 - [ ] **Step 1: Write failing resolver tests for auto/explicit behavior**
 
@@ -318,10 +351,13 @@ func ResolveArtifactPolicy(cfg *RunConfigFile, in ResolveArtifactPolicyInput) (R
     }, nil
 }
 
-func (rp ResolvedArtifactPolicy) Hash() string {
-    b, _ := json.Marshal(rp) // canonical struct encoding for deterministic checkpoints
+func (rp ResolvedArtifactPolicy) Hash() (string, error) {
+    b, err := json.Marshal(rp) // deterministic struct encoding for checkpoints
+    if err != nil {
+        return "", err
+    }
     sum := sha256.Sum256(b)
-    return fmt.Sprintf("%x", sum[:])
+    return fmt.Sprintf("%x", sum[:]), nil
 }
 
 func decodeResolvedArtifactPolicy(raw any) (ResolvedArtifactPolicy, error) {
@@ -385,7 +421,11 @@ type Engine struct {
 
 // checkpoint save path (engine.go)
 cp.Extra["artifact_policy_resolved"] = e.ArtifactPolicy
-cp.Extra["artifact_policy_resolved_sha256"] = e.ArtifactPolicy.Hash()
+if h, err := e.ArtifactPolicy.Hash(); err == nil {
+    cp.Extra["artifact_policy_resolved_sha256"] = h
+} else {
+    return "", fmt.Errorf("checkpoint: hash resolved artifact policy: %w", err)
+}
 ```
 
 - [ ] **Step 4: Restore resolved policy on resume with deterministic fallback**
@@ -397,8 +437,14 @@ if raw := cp.Extra["artifact_policy_resolved"]; raw != nil {
     if err != nil {
         return nil, fmt.Errorf("resume: decode artifact policy snapshot: %w", err)
     }
-    if want := strings.TrimSpace(fmt.Sprint(cp.Extra["artifact_policy_resolved_sha256"])); want != "" && restored.Hash() != want {
-        return nil, fmt.Errorf("resume: artifact policy snapshot hash mismatch")
+    if want := strings.TrimSpace(fmt.Sprint(cp.Extra["artifact_policy_resolved_sha256"])); want != "" {
+        got, hashErr := restored.Hash()
+        if hashErr != nil {
+            return nil, fmt.Errorf("resume: hash restored artifact policy: %w", hashErr)
+        }
+        if got != want {
+            return nil, fmt.Errorf("resume: artifact policy snapshot hash mismatch")
+        }
     }
     eng.ArtifactPolicy = restored
 } else {
@@ -483,7 +529,8 @@ cmd.Env = buildBaseNodeEnv(execCtx.WorktreeDir, execCtx.Engine.ArtifactPolicy)
 baseEnv := buildBaseNodeEnv(execCtx.WorktreeDir, execCtx.Engine.ArtifactPolicy)
 
 // tool_hooks.go
-env := buildBaseNodeEnv(execCtx.WorktreeDir, execCtx.Engine.ArtifactPolicy)
+preHookEnv := buildBaseNodeEnv(execCtx.WorktreeDir, execCtx.Engine.ArtifactPolicy)  // runPreToolHook
+postHookEnv := buildBaseNodeEnv(execCtx.WorktreeDir, execCtx.Engine.ArtifactPolicy) // executeToolHookForEvent
 
 // node_env.go internal callers
 func buildAgentLoopOverrides(worktreeDir string, rp ResolvedArtifactPolicy, contractEnv map[string]string) map[string]string {
@@ -614,6 +661,8 @@ func (h *ArtifactVerifyHandler) Execute(ctx context.Context, execCtx *Execution,
 - It evaluates repository state *after* the prior node checkpoint commit.
 - Therefore it is expected to surface paths still present because they are excluded from checkpoint staging or remain untracked.
 - This keeps behavior consistent with the current `verify_artifacts` gate intent while moving logic into a typed handler.
+- It reads `git status --porcelain --untracked-files=all` non-ignored paths; ignored files are intentionally out-of-scope.
+- To avoid persistent false positives, profile env rules must direct build/cache roots outside the worktree (or projects must explicitly track/ignore them as policy intends).
 
 - [ ] **Step 4: Register handler type and keep routing contract explicit**
 
