@@ -1,5 +1,8 @@
 version: 1
 
+graph: path/to/graph.dot
+task: "Short description of what this run accomplishes"
+
 repo:
   path: /absolute/path/to/target/repo
 
