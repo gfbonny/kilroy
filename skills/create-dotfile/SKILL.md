@@ -48,6 +48,21 @@ Model defaults source:
 - Ensure every `shape=box` node resolves provider + model via attrs or stylesheet.
 - Keep backend choice (`cli` vs `api`) out of DOT; backend belongs in run config.
 
+## Model Constraint Contract (Required)
+
+- Treat explicit user model/provider directives as hard constraints.
+- For explicit fan-out mappings, keep branch-to-model assignments one-to-one; do not reorder branches or merge assignments.
+- Canonicalize provider aliases for DOT keys: `gemini`/`google_ai_studio` -> `google`, `z-ai`/`z.ai` -> `zai`, `moonshot`/`moonshotai` -> `kimi`, `minimax-ai` -> `minimax`.
+- Resolve explicit model IDs against local evidence in this order:
+1. exact user-provided ID (if already canonical),
+2. `internal/attractor/modeldb/pinned/openrouter_models.json`,
+3. `internal/attractor/modeldb/manual_models.yaml` (if present),
+4. `skills/shared/model_fallbacks.yaml` (backup only when other sources fail).
+- Never silently downgrade or substitute an explicit model request with a different major/minor family (example: requested `glm-5` must not become `glm-4.5`).
+- If exact canonical resolution is unavailable, preserve the user-requested model literal in `llm_model` (normalize whitespace only) instead of guessing a nearby model.
+- Apply known alias normalization from the fallback file before deciding unresolved status (for example: `glm-5.0` -> `glm-5` for provider `zai`).
+- Explicit user model/provider directives override `skills/create-dotfile/preferences.yaml` defaults.
+
 5. Compose node prompts and handoffs.
 - Every `shape=box` prompt must include both `$KILROY_STAGE_STATUS_PATH` and `$KILROY_STAGE_STATUS_FALLBACK_PATH`.
 - Require explicit success/fail/retry behavior. For fail/retry include `failure_reason` and `details` (and `failure_class` where applicable).
@@ -68,15 +83,6 @@ Model defaults source:
 - Verify no unresolved placeholders (`DEFAULT_MODEL`, etc.).
 - Run syntax + semantic validation loops, applying minimal fixes until clean.
 
-## Failure and Artifact Contracts (Required)
-
-- `failure_class` must be one of:
-  `transient_infra`, `budget_exhausted`, `compilation_loop`,
-  `deterministic`, `canceled`, `structural`.
-- Do not emit non-canonical `failure_class` values (for example: `semantic`).
-- For deterministic artifact checks, emit a failure payload that includes exact offending paths in details.
-- `verify_artifacts` checks must fail deterministically when artifacts are present and report exact offending paths.
-
 ## Non-Negotiable Guardrails
 
 - Programmatic output is DOT only (`digraph ... }`), no markdown fences or sentinel text.
@@ -92,3 +98,6 @@ Model defaults source:
 - `docs/strongdm/attractor/coding-agent-loop-spec.md`
 - `skills/create-dotfile/reference_template.dot`
 - `skills/create-dotfile/preferences.yaml`
+- `skills/shared/model_fallbacks.yaml`
+- `internal/attractor/modeldb/pinned/openrouter_models.json`
+- `internal/attractor/modeldb/manual_models.yaml`

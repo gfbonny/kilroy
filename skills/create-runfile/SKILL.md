@@ -47,11 +47,17 @@ Default run-config source:
 - For every provider used by DOT, set `llm.providers.<provider>.backend` (`api` or `cli`).
 - Do not edit DOT to force backend execution strategy.
 
+4.5 Resolve model names deterministically when catalogs are unavailable.
+- Model resolution order: user-specified model -> run snapshot/modeldb path -> `internal/attractor/modeldb/pinned/openrouter_models.json` -> `internal/attractor/modeldb/manual_models.yaml` -> `skills/shared/model_fallbacks.yaml`.
+- Use `skills/shared/model_fallbacks.yaml` only as backup; never let backup entries override explicit user model/provider choices.
+- Normalize known aliases through fallback mappings before emitting YAML (for example provider `zai`: `glm-5.0` -> `glm-5`).
+
 5. Populate artifact_policy from skills/shared/profile_default_env.yaml.
 - The engine applies only env overrides declared explicitly in the run config.
 - Read `skills/shared/profile_default_env.yaml` for per-profile reference values.
 - Emit all required env vars for each profile used by the DOT graph.
 - Set `artifact_policy.checkpoint.exclude_globs` for checkpoint hygiene.
+- Do not use deprecated `git.checkpoint_exclude_globs`.
 
 6. Apply runtime defaults and safety guardrails.
 - Set `git.run_branch_prefix`, `git.commit_per_node`, and `git.require_clean` intentionally.
@@ -61,8 +67,6 @@ Default run-config source:
 7. Preserve local-run robustness.
 - In this repo, keep `cxdb.autostart` launcher wiring when generating local CXDB configs.
 - Keep artifact/checkpoint hygiene settings where relevant (for example managed tool-cache roots).
-- Use `artifact_policy.checkpoint.exclude_globs` for checkpoint artifact hygiene.
-- Do not use deprecated `git.checkpoint_exclude_globs`.
 
 8. Validate alignment before handoff.
 - Confirm every DOT provider has a run-config backend entry.
@@ -84,3 +88,4 @@ Default run-config source:
 - `README.md`
 - `skills/create-runfile/reference_run_template.yaml`
 - `skills/shared/profile_default_env.yaml`
+- `skills/shared/model_fallbacks.yaml`
