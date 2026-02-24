@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -108,6 +109,54 @@ func TestBuildCLIArgs(t *testing.T) {
 				tt.checkArgs(t, args)
 			}
 		})
+	}
+}
+
+func TestBuildCLIArgs_PromptUsesSkillNameFromSkillPath(t *testing.T) {
+	skillDir := filepath.Join(t.TempDir(), "skills", "create-dotfile")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillPath := filepath.Join(skillDir, "SKILL.md")
+	if err := os.WriteFile(skillPath, []byte("skill content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, args, tmpDir, err := buildCLIArgs(Options{
+		Model:        "claude-sonnet-4-5",
+		SkillPath:    skillPath,
+		Requirements: "Build something",
+	})
+	if err != nil {
+		t.Fatalf("buildCLIArgs: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	prompt := args[len(args)-1]
+	if !strings.Contains(prompt, "Follow the create-dotfile skill") {
+		t.Fatalf("prompt missing skill binding, got: %q", prompt)
+	}
+	if strings.Contains(prompt, "english-to-dotfile") {
+		t.Fatalf("prompt should not hardcode english-to-dotfile, got: %q", prompt)
+	}
+}
+
+func TestBuildCLIArgs_PromptFallsBackToGenericSkillLabelWithoutSkillPath(t *testing.T) {
+	_, args, tmpDir, err := buildCLIArgs(Options{
+		Model:        "claude-sonnet-4-5",
+		Requirements: "Build something",
+	})
+	if err != nil {
+		t.Fatalf("buildCLIArgs: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	prompt := args[len(args)-1]
+	if !strings.Contains(prompt, "Follow the provided skill") {
+		t.Fatalf("prompt missing generic fallback skill label, got: %q", prompt)
+	}
+	if strings.Contains(prompt, "english-to-dotfile") {
+		t.Fatalf("prompt should not hardcode english-to-dotfile, got: %q", prompt)
 	}
 }
 

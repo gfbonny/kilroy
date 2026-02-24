@@ -38,12 +38,31 @@ type Result struct {
 }
 
 // buildPrompt renders the ingest prompt template with the given requirements.
-func buildPrompt(requirements string) string {
+func buildPrompt(requirements, skillName string) string {
 	var buf bytes.Buffer
 	_ = ingestPrompt.Execute(&buf, struct {
 		Requirements string
-	}{requirements})
+		SkillName    string
+	}{
+		Requirements: requirements,
+		SkillName:    skillName,
+	})
 	return buf.String()
+}
+
+func inferSkillName(skillPath string) string {
+	const fallback = "provided"
+	if strings.TrimSpace(skillPath) == "" {
+		return fallback
+	}
+	base := filepath.Base(skillPath)
+	if strings.EqualFold(base, "SKILL.md") {
+		parent := filepath.Base(filepath.Dir(skillPath))
+		if parent != "" && parent != "." && parent != string(filepath.Separator) {
+			return parent
+		}
+	}
+	return fallback
 }
 
 func buildCLIArgs(opts Options) (string, []string, string, error) {
@@ -86,7 +105,7 @@ func buildCLIArgs(opts Options) (string, []string, string, error) {
 	}
 
 	// The prompt is appended last as a positional argument.
-	args = append(args, buildPrompt(opts.Requirements))
+	args = append(args, buildPrompt(opts.Requirements, inferSkillName(opts.SkillPath)))
 
 	return exe, args, tmpDir, nil
 }
