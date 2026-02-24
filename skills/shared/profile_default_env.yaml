@@ -8,6 +8,10 @@ version: 1
 #
 # Values use {managed_roots.<key>} templates that the engine resolves at run start
 # against artifact_policy.env.managed_roots in the run config.
+#
+# Parity with allowedArtifactPolicyProfiles enforced by
+# TestProfileDefaultEnv_ProfilesMatchAllowedSet in
+# internal/attractor/engine/profile_default_env_parity_test.go.
 
 profiles:
   generic: {}
