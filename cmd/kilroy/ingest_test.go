@@ -107,7 +107,7 @@ func TestParseIngestArgs(t *testing.T) {
 func TestResolveDefaultIngestSkillPath_UsesBinaryRelativeDefaults(t *testing.T) {
 	tmp := t.TempDir()
 	binaryPath := filepath.Join(tmp, "bin", "kilroy")
-	binarySkill := filepath.Join(tmp, "share", "kilroy", "skills", "english-to-dotfile", "SKILL.md")
+	binarySkill := filepath.Join(tmp, "share", "kilroy", "skills", "create-dotfile", "SKILL.md")
 	if err := os.MkdirAll(filepath.Dir(binaryPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -133,9 +133,9 @@ func TestResolveDefaultIngestSkillPath_UsesBinaryRelativeDefaults(t *testing.T) 
 
 func TestResolveDefaultIngestSkillPath_PrefersRepoSkill(t *testing.T) {
 	tmp := t.TempDir()
-	repoSkill := filepath.Join(tmp, "repo", "skills", "english-to-dotfile", "SKILL.md")
+	repoSkill := filepath.Join(tmp, "repo", "skills", "create-dotfile", "SKILL.md")
 	binaryPath := filepath.Join(tmp, "bin", "kilroy")
-	binarySkill := filepath.Join(tmp, "share", "kilroy", "skills", "english-to-dotfile", "SKILL.md")
+	binarySkill := filepath.Join(tmp, "share", "kilroy", "skills", "create-dotfile", "SKILL.md")
 
 	if err := os.MkdirAll(filepath.Dir(repoSkill), 0o755); err != nil {
 		t.Fatal(err)
@@ -169,7 +169,7 @@ func TestResolveDefaultIngestSkillPath_PrefersRepoSkill(t *testing.T) {
 func TestResolveDefaultIngestSkillPath_UsesGoInstallModuleCacheFallback(t *testing.T) {
 	tmp := t.TempDir()
 	moduleDir := filepath.Join(tmp, "pkg", "mod", "github.com", "danshapiro", "kilroy@v1.2.3")
-	moduleSkill := filepath.Join(moduleDir, "skills", "english-to-dotfile", "SKILL.md")
+	moduleSkill := filepath.Join(moduleDir, "skills", "create-dotfile", "SKILL.md")
 	binaryPath := filepath.Join(tmp, "bin", "kilroy")
 
 	if err := os.MkdirAll(filepath.Dir(moduleSkill), 0o755); err != nil {
@@ -205,7 +205,7 @@ func TestResolveDefaultIngestSkillPath_UsesGoInstallModuleCacheFallback(t *testi
 func TestResolveDefaultIngestSkillPath_UsesModuleCacheWhenBuildVersionIsDevel(t *testing.T) {
 	tmp := t.TempDir()
 	moduleDir := filepath.Join(tmp, "pkg", "mod", "github.com", "danshapiro", "kilroy@v0.0.0-20260219062932-c5e2760d4aae")
-	moduleSkill := filepath.Join(moduleDir, "skills", "english-to-dotfile", "SKILL.md")
+	moduleSkill := filepath.Join(moduleDir, "skills", "create-dotfile", "SKILL.md")
 	binaryPath := filepath.Join(tmp, "bin", "kilroy")
 
 	if err := os.MkdirAll(filepath.Dir(moduleSkill), 0o755); err != nil {

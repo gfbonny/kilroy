@@ -48,8 +48,8 @@ func buildPrompt(requirements, skillName string) string {
 		SkillName:    skillName,
 	}
 	if err := ingestPrompt.Execute(&buf, data); err != nil {
-		// Template render failures are unexpected for the embedded template;
-		// fallback to an equivalent explicit prompt to keep ingest usable.
+		// Embedded template execution should not fail; keep ingest usable with
+		// an explicit fallback prompt.
 		return fmt.Sprintf(
 			"Follow the %s skill in your system prompt exactly.\n\nWrite the final .dot pipeline to %s in your working directory.\nDo NOT write any other files. You must ONLY execute the skill, and you must NOT implement software directly.\n\nREQUIREMENTS:\n%s",
 			skillName,
