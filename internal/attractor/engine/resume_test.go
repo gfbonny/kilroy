@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/strongdm/kilroy/internal/attractor/runtime"
+	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
 
 func TestResume_EngineOptionsAreFullyHydrated(t *testing.T) {
@@ -221,5 +221,64 @@ digraph G {
 	}
 	if res2.RunID != res.RunID {
 		t.Fatalf("run_id: got %q want %q", res2.RunID, res.RunID)
+	}
+}
+
+func TestNewResumeCodergenBackend_LoadsProviderRuntimes(t *testing.T) {
+	cfg := &RunConfigFile{Version: 1}
+	cfg.LLM.Providers = map[string]ProviderConfig{
+		"kimi": {
+			Backend: BackendAPI,
+			API: ProviderAPIConfig{
+				Protocol:      "anthropic_messages",
+				APIKeyEnv:     "KIMI_API_KEY",
+				BaseURL:       "https://api.kimi.com/coding",
+				Path:          "/v1/messages",
+				ProfileFamily: "openai",
+			},
+		},
+		"zai": {
+			Backend: BackendAPI,
+			API: ProviderAPIConfig{
+				Protocol:      "openai_chat_completions",
+				APIKeyEnv:     "ZAI_API_KEY",
+				BaseURL:       "https://api.z.ai",
+				Path:          "/api/coding/paas/v4/chat/completions",
+				ProfileFamily: "openai",
+			},
+		},
+	}
+
+	backend, err := newResumeCodergenBackend(cfg, nil)
+	if err != nil {
+		t.Fatalf("newResumeCodergenBackend: %v", err)
+	}
+	router, ok := backend.(*CodergenRouter)
+	if !ok {
+		t.Fatalf("backend type: got %T want *CodergenRouter", backend)
+	}
+	if _, ok := router.providerRuntimes["kimi"]; !ok {
+		t.Fatalf("missing provider runtime for kimi")
+	}
+	if _, ok := router.providerRuntimes["zai"]; !ok {
+		t.Fatalf("missing provider runtime for zai")
+	}
+
+	kimi := router.providerRuntimes["kimi"]
+	profile, err := profileForRuntimeProvider(kimi, "kimi-k2.5")
+	if err != nil {
+		t.Fatalf("profileForRuntimeProvider(kimi): %v", err)
+	}
+	if profile.ID() != "kimi" {
+		t.Fatalf("profile ID: got %q want %q", profile.ID(), "kimi")
+	}
+
+	zai := router.providerRuntimes["zai"]
+	profile, err = profileForRuntimeProvider(zai, "glm-4.7")
+	if err != nil {
+		t.Fatalf("profileForRuntimeProvider(zai): %v", err)
+	}
+	if profile.ID() != "zai" {
+		t.Fatalf("profile ID: got %q want %q", profile.ID(), "zai")
 	}
 }

@@ -10,23 +10,19 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
-	"github.com/strongdm/kilroy/internal/attractor/model"
-	"github.com/strongdm/kilroy/internal/attractor/modeldb"
-	"github.com/strongdm/kilroy/internal/attractor/runtime"
-	"github.com/strongdm/kilroy/internal/llm"
-	"github.com/strongdm/kilroy/internal/providerspec"
+	"github.com/danshapiro/kilroy/internal/attractor/model"
+	"github.com/danshapiro/kilroy/internal/attractor/modeldb"
+	"github.com/danshapiro/kilroy/internal/attractor/runtime"
+	"github.com/danshapiro/kilroy/internal/llm"
+	"github.com/danshapiro/kilroy/internal/providerspec"
 )
 
 const (
-	preflightStatusPass                 = "pass"
-	preflightStatusWarn                 = "warn"
-	preflightStatusFail                 = "fail"
-	preflightPromptProbeText            = "This is a test. Reply with just 'OK'."
-	preflightPromptProbeAgentLoopText   = "Preflight tool-path probe. Create a compact 10-step implementation checklist covering architecture, files, tests, and rollout. Reply with exactly OK."
-	preflightPromptProbeAgentLoopSystem = "You are Kilroy preflight probe. This request validates tool-enabled runtime compatibility for agent-loop mode."
+	preflightStatusPass = "pass"
+	preflightStatusWarn = "warn"
+	preflightStatusFail = "fail"
 
 	preflightAPIPromptProbeTransportComplete = "complete"
 	preflightAPIPromptProbeTransportStream   = "stream"
@@ -78,7 +74,7 @@ type preflightAPIPromptProbeResult struct {
 	PolicyHint string
 }
 
-func runProviderCLIPreflight(ctx context.Context, g *model.Graph, runtimes map[string]ProviderRuntime, cfg *RunConfigFile, opts RunOptions, catalog *modeldb.Catalog) (*providerPreflightReport, error) {
+func runProviderCLIPreflight(ctx context.Context, g *model.Graph, runtimes map[string]ProviderRuntime, cfg *RunConfigFile, opts RunOptions, catalog *modeldb.Catalog, catalogChecks []providerPreflightCheck) (*providerPreflightReport, error) {
 	report := &providerPreflightReport{
 		GeneratedAt:         time.Now().UTC().Format(time.RFC3339Nano),
 		CLIProfile:          normalizedCLIProfile(cfg),
@@ -87,9 +83,19 @@ func runProviderCLIPreflight(ctx context.Context, g *model.Graph, runtimes map[s
 		CapabilityProbeMode: capabilityProbeMode(),
 		PromptProbeMode:     promptProbeMode(cfg),
 	}
+	for _, c := range catalogChecks {
+		report.addCheck(c)
+	}
 	defer func() {
 		_ = writePreflightReport(opts.LogsRoot, report)
 	}()
+
+	// Validate CLI-only models: fail early if a CLI-only model (e.g.,
+	// gpt-5.3-codex-spark) is used but its provider is not configured with
+	// backend=cli.
+	if err := validateCLIOnlyModels(g, runtimes, opts.ForceModels, report); err != nil {
+		return report, err
+	}
 
 	if err := runProviderAPIPreflight(ctx, g, runtimes, cfg, opts, report, catalog); err != nil {
 		return report, err
@@ -100,6 +106,55 @@ func runProviderCLIPreflight(ctx context.Context, g *model.Graph, runtimes map[s
 		return report, err
 	}
 	return report, nil
+}
+
+func validateCLIOnlyModels(g *model.Graph, runtimes map[string]ProviderRuntime, forceModels map[string]string, report *providerPreflightReport) error {
+	if g == nil {
+		return nil
+	}
+	reg := NewDefaultRegistry()
+	for _, n := range g.Nodes {
+		if n == nil {
+			continue
+		}
+		if pr, ok := reg.Resolve(n).(ProviderRequiringHandler); !ok || !pr.RequiresProvider() {
+			continue
+		}
+		provider := normalizeProviderKey(n.Attr("llm_provider", ""))
+		modelID := strings.TrimSpace(n.Attr("llm_model", ""))
+		if modelID == "" {
+			modelID = strings.TrimSpace(n.Attr("model", ""))
+		}
+		// When force-model is active for this provider, the graph-declared
+		// model is replaced at runtime. Validate the forced model instead.
+		if forcedID, forced := forceModelForProvider(forceModels, provider); forced {
+			modelID = forcedID
+		}
+		if !isCLIOnlyModel(modelID) {
+			continue
+		}
+		rt, ok := runtimes[provider]
+		if !ok || rt.Backend != BackendCLI {
+			configuredBackend := BackendKind("none")
+			if ok {
+				configuredBackend = rt.Backend
+			}
+			report.addCheck(providerPreflightCheck{
+				Name:     "cli_only_model_backend",
+				Provider: provider,
+				Status:   preflightStatusFail,
+				Message:  fmt.Sprintf("model %s is CLI-only (no API) but provider %s is configured with backend=%s; set backend=cli in run config", modelID, provider, configuredBackend),
+			})
+			return fmt.Errorf("preflight: model %s is CLI-only but provider %s has backend=%s (requires backend=cli)", modelID, provider, configuredBackend)
+		}
+		report.addCheck(providerPreflightCheck{
+			Name:     "cli_only_model_backend",
+			Provider: provider,
+			Status:   preflightStatusPass,
+			Message:  fmt.Sprintf("CLI-only model %s: provider backend=cli confirmed", modelID),
+		})
+	}
+	return nil
 }
 
 func runProviderAPIPreflight(ctx context.Context, g *model.Graph, runtimes map[string]ProviderRuntime, cfg *RunConfigFile, opts RunOptions, report *providerPreflightReport, catalog *modeldb.Catalog) error {
@@ -834,7 +889,7 @@ func runProviderCLIPromptProbePreflight(ctx context.Context, provider string, mo
 			Status:   preflightStatusWarn,
 			Message:  "prompt probe skipped: codex cli detected without OPENAI_API_KEY (likely using chatgpt browser auth which cannot be tested in isolated probe)",
 			Details: map[string]any{
-				"backend":    "cli",
+				"backend":     "cli",
 				"skip_reason": "codex_chatgpt_auth",
 			},
 		})
@@ -1140,8 +1195,12 @@ func usedProvidersForBackend(g *model.Graph, runtimes map[string]ProviderRuntime
 	if g == nil {
 		return nil
 	}
+	reg := NewDefaultRegistry()
 	for _, n := range g.Nodes {
-		if n == nil || n.Shape() != "box" {
+		if n == nil {
+			continue
+		}
+		if pr, ok := reg.Resolve(n).(ProviderRequiringHandler); !ok || !pr.RequiresProvider() {
 			continue
 		}
 		provider := normalizeProviderKey(n.Attr("llm_provider", ""))
@@ -1179,10 +1238,14 @@ func usedAPIPromptProbeTargetsForProvider(g *model.Graph, runtimes map[string]Pr
 		transports = []string{preflightAPIPromptProbeTransportComplete}
 	}
 
+	reg := NewDefaultRegistry()
 	seen := map[string]bool{}
 	targets := []preflightAPIPromptProbeTarget{}
 	for _, n := range g.Nodes {
-		if n == nil || n.Shape() != "box" {
+		if n == nil {
+			continue
+		}
+		if pr, ok := reg.Resolve(n).(ProviderRequiringHandler); !ok || !pr.RequiresProvider() {
 			continue
 		}
 		nodeProvider := normalizeProviderKey(n.Attr("llm_provider", ""))
@@ -1356,10 +1419,14 @@ func usedModelsForProviderBackend(g *model.Graph, runtimes map[string]ProviderRu
 	if forcedModel, forced := forceModelForProvider(opts.ForceModels, provider); forced {
 		return []string{forcedModel}
 	}
+	reg := NewDefaultRegistry()
 	seen := map[string]bool{}
 	models := []string{}
 	for _, n := range g.Nodes {
-		if n == nil || n.Shape() != "box" {
+		if n == nil {
+			continue
+		}
+		if pr, ok := reg.Resolve(n).(ProviderRequiringHandler); !ok || !pr.RequiresProvider() {
 			continue
 		}
 		nodeProvider := normalizeProviderKey(n.Attr("llm_provider", ""))
@@ -1429,7 +1496,7 @@ func runProviderProbeWithOptions(ctx context.Context, exePath string, argv []str
 	if strings.TrimSpace(opts.Dir) != "" {
 		cmd.Dir = opts.Dir
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setProcessGroupAttr(cmd)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -1441,13 +1508,13 @@ func runProviderProbeWithOptions(ctx context.Context, exePath string, argv []str
 	go func() { waitCh <- cmd.Wait() }()
 
 	cleanup := func() {
-		_ = killProcessGroup(cmd, syscall.SIGTERM)
+		_ = terminateProcessGroup(cmd)
 		select {
 		case <-waitCh:
 			return
 		case <-time.After(250 * time.Millisecond):
 		}
-		_ = killProcessGroup(cmd, syscall.SIGKILL)
+		_ = forceKillProcessGroup(cmd)
 		select {
 		case <-waitCh:
 		case <-time.After(2 * time.Second):
@@ -1566,7 +1633,8 @@ func scrubPreflightProbeEnv(base []string) []string {
 		if strings.HasPrefix(key, "KILROY_TEST_") ||
 			strings.HasPrefix(key, "KILROY_WATCHDOG_") ||
 			strings.HasPrefix(key, "KILROY_CANCEL_") ||
-			key == "KILROY_CALL_COUNT_FILE" {
+			key == "KILROY_CALL_COUNT_FILE" ||
+			key == "CLAUDECODE" {
 			continue
 		}
 		out = append(out, entry)

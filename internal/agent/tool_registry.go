@@ -11,7 +11,8 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v5"
 
-	"github.com/strongdm/kilroy/internal/llm"
+	"github.com/danshapiro/kilroy/internal/jsonschemautil"
+	"github.com/danshapiro/kilroy/internal/llm"
 )
 
 type TruncationStrategy string
@@ -222,15 +223,7 @@ func compileSchema(params map[string]any) (*jsonschema.Schema, error) {
 			"properties": map[string]any{},
 		}
 	}
-	b, err := json.Marshal(params)
-	if err != nil {
-		return nil, err
-	}
-	c := jsonschema.NewCompiler()
-	if err := c.AddResource("schema.json", strings.NewReader(string(b))); err != nil {
-		return nil, err
-	}
-	return c.Compile("schema.json")
+	return jsonschemautil.CompileMapSchema(params, nil)
 }
 
 func toolValueToString(v any) string {

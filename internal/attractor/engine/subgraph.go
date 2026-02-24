@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/strongdm/kilroy/internal/attractor/gitutil"
-	"github.com/strongdm/kilroy/internal/attractor/runtime"
+	"github.com/danshapiro/kilroy/internal/attractor/gitutil"
+	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
 
 // runSubgraphUntil executes a subgraph starting at startNodeID and stops when the next hop would enter stopNodeID.
@@ -24,6 +24,8 @@ func runSubgraphUntil(ctx context.Context, eng *Engine, startNodeID, stopNodeID 
 	current := startNodeID
 	completed := []string{}
 	nodeRetries := map[string]int{}
+	nodeVisits := map[string]int{}
+	visitLimit := maxNodeVisits(eng.Graph)
 
 	var lastNode string
 	var lastOutcome runtime.Outcome
@@ -67,6 +69,29 @@ func runSubgraphUntil(ctx context.Context, eng *Engine, startNodeID, stopNodeID 
 			return parallelBranchResult{}, fmt.Errorf("missing node: %s", current)
 		}
 
+		// Stuck-cycle detection (mirrors runLoop). Halt when max_node_visits
+		// is set (>0) and any node reaches that limit within this subgraph
+		// execution.
+		nodeVisits[current]++
+		if visitLimit > 0 && nodeVisits[current] >= visitLimit {
+			reason := fmt.Sprintf(
+				"subgraph aborted: node %q visited %d times (limit %d); pipeline is stuck in a cycle",
+				current, nodeVisits[current], visitLimit,
+			)
+			eng.appendProgress(map[string]any{
+				"event":       "stuck_cycle_breaker",
+				"node_id":     current,
+				"visit_count": nodeVisits[current],
+				"visit_limit": visitLimit,
+				"subgraph":    true,
+			})
+			return parallelBranchResult{}, fmt.Errorf("%s", reason)
+		}
+
+		// Spec §5.1: initialize built-in context key internal.retry_count.<node_id>
+		// for subgraph/branch execution, matching the main loop (engine.go).
+		eng.Context.Set(fmt.Sprintf("internal.retry_count.%s", current), nodeRetries[current])
+
 		eng.cxdbStageStarted(ctx, node)
 		out, err := eng.executeWithRetry(ctx, node, nodeRetries)
 		if err != nil {
@@ -88,7 +113,26 @@ func runSubgraphUntil(ctx context.Context, eng *Engine, startNodeID, stopNodeID 
 		failureClass := classifyFailureClass(out)
 		eng.Context.Set("failure_class", failureClass)
 
-		if isFailureLoopRestartOutcome(out) && normalizedFailureClassOrDefault(failureClass) == failureClassDeterministic {
+		// Structural failures in parallel branches are irresolvable — the
+		// branch write scope is fixed by the pipeline definition and cannot
+		// change on retry. Abort immediately per attractor-spec Appendix D:
+		// "Terminal errors are permanent failures where re-execution will not help."
+		if isFailureLoopRestartOutcome(out) && normalizedFailureClassOrDefault(failureClass) == failureClassStructural {
+			eng.appendProgress(map[string]any{
+				"event":          "subgraph_structural_failure_abort",
+				"node_id":        node.ID,
+				"failure_class":  failureClass,
+				"failure_reason": out.FailureReason,
+			})
+			return parallelBranchResult{
+				HeadSHA:    headSHA,
+				LastNodeID: lastNode,
+				Outcome:    out,
+				Completed:  completed,
+			}, fmt.Errorf("structural failure in branch: %s", out.FailureReason)
+		}
+
+		if isFailureLoopRestartOutcome(out) && isSignatureTrackedFailureClass(failureClass) {
 			sig := restartFailureSignature(node.ID, out, failureClass)
 			if sig != "" {
 				if eng.loopFailureSignatures == nil {
@@ -122,8 +166,6 @@ func runSubgraphUntil(ctx context.Context, eng *Engine, startNodeID, stopNodeID 
 					}, fmt.Errorf("deterministic failure cycle detected in subgraph: %s", sig)
 				}
 			}
-		} else if out.Status == runtime.StatusSuccess {
-			eng.loopFailureSignatures = nil
 		}
 
 		sha, err := eng.checkpoint(node.ID, out, completed, nodeRetries)

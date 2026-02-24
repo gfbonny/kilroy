@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/strongdm/kilroy/internal/attractor/runtime"
+	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
 
 func TestRun_GoalGateEnforcedAtExit_RoutesToRetryTarget(t *testing.T) {
@@ -30,6 +30,7 @@ digraph G {
     shape=parallelogram,
     goal_gate=true,
     retry_target=gate,
+    max_retries=0,
     tool_command="test -f .attempt && echo ok || (touch .attempt; echo fail; exit 1)"
   ]
   start -> gate -> exit

@@ -1,0 +1,37 @@
+version: 1
+
+repo:
+  path: /home/user/code/kilroy
+
+cxdb:
+  binary_addr: 127.0.0.1:9009
+  http_base_url: http://127.0.0.1:9010
+  autostart:
+    enabled: true
+    command:
+      - /home/user/code/kilroy/scripts/start-cxdb.sh
+    wait_timeout_ms: 60000
+    poll_interval_ms: 250
+    ui:
+      url: http://127.0.0.1:9020
+
+llm:
+  cli_profile: real
+  providers:
+    openai:
+      backend: cli
+
+modeldb:
+  openrouter_model_info_path: /home/user/code/kilroy/internal/attractor/modeldb/pinned/openrouter_models.json
+  openrouter_model_info_update_policy: pinned
+
+git:
+  require_clean: false
+  run_branch_prefix: attractor/run
+  commit_per_node: true
+
+runtime_policy:
+  stage_timeout_ms: 0
+  stall_timeout_ms: 1800000
+  stall_check_interval_ms: 5000
+  max_llm_retries: 6

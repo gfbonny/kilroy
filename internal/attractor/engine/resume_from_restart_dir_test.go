@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/strongdm/kilroy/internal/attractor/runtime"
+	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
 
 func TestResume_WhenLogsRootIsRestartDir_RestartsFromParentBaseLogsRoot(t *testing.T) {
@@ -62,7 +62,7 @@ func TestResume_RestoresAbsoluteStateRootForCodex(t *testing.T) {
 	t.Setenv("KILROY_CODEX_STATE_BASE", stateBase)
 
 	relStageDir := filepath.Join("restart-4", "a")
-	env, meta, err := buildCodexIsolatedEnvWithName(relStageDir, "codex-home")
+	env, meta, err := buildCodexIsolatedEnvWithName(relStageDir, "codex-home", os.Environ())
 	if err != nil {
 		t.Fatalf("buildCodexIsolatedEnvWithName: %v", err)
 	}

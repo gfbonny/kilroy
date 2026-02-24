@@ -63,6 +63,9 @@ type Outcome struct {
 	ContextUpdates   map[string]any `json:"context_updates,omitempty"`
 	Notes            string         `json:"notes,omitempty"`
 	FailureReason    string         `json:"failure_reason,omitempty"`
+	// Details is optional structured information for failures (or for debugging).
+	// The engine does not use it for routing, but it must be preserved when present.
+	Details any `json:"details,omitempty"`
 	// Optional: handler-specific metadata (not used for routing).
 	Meta map[string]any `json:"meta,omitempty"`
 }
@@ -103,6 +106,18 @@ func DecodeOutcomeJSON(b []byte) (Outcome, error) {
 	// {"status":"success","preferred_label":"","suggested_next_ids":[],"context_updates":{},"notes":"","failure_reason":""}
 	var o Outcome
 	if err := json.Unmarshal(b, &o); err == nil && o.Status != "" {
+		var raw map[string]any
+		if err := json.Unmarshal(b, &raw); err == nil {
+			if o.Meta == nil {
+				o.Meta = map[string]any{}
+			}
+			if fc := strings.TrimSpace(fmt.Sprint(raw["failure_class"])); fc != "" && fc != "<nil>" {
+				o.Meta["failure_class"] = fc
+			}
+			if sig := strings.TrimSpace(fmt.Sprint(raw["failure_signature"])); sig != "" && sig != "<nil>" {
+				o.Meta["failure_signature"] = sig
+			}
+		}
 		return o.Canonicalize()
 	}
 
@@ -128,6 +143,7 @@ func DecodeOutcomeJSON(b []byte) (Outcome, error) {
 		ContextUpdates:   legacy.ContextUpdates,
 		Notes:            legacy.Notes,
 		FailureReason:    legacyFailureReason(status, legacy.FailureReason, legacy.Details, legacy.Notes),
+		Details:          legacy.Details,
 	}
 	return o.Canonicalize()
 }

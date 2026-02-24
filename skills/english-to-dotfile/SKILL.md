@@ -1,958 +1,565 @@
 ---
 name: english-to-dotfile
-description: Use when given English requirements (from a single sentence to a full spec) that need to be turned into a .dot pipeline file for Kilroy's Attractor engine to build software.
+description: Use when turning English requirements into a runnable Kilroy Attractor DOT pipeline for `kilroy attractor ingest`, including safe defaults for model/provider selection and validator-clean routing.
 ---
 
 # English to Dotfile
 
-Take English requirements of any size and produce a valid `.dot` pipeline file that Kilroy's Attractor engine can execute to build the described software.
+## Overview
+
+This skill converts English requirements into a valid Attractor `.dot` graph.
+
+Core principle:
+- Prefer a validated template for topology (node shapes, edges, routing), over novel graph design.
+- The template defines structure only — it contains no prompt text. Every prompt must be composed from scratch based on the actual project materials.
+- Optimize for a graph that runs reliably, not a graph that looks clever.
+
+Primary references for behavior:
+- `docs/strongdm/attractor/ingestor-spec.md`
+- `docs/strongdm/attractor/attractor-spec.md`
+- `skills/english-to-dotfile/reference_template.dot`
 
 ## When to Use
 
-- User provides requirements and wants Kilroy to build them
-- Input ranges from "solitaire plz" to a path to a 600-line spec
-- You need to produce a `.dot` file, not code
+Use this skill when:
+- The user wants a DOT pipeline from plain English requirements (or a spec).
+- The user wants to revise or improve an existing Attractor DOT pipeline.
+- The output target is `kilroy attractor ingest` or `kilroy attractor run`.
+- You need to choose models/providers and routing structure safely.
 
-## Output Format
+Do not use this skill when:
+- The user asked you to implement software directly instead of generating a DOT graph.
 
-When invoked programmatically (via CLI), output ONLY the raw `.dot` file content. No markdown fences, no explanatory text before or after the digraph. The output must start with `digraph` and end with the closing `}`.
+## Non-Negotiable Rules
+
+1. Programmatic output must be DOT only.
+- Output starts with `digraph` and ends with `}`.
+- No markdown fences, preambles, or sentinel strings.
+
+2. Never emit non-DOT terminal responses in programmatic mode.
+- Do not output `NEEDS_CLARIFICATION`, `DOT_VALIDATION_FAILED`, or similar text as final output.
+- If uncertainty remains, choose best-evidence assumptions and still emit DOT.
+
+3. In non-interactive/programmatic mode, do not ask follow-up questions.
+- Resolve ambiguity from repository evidence and continue.
+- Default to `medium` option behavior when selection is needed.
+
+4. Ensure every codergen node resolves a provider/model.
+- For `shape=box`, `llm_provider` and `llm_model` must resolve via explicit attrs or `model_stylesheet`.
+
+5. Honor explicit topology constraints.
+- If user says `no fanout` or `single path`, do not emit fan-out/fan-in branches.
+
+6. Treat user-provided `goal`/spec/DoD as authoritative when explicitly labeled.
+- If the user says “this is the goal/spec/DoD” (or provides a file path and declares it is the spec/DoD), use it verbatim. Do not rewrite, summarize, “clean up”, or normalize punctuation/whitespace.
+- For DOT embedding, escape only as required by DOT string syntax so the **rendered text content** is identical to what the user provided.
+- If the provided text is incomplete, keep it verbatim and create a separate “gaps/assumptions” artifact rather than rewriting the source text.
+
+7. Ensure `expand_spec` receives the user’s full input verbatim.
+- When generating a DOT graph from user text (especially transcripts), include the **entire user-provided input** verbatim in the `expand_spec` prompt under clear delimiters.
+- Do not summarize, rephrase, or “clean up” the user’s input in this verbatim block (DOT-escape only).
+- If the user explicitly provides a spec/DoD as a repo file path, `expand_spec` should read the file as the authoritative source; still include the original user message verbatim so the spec derivation is auditable.
+
+8. Treat prerequisite/tool gates as real gates.
+- If a `shape=parallelogram` node can fail (toolchain, build, format, file checks), route on `outcome=success` and route failures explicitly.
+- Do not wire prerequisite checks with unconditional pass-through that bypasses their outcome.
+
+9. Do not bypass actionable node outcomes.
+- For `shape=box` and `shape=parallelogram` nodes, avoid unconditional "next stage" edges that ignore success/fail status.
+- Use check/conditional nodes (or explicit conditioned edges) so progress depends on outcome.
+
+10. Keep status/handoff contracts exact across stages.
+- Every `shape=box` prompt must mention both `$KILROY_STAGE_STATUS_PATH` and `$KILROY_STAGE_STATUS_FALLBACK_PATH`.
+- Every `shape=box` prompt must define success and failure/retry outcome behavior.
+- If a node reads `.ai/<name>.md`, an upstream node must write that exact same path (no filename drift).
+
+11. Use `tool_command` for `shape=parallelogram` nodes.
+
+## Workflow
+
+### Phase 0: Determine Execution Mode and Constraints
+
+Determine mode first:
+- Interactive mode: conversation with user where you can ask one disambiguation question if needed.
+- Programmatic mode: CLI ingest or any machine-parsed context where you cannot ask questions.
+- If unsure, treat as programmatic mode.
+
+Extract hard constraints from user text:
+- Required providers/models
+- Parallelism intent (`no fanout`, `3-way`, `consensus`)
+- Runtime backend constraints (for example CLI-only/API-only), applied via run config alignment rather than DOT structure
+- Cost/quality intent (`fast`, `max thinking`, etc.)
 
-**Exception (programmatic disambiguation):** If you cannot confidently generate a correct `.dot` file because the user's request is ambiguous in a load-bearing way (identity/meaning) and you cannot ask questions (CLI ingest), output a short clarification request and STOP. In this exception case, do NOT output any `digraph` at all. Start the output with `NEEDS_CLARIFICATION` and include exactly one disambiguation question plus 2-5 concrete options anchored by repo evidence (paths/names).
+### Phase 1: Resolve Ambiguity with Repo Evidence
 
-**Exception (programmatic validation failure):** If after the self-validation/repair loop (Phase 6, max 10 attempts) you still cannot produce a `.dot` that passes validation, output a short failure report and STOP. Do NOT output any `digraph` at all. Start the output with `DOT_VALIDATION_FAILED` and include the last validator errors.
+Use a short repo triage before asking anything:
+- Inspect top-level structure and obvious docs.
+- Search ambiguous tokens with `rg`.
+- Prefer concrete repo evidence over guesswork.
 
-When invoked interactively (in conversation), you may include explanatory text.
+Interactive ambiguity rule:
+- Ask at most one disambiguation question when required to proceed.
+- Ask only identity/meaning questions, not preference questions.
 
-## Process
+Programmatic ambiguity rule:
+- Do not ask questions.
+- Use strongest evidence, record assumptions in graph prompts/artifacts, and continue.
 
-### Phase 0A: Repo Scan + Minimal Disambiguation (Ask 0 Questions If Possible)
+### Phase 2: Select Topology (Template-First)
 
-This phase exists to prevent building the wrong thing when the user's wording can reasonably refer to multiple distinct targets.
+Default strategy:
+- Start from `skills/english-to-dotfile/reference_template.dot` for topology: node shapes, edges, routing patterns, subgraph structure.
+- The template contains no prompt text — only structural comments listing what each prompt must address. You must compose every prompt from scratch based on the project's spec, DoD, and repo contents.
+- Keep one code-writing implementation node.
+- Use parallelism for planning/review thinking stages, not code writes.
 
-Rules:
-- Prefer **zero** clarification questions.
-- Ask ONLY **disambiguation** questions (identity/meaning). Do NOT ask preference questions (language, framework, style, etc.).
-- Before asking anything, do a quick repo scan/search to try to resolve ambiguity from evidence.
-- Ask the **minimum** number of disambiguation questions required to proceed confidently (typically 1).
+Constraint fast path (`no fanout`):
+- Use a compact single-path loop.
+- Keep `implement -> check_implement -> deterministic verify/check -> semantic verify/review -> postmortem`.
+- Do not include `plan_a/b/c`, `review_a/b/c`, `component`, or `tripleoctagon` nodes.
 
-What counts as a disambiguation question:
-- Resolve an ambiguous identifier that could map to multiple real things.
-  - Example: "jj" could mean multiple tools; "parser" could refer to multiple packages; "api" could refer to multiple services.
+Auto-fix nodes:
+- When the language has a canonical formatter or auto-fixer (e.g. `gofmt -w .`, `cargo fmt`, `black .`, `prettier --write .`), insert a `shape=parallelogram` auto-fix node before the corresponding verify gate (e.g. `fix_fmt -> verify_fmt`). This makes the verify gate a pure assertion and avoids wasting hill-climbing iterations on trivially fixable formatting failures.
 
-What does NOT count as disambiguation:
-- "What language should I code in?"
-- "Should we use framework X or Y?"
+Spec source rule:
+- Prefer an existing spec source (a user-provided path, `docs/`, etc.).
+  - Either wire downstream prompts to read it directly, or copy it verbatim into the canonical `.ai/spec.md` via `expand_spec` so the rest of the pipeline has a stable path.
+- If no adequate spec exists, include `expand_spec` early. Make it idempotent: reuse an adequate `.ai/spec.md` if present (optionally do form-only cleanup when it is not explicitly user-declared verbatim); otherwise generate it from `$goal` + repo evidence.
 
-#### Step 0A.1: Extract Ambiguous Tokens
+Loop and routing rules:
+- Keep explicit outcome-based conditions (`outcome=...`).
+- Condition expressions support `=`, `!=`, and `&&`. Do not use `||`, `<`, or `>`.
+- Inner retry restarts (`loop_restart=true`) are only for transient infra failures (`context.failure_class=transient_infra`).
+- Deterministic failures should route to repair/postmortem, not blind restarts.
+- For `goal_gate=true` nodes routing to terminal, use `condition="outcome=success"` or `condition="outcome=partial_success"`.
+- If a node has conditional outgoing edges, add one unconditional fallback edge (no `condition`) to avoid routing gaps.
+- For prerequisite/tool gates and implementation stages, route success/failure explicitly before advancing; do not rely on unconditional edges to progress.
+- For failure back-edges from `shape=diamond` nodes, include `context.failure_class` in the failure condition and keep deterministic fallback routing explicit.
 
-From the user request, list candidate ambiguous references:
-- Short names/acronyms
-- Tool/binary names
-- Bare filenames without paths
-- Component names that might exist multiple times in a monorepo
+#### Deterministic vs Transient Failures (Failure Classification)
 
-#### Step 0A.2: Quick Repo Triage (Evidence First)
+Attractor’s retry and cycle-breaking semantics depend on `failure_class` (see `docs/strongdm/attractor/attractor-spec.md`).
 
-Timebox to ~60 seconds. Use local inspection to resolve meaning:
-- List top-level structure (`ls`)
-- Search likely entrypoints/docs (`README*`, `docs/`, `cmd/`, `scripts/`, `internal/`)
-- Use ripgrep (`rg`) for each ambiguous token and inspect the most relevant hits
+Use these definitions:
+- **Deterministic** (`failure_class=deterministic`): The failure is not expected to be resolved by automatic retry/backoff; it requires a different approach or changed inputs (code/config/graph/prompt/context). This is about *retryability*, not whether the underlying system is probabilistic. Examples: tests failing due to incorrect code, compilation errors, missing required files, invalid config, auth/permission errors, invalid request/model-not-found, LLM-generated changes that fail build/tests and need repair.
+- **Transient infra** (`failure_class=transient_infra`): A wait-and-retry might succeed. Examples: rate limits, timeouts, network errors, provider 5xx/unavailability.
+- **Structural** (`failure_class=structural`): The pipeline/graph itself is broken (usually caught by validation). Examples: missing start/exit, invalid condition syntax, missing required node attributes.
+- **Canceled** (`failure_class=canceled`): The run was canceled; do not treat as retryable or as a deterministic cycle signal.
+- **Budget exhausted** (`failure_class=budget_exhausted`): Failure due to budget/limits; only retry if there is a clear escalation path (smaller scope, different model, explicit user approval).
+- **Compilation loop** (`failure_class=compilation_loop`): Repeated build/test failure patterns that indicate an unproductive loop; only retry if you change approach (repair/escalate), not by blind restart.
 
-If a single referent is strongly supported by repo evidence, proceed without questions.
+Heuristic:
+- If success is plausible after waiting/retrying the same action, it’s usually `transient_infra`.
+- If success requires changing code/config/graph/prompt/context, it’s usually `deterministic` (or `structural` for pipeline-definition problems), even if the LLM could “get lucky” on a re-run.
 
-#### Step 0A.3: If Still Ambiguous, Ask ONE Disambiguation Question (Interactive)
+Common hill-climbing case (“good work, not done yet — keep going”):
+- Prefer modeling “needs another iteration” as `status=fail` with a non-transient `failure_class` (usually `deterministic`, sometimes `compilation_loop`), then route to repair/postmortem/re-plan nodes that drive the next attempt.
+- Avoid using `status=retry` for hill-climbing loops unless you explicitly want the engine to immediately re-run the *same node* via the retry policy (as opposed to routing to a different node for repair).
+- `failure_class` is only relevant when `status=fail` or `status=retry`; `status=success` should proceed normally.
 
-Interactive mode (conversation):
-- Ask exactly one SINGLE-SELECT disambiguation question.
-- Provide 2-5 options, each anchored by concrete repo evidence (paths/names).
-- Do NOT generate any `.dot` until the user answers.
+Routing implications:
+- Use `loop_restart=true` only for “wipe the run and start fresh” recovery, and only when the failure is clearly retryable infra (`context.failure_class=transient_infra`).
+- For everything else (especially `deterministic` and `structural`), route to a non-restart repair loop (postmortem/re-plan/implement) so the next attempt makes progress instead of restarting blindly.
 
-#### Step 0A.4: If Still Ambiguous, Stop and Request Disambiguation (Programmatic)
+Guardrails:
+- Do not set `allow_partial=true` on the primary implementation node in the hill-climbing profile.
+- Do not add `max_agent_turns` by default.
+- Do not add visit-count loop breakers by default.
 
-Programmatic mode (CLI ingest / cannot ask):
-- If ambiguity is load-bearing after repo triage, you MUST NOT emit any `.dot`.
-- Output a short clarification request (so ingestion fails fast) and STOP.
-- Ask exactly ONE disambiguation question and provide 2-5 options, each anchored by concrete repo evidence (paths/names).
-- Do NOT ask preference questions (language/framework/style).
+### Phase 3: Select Models and Runtime Alignment
 
-Required output format for this exception case:
-```
-NEEDS_CLARIFICATION
-Question: <single disambiguation question>
-Options:
-- [A] <option A> (evidence: <paths/names>)
-- [B] <option B> (evidence: <paths/names>)
-Reply with: A|B|...
-```
+#### 3.1 Read Preferences Defaults
 
-Downstream requirement (after ambiguity is resolved interactively or via evidence):
-- Document disambiguation choices in a shared artifact for downstream nodes:
-  - If the pipeline includes `expand_spec`, include a brief "Disambiguation / Assumptions" section in `.ai/spec.md`.
-  - If the pipeline uses an existing repo spec file (no `expand_spec`), write `.ai/disambiguation_assumptions.md` and instruct downstream nodes to read both the spec and this assumptions file.
+Load preferences in this order:
+1. Skill-local sibling file: `skills/english-to-dotfile/preferences.yaml` (repo path).
+2. If skill runs from an agent-skill directory, also check sibling `preferences.yaml` next to `SKILL.md`.
 
-### Phase 0B: Pick Models + Executors + Parallelism + Thinking (Before Writing Any DOT)
+Use values as defaults only:
+- `defaults.models.default|hard|verify|review`
 
-This phase exists to translate ambiguous requests (or partial constraints like "make it parallel with gemini") into a concrete, runnable model/executor plan.
+#### 3.2 Detect What Is Executable
 
-**Override rule:** The user's commands override everything. Use the information below to fulfill them as best you can (while still ensuring the result is runnable in the current environment).
+For each provider, determine viable runtime paths for the current project:
+- Prefer evidence from run config (`llm.providers.*.backend`, `llm.cli_profile`) when available.
+- If no run config is available, keep DOT backend-agnostic and only ensure provider/model choices are plausible.
+- Include providers configured in run config.
 
-- **Interactive mode:** present options and wait for the user's choice/overrides. Do not emit any `.dot` until chosen.
-- **Programmatic mode (CLI ingest / machine-parseable output):** you cannot ask questions. Apply the same selection process, default to the **Medium** option, and then emit only the `.dot`.
+Do not select providers that are not executable in the current environment.
 
-#### Step 0.1: Capture User Constraints (If Any)
+#### 3.3 Resolve Candidate Models from Kilroy ModelDB/OpenRouter Catalog
 
-Parse the user's message for constraints, including:
-- Required providers/models (e.g., "gemini", "opus", "codex", "only anthropic", "no openai")
-- Parallelism intent (e.g., "parallel", "consensus", "3-way", "fan-out")
-- Executor intent (e.g., "api only", "cli only")
-- Thinking intent (e.g., "fast/cheap", "max thinking", "default")
+Catalog preference order:
+1. Run-config `modeldb.openrouter_model_info_path` or run snapshot.
+2. `internal/attractor/modeldb/pinned/openrouter_models.json`.
+3. Explicit user model IDs when catalog is unavailable.
 
-Treat constraints as requirements to satisfy when possible, but still run the full process below to pick concrete model IDs and settings.
+Interpretation rules:
+- Treat catalog as metadata guidance, not a strict allowlist.
+- Honor explicit user model IDs when feasible.
+- `current`/`cheapest` are computed from currently executable candidates.
 
-#### Step 0.1B: Load Preferences File
+#### 3.4 Build Option Set
 
-Read the preferences file at `.claude/skills/english-to-dotfile/preferences.yaml`.
+Define three plans:
+- Low: lowest-cost viable plan, reduced parallelism.
+- Medium: default plan, balanced quality/cost, template-aligned.
+- High: strongest available plan, cross-provider fan-out when available.
 
-This file contains:
-- **Default models per role** (`defaults.models.default`, `.hard`, `.verify`, `.review`). If a role has a non-empty model ID, use it as the starting default for that role. The Weather Report and user overrides can still supersede it.
-- **Executor preference** (`executor`). A single global setting: "cli" or "api". When set to "cli", prefer CLI agents (codex, claude, gemini) for all providers. Falls back to API if the CLI binary isn't installed.
+Interactive mode:
+- Present low/medium/high once and wait for selection/overrides.
 
-If the file is missing or unreadable, proceed with no defaults (same as all fields blank).
+Programmatic mode:
+- Do not print options table.
+- Choose medium automatically and continue.
 
-#### Step 0.2: Detect Provider Access (API and CLI for All Providers)
+Encoding rule:
+- Put model/provider assignments in `model_stylesheet`.
+- If high mode uses fan-out, assign distinct providers to `branch-a`, `branch-b`, `branch-c` when possible.
+- Do not encode backend routing (`cli` vs `api`) in DOT topology; backend selection belongs to run config/runtime.
 
-Determine, for each provider, whether **API** and/or **CLI** execution is feasible in this environment:
-- OpenAI: API key present? CLI executable present?
-- Anthropic: API key present? CLI executable present?
-- Gemini/Google: API key present? CLI executable present?
-- Cerebras: API key present? (API-only, no CLI agent)
+### Phase 4: Write Node Prompts and File Handoffs
 
-If a provider has neither API nor CLI available, you MUST NOT propose models from that provider.
+The reference template contains NO prompt text — only structural comments listing what each prompt must address. You must compose every prompt from scratch based on the project's spec, DoD, and repo contents. The template's comments are minimum requirements, not starting text.
 
-#### Step 0.3: Fetch "What's Current Today" (Weather Report)
+Every generated codergen prompt must include:
+1. What to do — specific to the project's domain, deliverables, and constraints, derived from reading the spec and DoD.
+2. What files to read — both `.ai/` artifacts and specific repo files relevant to the node's task.
+3. What files to write.
+4. Acceptance checks — specific to the project's acceptance criteria, not generic references to "the DoD."
+5. Explicit status/outcome contract.
 
-Fetch:
-- `curl -fsSL https://factory.strongdm.ai/weather-report`
+Prompt content rule — orient, don't duplicate:
 
-Extract the "Today's Models" list and treat it as the source of **current** model lines for each provider (including any consensus entries). Also extract any per-model parameter guidance (the Weather Report "Parameters" column) to inform thinking.
+Every codergen prompt lists files for the runtime LLM to read, and the runtime LLM reads those files in full. This means anything you write in the prompt that also appears in those files is redundant — the LLM already has it. Worse, after a repair iteration the files may have changed but the prompt hasn't, so the prompt's copy is now stale and misleading.
 
-#### Step 0.4: Fetch Token Costs (Latest LiteLLM Catalog)
+The value a prompt adds is context the files can't provide on their own: why this node exists in the pipeline, what to prioritize, where projects like this one tend to go wrong, and what to do differently on a repair iteration vs a fresh run. A developer reading a spec knows what to build, but a good tech lead adds "watch out for X, do Y before Z, and if you're fixing a bug don't rewrite the module." That's what a prompt should be.
 
-Fetch:
-- `curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json`
+A practical test: if a prompt approaches the length of the files it references, it's almost certainly restating their content rather than orienting the reader. A good prompt for a 600-line spec is 30-50 lines.
+
+Exception: `expand_spec` must include the user's full input verbatim (per the verbatim input requirement below), because no spec file exists yet.
 
-Use the LiteLLM catalog to verify model IDs and look up costs. However: **if the user explicitly requests a model that is not in the catalog, always obey the user.** New models often appear on provider APIs before LiteLLM adds them. The catalog is a reference, not a gatekeeper. Only reject model IDs that you yourself are inventing without user or Weather Report backing.
-
-#### Step 0.5: Resolve Weather Report Names to Real Model IDs (Best-Effort, Verified)
-
-Weather Report names may not exactly match LiteLLM keys.
-
-For each Weather Report model name:
-- Find a matching LiteLLM key by searching the catalog (best-effort string normalization is OK).
-- Prefer exact/near-exact matches and "latest" variants when present.
-- If a Weather Report model has no catalog match, **use it anyway** — the Weather Report reflects what is actually running in production today. New models routinely appear before LiteLLM catalogs them.
-
-#### Step 0.6: Define "Current" and "Cheapest (Current-Only)"
-
-- **Current models** are the resolved Weather Report models (after filtering by provider access).
-- **Cheapest** must be chosen **only from current model lines** (do not pick older generations just because they are cheaper).
-  - If you need "cheaper", reduce thinking and parallelism first.
-
-#### Step 0.7: Decide Thinking (No Fixed Mapping Table)
-
-Choose a thinking level for each option using:
-- Weather Report parameter guidance (when present), and
-- Otherwise, the option's intent (Low = minimal, Medium = strong/default, High = maximum).
-
-Do not hardcode a brittle mapping. Use best judgment and keep it consistent with the option's cost/quality goal.
-
-#### Step 0.8: Produce a Simple 3-Row Options Table (Then Ask, Then Stop)
-
-Before generating DOT, present exactly these three options in a single table:
-
-- **Low:** cheapest current model plan (no older models). Minimal thinking. No parallelism.
-- **Medium:** best current model plan (avoid "middle" choices when there's a clear best and a clear cheapest). Thinking per Weather Report / strong defaults. No parallelism.
-- **High:** 3 best current models in parallel for thinking-heavy stages (plan/review), then synthesize. Maximum thinking.
-
-The table MUST include:
-- Which model(s) you'd use for `impl`, `verify`, and `review` (and for High, the 3 parallel branches + the synthesis model).
-- Parallelism behavior (none vs 3-way).
-- Thinking approach (brief).
-- Executor availability and recommendation **for OpenAI, Anthropic, and Gemini** (account for both API+CLI where available; use the `executor` value from the preferences file to pick the preferred one, unless the user specifies otherwise).
-
-After the table, ask:
-"Pick `low`, `medium`, or `high`, or reply with overrides (providers/models/executor/parallel/thinking)."
-
-STOP (interactive mode). Do not emit `.dot` until the user replies.
-
-#### Step 0.9: After Selection, Generate DOT
-
-Once the choice/overrides are known:
-- Encode the chosen models via `model_stylesheet` and/or explicit node attrs.
-- If High (or the user requested parallel), implement 3-way parallel planning/review with a fan-out + fan-in + synthesis pattern.
-- Keep the rest of the pipeline generation process unchanged.
-
-### Phase 1: Requirements Expansion
-
-If the input is short/vague, expand into a structured spec covering: what the software is, language/platform, inputs/outputs, core features, acceptance criteria. Write the expanded spec to `.ai/spec.md` locally (for your reference while building the graph).
-
-**Critical:** The pipeline runs in a fresh git worktree with no pre-existing files. The spec must be created INSIDE the pipeline by an `expand_spec` node. Two scenarios:
-
-**Vague input** (e.g., "solitaire plz"): Add an `expand_spec` node as the first node after start. Its prompt contains the expanded requirements inline and instructs the agent to write `.ai/spec.md`. This is the ONE exception to the "don't inline the spec" rule — the expand_spec node bootstraps the spec into existence.
-
-**Detailed spec already exists** (e.g., a file path like `demo/dttf/dttf-v1.md`): The spec file is already in the repo and will be present in the worktree. No `expand_spec` node needed. All prompts reference the spec by its existing path.
-
-**The spec file is the source of truth.** Prompts reference it by path. Never inline hundreds of lines of spec into a prompt attribute (except in `expand_spec` which creates it).
-When assumptions are recorded separately (existing-spec mode), treat `.ai/disambiguation_assumptions.md` as a required companion input for downstream prompts.
-
-### Phase 2: Decompose into Implementation Units
-
-Break the spec into units. Each unit must be:
-
-- **Achievable in one agent session** (one primary objective, one narrow acceptance contract)
-- **Testable** with a concrete command (build, test, lint, etc.)
-- **Clearly bounded** by files created/modified
-
-Sizing heuristics (language-agnostic):
-- Core types/interfaces = early unit (everything depends on them)
-- One package/module = one unit (not one file, not one function)
-- Each major algorithm/subsystem = its own unit
-- CLI/glue code = late unit
-- Test harness = after the code it tests
-- Integration test = final unit
-
-Language-specific examples:
-- **Go:** `go build ./cmd/<app> ./pkg/<app>/...`, `go test ./cmd/<app>/... ./pkg/<app>/...`, one `pkg/` directory = one unit
-- **Python:** `pytest tests/`, `mypy src/`, one module directory = one unit
-- **Rust:** `cargo build`, `cargo test`, one crate = one unit
-- **TypeScript:** `npm run build`, `npm test`, one package = one unit
-
-For each unit, record: ID (becomes node ID), description, dependencies (other unit IDs), acceptance criteria (commands + expected results), complexity (simple/moderate/hard).
-
-**Identify parallelizable units.** If two units have no dependency on each other (e.g., independent packages, separate CLI commands), note them — they can run in parallel branches.
-
-#### Decomposition Strategy
-
-Think in terms of **information flow**: each node should reduce one kind of uncertainty and leave a clearer artifact for the next node.
-
-- Start with a shared frame so later work is comparable (example: map schema/glossary).
-- Decompose along natural repo boundaries, not arbitrary chunks (example: package or domain slices).
-- Use parallelism for independent discovery, then converge with one reconciliation step.
-- Verify at two levels: local correctness of each slice, then global consistency of the merged result.
-
-Example pattern for “map the codebase”: shared frame -> boundary slices -> merge -> consistency check.
-
-#### Sizing Calibration (Required)
-
-Right-sized node characteristics:
-- One primary deliverable (one concrete thing to finish), not a bundle of loosely-related outcomes.
-- One dominant scope boundary (typically one subsystem/module/package).
-- One dominant failure mode; verification answers one narrow question about that contract.
-- Downstream nodes can consume its output without re-reading the entire project.
-
-Too-big signals (split when any of these are true):
-- Prompt asks for multiple independent subsystems in one node.
-- Prompt requires editing more than one major module/package.
-- Prompt combines large implementation work **and** broad audit/comparison work.
-- Verify node checks many unrelated concerns instead of one narrow contract.
-
-How to split oversized nodes:
-- Extract shared contracts/types first.
-- Split each subsystem into its own impl+verify+check chain.
-- Move cross-subsystem wiring into a dedicated integration node.
-- Keep verification nodes focused on one contract each (build/test + targeted checks).
-
-#### Checkpoint Ergonomics (Information)
-
-- Resume uses the parent run checkpoint at `{logs_root}/checkpoint.json`.
-- In parallel fan-out, branch-local progress is not a parent resume point.
-- If a run is stopped mid-node or mid-fan-out, in-flight work since the last parent checkpoint may be replayed.
-
-### Phase 3: Build the Graph
-
-#### Required structure
-
-```
-digraph project_name {
-    graph [
-        goal="One-sentence summary of what the software does",
-        rankdir=LR,
-        default_max_retry=3,
-        retry_target="<first implementation node>",
-        fallback_retry_target="<second implementation node>",
-        model_stylesheet="
-            * { llm_model: DEFAULT_MODEL_ID; llm_provider: DEFAULT_PROVIDER; }
-            .hard { llm_model: HARD_MODEL_ID; llm_provider: HARD_PROVIDER; }
-            .verify { llm_model: VERIFY_MODEL_ID; llm_provider: VERIFY_PROVIDER; reasoning_effort: VERIFY_REASONING; }
-            .review { llm_model: REVIEW_MODEL_ID; llm_provider: REVIEW_PROVIDER; reasoning_effort: REVIEW_REASONING; }
-        "
-    ]
-
-    start [shape=Mdiamond, label="Start"]
-    exit  [shape=Msquare, label="Exit"]
-
-    // ... implementation, verification, and routing nodes ...
+Mandatory status contract text (or equivalent) in generated prompts:
+- Write status JSON to `$KILROY_STAGE_STATUS_PATH` (absolute path).
+- If unavailable, use `$KILROY_STAGE_STATUS_FALLBACK_PATH`.
+- Do not write nested `status.json` files after `cd`.
+- Use the canonical schema: `{"status":"..."}`
+- Routing conditions use `condition="outcome=..."` on edges; `outcome` is set to the stage's `status` value.
+- Require both variable names to appear verbatim in each codergen prompt.
+
+Auto-fix tool commands:
+- For each deterministic verify gate that has a language-canonical auto-fix command (formatter, import sorter, linter with `--fix`), populate the preceding fix node's `tool_command` with that command.
+
+Failure payload contract:
+- For `status=fail` or `status=retry`, include both `failure_reason` and `details`.
+- For deterministic verification failures, include `failure_class` where applicable.
+
+Handoff rules:
+- Use `.ai/*` files for substantial inter-node artifacts (plans, reviews, postmortems).
+- Keep file reads/writes consistent: every read path must have an upstream producer or explicit repo-source justification.
+- Use exact file identity for handoffs (same basename/path), not "similar" names.
+
+### Goal (`graph.goal` / `$goal`) Contract (Required)
+
+In Attractor, the graph-level `goal` attribute is:
+- Exposed as `$goal` in node prompts via simple string replacement (the only built-in prompt variable).
+- Mirrored into the run context as `graph.goal`.
+
+Therefore, `$goal` is the primary “source of truth” for what the pipeline is trying to do.
+
+How to create `goal` optimally:
+1. **If the user explicitly provides it as the goal:** use it verbatim (escape only as required for DOT).
+2. **Otherwise, write it as a noun phrase describing the thing/outcome**, not a command or a full sentence. This avoids awkward prompts when `$goal` is pasted into sentences (for example “Create a plan for $goal”).
+   - Bad: “We'll build a calculator.”
+   - Good: “a Python-based calculator app for blind students taking high school math”
+3. **Make it durable for the whole graph.** Because `goal` is graph-level (not node-level), every node may reference the same text. Avoid ephemeral, step-specific goals.
+   - Bad: “Fix the bug in line 40 first.”
+   - Good: “a login system that handles empty passwords gracefully.”
+4. **Prompt phrasing should assume noun-phrase goals.** Prefer prompt templates like “Create a plan for $goal” / “Implement $goal”. If an explicitly user-provided goal is not a noun phrase, avoid grammar-dependent prompt patterns and use a neutral preface like `Goal: $goal` at the top of the prompt.
+
+Implementation note (important):
+- If the user did not provide a goal, derive `graph.goal` during DOT generation (ingest/skill time) from the provided materials + repo evidence.
+- Do not design a runtime pipeline that “computes `$goal` after `expand_spec`” — `$goal` is graph-level and static during execution.
+
+Goal adequacy rubric (keep it short, but complete enough to drive `expand_spec`):
+- States the deliverable/outcome (“what exists when done”) and the repo/location it applies to (path/module/service if known).
+- May include durable high-level scope/non-goals if they are truly objective-defining.
+- Do **not** encode topology or execution constraints in `$goal` (for example `no fanout`, provider/model routing, CLI-vs-API). Those belong in the DOT structure and/or the spec.
+- Avoids turning into a full spec or an implementation plan. Detailed requirements belong in `.ai/spec.md`.
+
+### Spec Expansion (`expand_spec`) Contract (Required when no adequate spec file exists)
+
+The pipeline should converge on a canonical, file-based spec that downstream nodes can read (default: `.ai/spec.md`).
+
+Template alignment:
+- The reference template assumes downstream nodes read `.ai/spec.md`. If you choose a different spec path, update all downstream prompts consistently.
+- After `expand_spec` runs, downstream nodes should treat `.ai/spec.md` as the authoritative spec (not `$goal`).
+
+Behavior requirements for `expand_spec`:
+1. **Reuse first:** If a spec already exists (for example `.ai/spec.md` or a user-provided path), prefer reusing it.
+   - If the user explicitly labeled the spec (“this is the spec”), copy/use it verbatim (no rewriting). If a canonical path is needed, copy it verbatim into `.ai/spec.md`.
+   - If the spec exists but is messy, do form-only cleanup (headings/whitespace) without changing meaning.
+2. **Expand only when needed:** If the available spec is missing critical information, create a separate addendum (for example `.ai/spec_gaps.md`) listing gaps and assumptions. Do not overwrite a user-declared verbatim spec.
+3. **If no spec exists at all:** Expand `$goal` into `.ai/spec.md` with explicit assumptions and verification notes.
+
+Verbatim input requirement:
+- The `expand_spec` prompt MUST include a delimited verbatim block containing the user’s full input (including transcripts). This ensures spec writing has access to all requirements even when `graph.goal` is derived and compact.
+
+Spec adequacy rubric (minimum):
+- Scope (in/out), assumptions, constraints.
+- Deliverables and acceptance criteria (observable pass/fail).
+- Verification approach (commands/steps appropriate to the repo).
+- Non-goals/deferrals.
+
+Spec placement note:
+- This is where constraints belong (for example provider/model requirements, “no fanout/single path”, platform constraints, budget/time constraints). Keep `$goal` as the durable noun-phrase objective; keep constraints in the spec and/or DOT topology.
+
+### Definition Of Done (DoD) Rubric (Required)
+
+In Kilroy attractor pipelines, the project DoD is the acceptance contract for the whole iteration. It must be strong enough to prevent "looks done" failures, but general enough that it does not proscribe an implementation path.
+
+If the user explicitly provides a DoD (“this is the DoD”), treat it as authoritative:
+- Use it verbatim as the DoD source (ideally by copying it verbatim to `.ai/definition_of_done.md` early).
+- Do not auto-rewrite it; if it has gaps, record them separately (for example `.ai/dod_gaps.md`) so the pipeline can still proceed deterministically.
+
+A good DoD is:
+- Outcome-focused: states what must be true, not what must be done, or how to implement it.
+- Verifiable: every criterion is checkable with clear evidence (pass/fail or observed result).
+- Complete for the risk surface: it closes obvious loopholes where someone could skip something important and still claim success.
+- Appropriately scoped: avoids forcing repo-wide checks or unnecessary redesigns; focuses on the change's blast radius.
+- Explicit about non-goals: clearly states what is intentionally not being done (deferrals) so reviewers do not assume it was missed.
+
+Minimum DoD sections (recommended markdown headings):
+- Scope (in-scope / out-of-scope / assumptions)
+- Deliverables (artifacts, behaviors, interfaces, docs that must exist after completion)
+- Acceptance Criteria (observable functional requirements)
+- Verification (how to verify, including commands/steps appropriate to the project; include any setup required)
+- Quality/Safety Gates (project-appropriate outcomes like build/tests/lint/docs/compatibility/security, phrased as evidence)
+- Non-Goals / Deferrals (explicitly deferred work)
+
+Coverage checklist: the DoD must explicitly address each of these (either include criteria, or explicitly mark N/A with a short reason):
+- Build/package/install correctness (or equivalent for the project type)
+- Automated tests (or explicit manual verification steps when automation is not feasible)
+- Lint/format/static analysis (or explicit N/A)
+- Documentation/user guidance (or explicit N/A)
+- Compatibility/breaking changes/migrations (or explicit N/A)
+- Security/privacy considerations (or explicit N/A)
+- Operational readiness (logging, error handling, observability, rollback safety) when relevant
+- Performance/reliability considerations when relevant
+
+DoD anti-patterns (reject as "missing DoD"):
+- Purely vague language: "works", "is correct", "clean code", "high quality" with no evidence criteria.
+- Pure implementation plan: "refactor X", "use library Y", "implement in Go" without specifying acceptance outcomes.
+- Lack of concrete tests that prove doneness.
+- Over-prescription: requiring or assuming tools/approaches that were not required by the user's spec (turning DoD into how, instead of what).
+- Loophole criteria: only checking one happy path ("demo runs once") with no regression/quality gates when those would better achieve the goal.
+
+### Parallel Fan-Out Artifact Contract (Required When Using `shape=component`)
+
+When using true parallel fan-out (`shape=component`), each branch runs in an isolated git worktree. Branch-written `.ai/*` files are not automatically visible in the main worktree where the join/consolidation node runs.
+
+Therefore, any consolidator node that needs branch outputs MUST:
+- Read `$KILROY_LOGS_ROOT/<fanout_node_id>/parallel_results.json`.
+- Use each branch's `worktree_dir` from that JSON to read the branch outputs (for example `<worktree_dir>/.ai/plan_a.md`).
+- Fall back to reading `.ai/*` from the current worktree only when `parallel_results.json` is missing (for example, no fan-out topology).
+
+Important: `shape=tripleoctagon` is a parallel fan-in handler that selects a single winning branch and fast-forwards the main worktree. If you need to consolidate text outputs from all branches (plans, DoDs, reviews), do not use `tripleoctagon`; converge edges onto a normal box consolidator node and read branch outputs via `parallel_results.json` + `worktree_dir`.
+
+Verification scoping rules:
+- Scope required checks to project/module paths.
+- Scope linting to changed files vs `$base_sha`.
+- Treat unrelated pre-existing lint failures as non-blocking for feature verification.
+
+Artifact hygiene:
+- Fail verification if feature diffs include build/cache/temp artifact paths unless explicitly required by spec.
+
+Deliverable verification rule:
+- If user requirements name concrete deliverable paths (for example `demo/.../index.html`), include deterministic `shape=parallelogram` checks that assert those files exist (and key invariants if known).
+- Do not rely only on narrative review prompts for deliverable existence.
+
+### Phase 5: Validate and Repair (Required)
+
+Before final output:
+1. Ensure no unresolved placeholders remain (`DEFAULT_MODEL`, `HARD_MODEL`, etc.).
+2. Re-check explicit user constraints (especially `no fanout`).
+3. Re-check file handoff integrity.
+4. Re-check failure routing guards on check nodes.
+5. Re-check condition syntax and fallback edges.
+6. Re-check that prerequisite/tool gates cannot be bypassed via unconditional edges.
+7. Re-check that all explicit deliverable paths have deterministic verification nodes.
+8. Re-check every codergen prompt includes both status-path variables and explicit fail/retry payload guidance.
+9. Re-check `.ai/*` producers/consumers use exact same filenames.
+
+Validation loop (max 10 attempts):
+- Run Graphviz syntax check when available:
+  - `dot -Tsvg <graph.dot> -o /dev/null`
+- Run Kilroy validator:
+  - `./kilroy attractor validate --graph <graph.dot>`
+  - or `go run ./cmd/kilroy attractor validate --graph <graph.dot>`
+- Apply minimal edits per diagnostics and retry.
+
+If still failing at attempt 10:
+- Programmatic mode: emit best-repaired DOT only.
+- Interactive mode: report failure diagnostics clearly.
+
+## Reference Skeleton
+
+Use this as baseline shape (adapt node names as needed):
+
+```dot
+digraph project_pipeline {
+  graph [
+    goal="...",
+    rankdir=LR,
+    default_max_retry=3,
+    retry_target="implement",
+    fallback_retry_target="debate_consolidate",
+    model_stylesheet="
+      * { llm_model: DEFAULT; llm_provider: DEFAULT_PROVIDER; }
+      .hard { llm_model: HARD; llm_provider: HARD_PROVIDER; }
+      .verify { llm_model: VERIFY; llm_provider: VERIFY_PROVIDER; }
+      .branch-a { llm_model: A; llm_provider: A_PROVIDER; }
+      .branch-b { llm_model: B; llm_provider: B_PROVIDER; }
+      .branch-c { llm_model: C; llm_provider: C_PROVIDER; }
+    "
+  ]
+
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+
+  implement [shape=box, class="hard"]
+  check_implement [shape=diamond]
+
+  fix_fmt [shape=parallelogram, max_retries=0]
+  verify_fmt [shape=parallelogram, max_retries=0]
+  check_fmt [shape=diamond]
+
+  verify_build [shape=parallelogram]
+  check_build [shape=diamond]
+
+  review_consensus [shape=box, goal_gate=true]
+  postmortem [shape=box]
+
+  start -> implement
+  implement -> check_implement
+  check_implement -> fix_fmt [condition="outcome=success"]
+  check_implement -> implement [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
+  check_implement -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
+  check_implement -> postmortem
+  fix_fmt -> verify_fmt
+  verify_fmt -> check_fmt
+  check_fmt -> verify_build [condition="outcome=success"]
+  check_fmt -> postmortem [condition="outcome=fail"]
+  check_fmt -> postmortem
+  verify_build -> check_build
+  check_build -> review_consensus [condition="outcome=success"]
+  check_build -> postmortem [condition="outcome=fail"]
+  check_build -> postmortem
+  review_consensus -> exit [condition="outcome=success"]
+  review_consensus -> postmortem [condition="outcome=retry"]
+  review_consensus -> postmortem
+  postmortem -> implement
 }
 ```
 
-#### Provenance header
-
-To improve operator ergonomics and traceability, include a provenance header at the top of the graph attribute block when possible.
-
-Guideline:
-- If the source is text, embed it in graph attributes (escaped/chunked if needed).
-- If the source is one or more files, link them by repo-relative path and include the commit SHA used to generate the graph.
-- Keep provenance inside `graph [ ... ]` so programmatic output still starts with `digraph`.
-
-Suggested attribute pattern:
-```
-graph [
-    provenance_version="1",
-    provenance_text_1="...escaped source text..."
-    provenance_file_1="path=docs/spec.md;git_sha=<sha>"
-]
-```
-
-#### Expand spec node (when input is vague)
-
-When the requirements are short/vague and no spec file exists in the repo, add an `expand_spec` node as the first node after start. This node creates the spec that all subsequent nodes reference:
-
-```
-expand_spec [
-    shape=box,
-    auto_status=true,
-    prompt="Given these requirements: [INLINE THE EXPANDED REQUIREMENTS HERE].
-
-Expand into a detailed spec covering: [RELEVANT SECTIONS].
-Write the spec to .ai/spec.md.
-
-Write status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.
-Write status JSON: outcome=success"
-]
-
-start -> expand_spec -> impl_setup
-```
-
-When a detailed spec file already exists in the repo (e.g., `specs/my-spec.md`), skip this node entirely. Just start with `impl_setup`.
-
-#### Toolchain bootstrap for non-default dependencies (DOT + run config)
-
-If the deliverable needs tools that are commonly missing (for example `wasm-pack`, Playwright browsers, Android/iOS SDKs), use a user-controlled two-layer policy:
-
-1. Determine required tools from the planned build/test commands and runtime requirements.
-2. Check current environment readiness (`command -v <tool>`) for those tools.
-3. Always add an early DOT readiness gate (`shape=parallelogram` `tool_command`) to fail fast with actionable errors.
-4. Add companion run config bootstrap (`setup.commands`) only when the user explicitly opts in to auto-install/self-prepare behavior.
-
-Interactive mode:
-- If required tools are missing, ask exactly one question before adding installer commands to run config.
-- Question pattern: "Missing required tools detected: [list]. Do you want run.yaml setup.commands to install/bootstrap them automatically?"
-- If user says yes: add idempotent installer/bootstrap commands.
-- If user says no: keep check-only gate and include exact install commands in the failure text.
-
-Programmatic mode:
-- You cannot ask questions. Default to non-mutating behavior:
-  - include check_toolchain readiness gate,
-  - do not add installer commands,
-  - include exact install commands in the tool failure message.
-
-Use this split deliberately:
-- `setup.commands` prepares the environment before the first node executes and is re-run on resume.
-- `check_toolchain` in DOT gives explicit, user-facing failure messages inside the run graph.
-
-Example companion run config fragment (only when user opts in to auto-install):
-
-```yaml
-setup:
-  timeout_ms: 900000
-  commands:
-    - command -v cargo >/dev/null
-    - command -v wasm-pack >/dev/null || cargo install wasm-pack
-    - rustup target list --installed | grep -qx wasm32-unknown-unknown || rustup target add wasm32-unknown-unknown
-```
-
-Example DOT readiness gate:
-
-```dot
-check_toolchain [
-    shape=parallelogram,
-    max_retries=0,
-    tool_command="bash -lc 'set -euo pipefail; command -v cargo >/dev/null || { echo \"missing required tool: cargo\" >&2; exit 1; }; command -v wasm-pack >/dev/null || { echo \"missing required tool: wasm-pack\" >&2; exit 1; }'"
-]
-
-start -> check_toolchain -> impl_setup
-```
-
-If the user explicitly wants a non-mutating environment (no auto-install), keep only the readiness gate and make the failure message include the exact install command.
-
-#### CXDB launcher defaults for companion run config (this repo)
-
-When you produce or update a companion `run.yaml` in this repository and CXDB endpoints are local (`127.0.0.1`/`localhost`), default to launcher-based autostart:
-
-```yaml
-cxdb:
-  binary_addr: 127.0.0.1:9009
-  http_base_url: http://127.0.0.1:9010
-  autostart:
-    enabled: true
-    command:
-      - /home/user/code/kilroy/scripts/start-cxdb.sh
-    wait_timeout_ms: 30000
-    poll_interval_ms: 250
-    ui:
-      url: http://127.0.0.1:9010
-```
-
-Rules:
-- Use the absolute launcher path shown above for this repo.
-- Prefer launcher autostart over manual "start CXDB first" prerequisites for local runs.
-- `scripts/start-cxdb.sh` is strict by default and rejects unmanaged healthy endpoints (to avoid accidentally using a test shim on the same ports).
-- If the user intentionally wants an external non-docker endpoint, document `KILROY_CXDB_ALLOW_EXTERNAL=1` in the run instructions (or disable autostart explicitly).
-
-If `cxdb.http_base_url` / `cxdb.binary_addr` point to non-local hosts, do not force the local launcher path; keep autostart optional and honor user/environment constraints.
-
-#### Node pattern: implement then verify
-
-For EVERY implementation unit — including `impl_setup` — generate a PAIR of nodes plus a conditional:
-
-```
-impl_X [
-    shape=box,
-    class="hard",
-    max_retries=2,
-    prompt="Implement [UNIT]. Read [SPEC_PATH] and required dependency files. Write implementation outputs to the declared files.\n\nRun required build/test checks for this unit.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if checks pass, outcome=fail with failure_reason and details otherwise."
-]
-
-verify_X [
-    shape=box,
-    class="verify",
-    prompt="Verify [UNIT]. Run: [BUILD_CMD] && [TEST_CMD]\nWrite results to .ai/verify_X.md.\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if all pass, outcome=fail with failure_reason and details otherwise."
-]
-
-check_X [shape=diamond, label="X OK?"]
-
-impl_X -> verify_X
-verify_X -> check_X
-check_X -> impl_Y  [condition="outcome=success"]
-check_X -> impl_X  [condition="outcome=fail", label="retry"]
-```
-
-For build pipelines, no exceptions: every implementation node (including `impl_setup`) must be followed by verify/check. `expand_spec` is the only build-pipeline node that may skip verification (use `auto_status=true` instead). Non-build workflows may use the relaxed 2-node pattern documented below.
-
-#### Goal gates
-
-Place `goal_gate=true` on:
-- The final integration test node
-- Any node producing a critical artifact (e.g., valid font file, working binary)
-
-#### Review node
-
-Near the end, after all implementation, add a review node with `class="review"` and `goal_gate=true` that reads the spec and validates the full project against it.
-
-On review failure, `check_review` must loop back to a LATE-STAGE node — typically the integration/polish node or the last major impl node. Never loop back to `impl_setup` or the beginning. The review failure means something is broken or missing in the final product, not that the entire project needs to be rebuilt from scratch.
-
-#### Advanced Graph Patterns
-
-##### Custom multi-outcome steering
-
-The skill's default impl→verify→check pattern uses binary `outcome=success`/`outcome=fail`. But prompts can define any custom outcome values, and edges can route on them. Use this for workflows with skip/acknowledge/escalate paths:
-
-```
-analyze [
-    shape=box,
-    prompt="Analyze the commit. If it's relevant to our Go codebase, use outcome=port. If it's Python-only or docs-only, use outcome=skip.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=port or outcome=skip with reasoning."
-]
-
-analyze -> plan_port  [condition="outcome=port", label="port"]
-analyze -> fetch_next [condition="outcome=skip", label="skip", loop_restart=true]
-```
-
-When using custom outcomes, the prompt MUST tell the agent exactly which outcome values to write and when.
-
-##### Looping/cyclic workflows
-
-Not all pipelines are linear build-then-review chains. Some workflows process items in a loop until done (e.g., processing commits, handling a queue, iterating on feedback). The key pattern:
-
-```
-start -> fetch_next
-fetch_next -> process [condition="outcome=process"]
-fetch_next -> exit    [condition="outcome=done"]
-process -> validate
-validate -> finalize  [condition="outcome=success"]
-validate -> fix       [condition="outcome=fail"]
-fix -> validate
-finalize -> fetch_next [loop_restart=true]
-```
-
-Key elements:
-- A **fetch/check** node at the loop head that returns `outcome=done` when there's nothing left
-- `loop_restart=true` on the edge that loops back, so each iteration gets a fresh log directory
-- The loop body follows the same impl→verify pattern as linear pipelines
-
-Failure-edge restart policy:
-- Use `loop_restart=true` on failure edges only when the condition includes `context.failure_class=transient_infra`.
-- Always pair that restart edge with a non-restart deterministic fail edge, e.g. `context.failure_class!=transient_infra`.
-
-Example:
-```
-check_X -> impl_X [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
-check_X -> impl_X [condition="outcome=fail && context.failure_class!=transient_infra"]
-```
-
-##### Fan-out / fan-in (parallel consensus)
-
-When you need multiple models to independently tackle the same task and then consolidate:
-
-```
-// Fan-out: one node fans to 3 parallel workers
-consolidate_input -> plan_a
-consolidate_input -> plan_b
-consolidate_input -> plan_c
-
-// Fan-in: all 3 converge on a synthesis node
-plan_a -> synthesize
-plan_b -> synthesize
-plan_c -> synthesize
-
-synthesize [
-    shape=box,
-    prompt="Read .ai/plan_a.md, .ai/plan_b.md, .ai/plan_c.md. Synthesize the best elements into .ai/plan_final.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success when synthesis is complete, outcome=fail with failure_reason and details otherwise."
-]
-```
-
-Each parallel worker writes its output to a uniquely-named `.ai/` file. The synthesis node reads all of them. This pattern is used for:
-- Definition of Done proposals (3 models propose, 1 consolidates)
-- Implementation planning (3 plans, 1 debate/consolidate)
-- Code review (3 reviewers, 1 consensus)
-
-#### Parallel write-scope discipline (Guideline + Requirement)
-
-Guideline:
-- Partition fan-out branches by natural ownership boundaries (for example one package/subsystem per branch) so each branch can be validated independently.
-
-Requirement:
-- Every fan-out branch prompt MUST declare explicit write-scope paths.
-- Branch write scopes MUST be disjoint.
-- Shared/core files (for example registry/index/type hubs) are read-only during fan-out.
-- Shared/core edits happen in a dedicated post-fan-in integration node.
-- Each branch verify node MUST compare changed files vs `$base_sha` and fail with `failure_reason=write_scope_violation` if any changed path is outside the declared scope.
-
-#### Checkpoint Ergonomics (Requirements)
-
-- Prefer nodes that each produce one checkpoint-worthy artifact or decision.
-- Avoid long internal dependency chains inside a single node.
-- Avoid one giant fan-out wave for large systems; use staged fan-out waves.
-- After each fan-in, add a parent checkpoint barrier node (for example `verify_batch_N` or `consolidate_batch_N`) before launching the next fan-out.
-- Split broad implementation into multiple fan-out/fan-in phases so operators can stop/resume with minimal replay.
-
-##### Relaxed node patterns (2-node vs 3-node)
-
-The mandatory 3-node pattern (impl → verify → diamond check) is the **default for build pipelines**. But for non-build workflows (analysis, review, processing loops), a 2-node pattern is acceptable:
-
-**Use 3-node (impl → verify → check) when:**
-- The node produces code that must compile/pass tests
-- There's a concrete build/test command to run
-
-**Use 2-node (work → check) when:**
-- The node is analytical (review, planning, triage) with no build step
-- The node's prompt already includes outcome routing instructions
-- The verify step would just be "read what the previous node wrote"
-
-In the 2-node pattern, the work node acts as its own steer — its prompt instructs the agent to write `outcome=success`/`outcome=fail`/`outcome=<custom>` directly.
-
-##### File-based inter-node communication
-
-Nodes communicate through the filesystem, not through context variables. Each node writes its output to a named file under `.ai/`, and downstream nodes' prompts tell them which files to read:
-
-```
-plan [
-    shape=box,
-    prompt="Create an implementation plan. Write to .ai/plan.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success when the plan is complete, outcome=fail with failure_reason and details otherwise."
-]
-
-implement [
-    shape=box,
-    prompt="Follow the plan in .ai/plan.md. Implement all items. Log changes to .ai/impl_log.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success when implementation is complete, outcome=fail with failure_reason and details otherwise."
-]
-
-review [
-    shape=box,
-    prompt="Read .ai/plan.md and .ai/impl_log.md. Review implementation against the plan. Write review to .ai/review.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success when review passes, outcome=fail with failure_reason and details otherwise."
-]
-```
-
-This pattern is mandatory because each node runs in a fresh agent session with no memory of prior nodes. The filesystem is the only shared state.
-
-### Phase 4: Write Prompts
-
-Every prompt must be **self-contained**. The agent executing it has no memory of prior nodes. Every prompt MUST include:
-
-1. **What to do**: "Implement the bitmap threshold conversion per section 1.4 of demo/dttf/dttf-v1.md"
-2. **What to read**: "Read demo/dttf/dttf-v1.md section 1.4 and pkg/dttf/types.go"
-3. **What to write**: "Create pkg/dttf/loader.go with the LoadGlyphs function"
-4. **Acceptance criteria**: "Run `go build ./cmd/dttf ./pkg/dttf/...` and `go test ./cmd/dttf/... ./pkg/dttf/...` — both must pass"
-5. **Outcome instructions**: "Write status JSON to `$KILROY_STAGE_STATUS_PATH` (absolute path), fallback to `$KILROY_STAGE_STATUS_FALLBACK_PATH`, avoid nested status.json files, and set outcome=success/fail with failure_reason + details as appropriate"
-
-Validation scope policy:
-- Required checks must be scoped to the project/module paths created by the pipeline (for Go, prefer `./cmd/<app>` + `./pkg/<app>/...`).
-- Do NOT default to repo-wide `./...` required checks in monorepos/sandboxed environments unless the user explicitly requests full-repo validation.
-- Lint commands in verify nodes MUST be scoped to files changed by the current feature, not the entire project. Pre-existing lint errors in unrelated files will cause infinite retry loops.
-  - Use `$base_sha` (the commit SHA at run start, expanded by the engine) to identify changed files.
-  - TypeScript/JS: `git diff --name-only $base_sha -- '*.ts' '*.tsx' '*.js' '*.jsx' | xargs -r npx eslint`
-  - Go: scope to project paths (`./cmd/<app>/...`, `./pkg/<app>/...`), not `./...`
-  - Python: `git diff --name-only $base_sha -- '*.py' | xargs -r ruff check`
-- Build and test commands may run project-wide (failures in changed code are real problems).
-- If no files match the lint filter, skip lint and report success.
-- Repo-wide network-dependent checks are advisory. If attempted and blocked by DNS/proxy/network policy, record them as skipped in `.ai/` output and continue based on scoped required checks.
-
-File integrity and formatting policy:
-- Guideline: Include a lightweight structural integrity check before broad tests so malformed files fail fast.
-- Requirement: Verify prompts MUST include syntax/parse/compile sanity and formatter checks scoped to changed files or the module under test.
-  - Rust example: `cargo fmt --all -- --check` then scoped `cargo check`
-  - Go example: `gofmt` check on changed `.go` files then scoped `go build`
-  - TypeScript example: formatter check on changed files then scoped typecheck/build
-  - Python example: formatter/lint check on changed files then scoped import/test sanity
-- On these failures, use stable classes like `failure_reason=format_invalid` or `failure_reason=parse_invalid` with concrete file/line details.
-
-Workspace artifact hygiene:
-- Guideline: Build/test artifacts are expected locally but should not be treated as feature output.
-- Requirement: Verify prompts MUST fail when feature diffs include artifact/output paths unless explicitly required by spec.
-- Check changed files vs `$base_sha` and block paths such as `target/`, `dist/`, `build/`, `.pytest_cache/`, `node_modules/`, coverage outputs, temp files, or backup files.
-- Use `failure_reason=artifact_pollution` and list offending paths in `details`.
-
-#### Mandatory status-file contract
-
-Every codergen prompt MUST explicitly instruct the agent to write status JSON to `$KILROY_STAGE_STATUS_PATH` (absolute path).
-
-Required wording (or equivalent):
-- "Write status JSON to `$KILROY_STAGE_STATUS_PATH` (absolute path)."
-- "If that path is unavailable, use `$KILROY_STAGE_STATUS_FALLBACK_PATH`."
-- "Do not write status.json inside nested module directories after `cd`."
-
-#### Canonical failure-status contract (Guideline + Requirement)
-
-Guideline:
-- Keep failure payloads machine-stable and human-readable so retries/routing/diagnostics remain deterministic.
-
-Requirement:
-- For `outcome=fail` or `outcome=retry`, status JSON MUST include both:
-  - `failure_reason` (short stable reason code)
-  - `details` (human-readable explanation)
-- Do not emit non-canonical fail payloads like `{"outcome":"fail","gaps":[...]}` without `failure_reason`.
-- If structured diagnostics are needed, place them inside `details` (text or serialized JSON) while still including `failure_reason`.
-
-Allowed examples:
-- `{"outcome":"fail","failure_reason":"compile_failed","details":"cargo check failed in src/types.rs:42"}`
-- `{"outcome":"retry","failure_reason":"transient_infra","details":"provider timeout while generating verify report"}`
-
-Implementation prompt template:
-```
-Goal: $goal
-
-Implement [DESCRIPTION].
-
-Spec: [SPEC_PATH], section [SECTION_REF].
-Read: [DEPENDENCY_FILES] for types/interfaces you need.
-
-Create/modify:
-- [FILE_LIST]
-
-Acceptance:
-- `[BUILD_COMMAND]` must pass
-- `[TEST_COMMAND]` must pass
-
-Write status JSON to `$KILROY_STAGE_STATUS_PATH` (absolute path). If unavailable, use `$KILROY_STAGE_STATUS_FALLBACK_PATH`. Do not write status.json in nested module directories after `cd`.
-Write status JSON: outcome=success if all criteria pass, outcome=fail with failure_reason and details otherwise.
-```
-
-Verification prompt template:
-```
-Verify [UNIT_DESCRIPTION] was implemented correctly.
-
-Run:
-1. `[BUILD_COMMAND]`
-2. Lint ONLY files changed by this feature (do NOT lint the entire project):
-   `git diff --name-only $base_sha -- [FILE_EXTENSIONS] | xargs -r [LINT_COMMAND]`
-   If no files match, skip lint and note "no changed files to lint" in results.
-3. Structural integrity + formatting checks scoped to changed files/module under test (language-appropriate; fail fast on parse/format issues).
-4. `[TEST_COMMAND]`
-5. [DOMAIN_SPECIFIC_CHECKS]
-6. Artifact hygiene check: fail if diff vs `$base_sha` includes artifact/output/temp/backup paths unless explicitly required by spec.
-
-IMPORTANT: Pre-existing lint errors in unrelated files must not block this feature.
-
-Write results to .ai/verify_[NODE_ID].md.
-Write status JSON to `$KILROY_STAGE_STATUS_PATH` (absolute path). If unavailable, use `$KILROY_STAGE_STATUS_FALLBACK_PATH`. Do not write status.json in nested module directories after `cd`.
-Write status JSON: outcome=success if ALL pass, outcome=fail with failure_reason and details.
-```
-
-Use language-appropriate commands: `go build`/`go test` for Go, `cargo build`/`cargo test` for Rust, `npm run build`/`npm test` for TypeScript, `pytest`/`mypy` for Python, etc.
-
-#### Steering/analysis prompt template (for multi-outcome nodes)
-
-For nodes that route to different paths based on analysis (not just success/fail):
-
-```
-Goal: $goal
-
-Analyze [SUBJECT].
-
-Read: [INPUT_FILES]
-
-Evaluate against these criteria:
-- [CRITERION_1]: if true, use outcome=[VALUE_1]
-- [CRITERION_2]: if true, use outcome=[VALUE_2]
-- [CRITERION_3]: if true, use outcome=[VALUE_3]
-
-Write your analysis to .ai/[ANALYSIS_FILE].md.
-Write status JSON to `$KILROY_STAGE_STATUS_PATH` (absolute path). If unavailable, use `$KILROY_STAGE_STATUS_FALLBACK_PATH`. Do not write status.json in nested module directories after `cd`.
-Write status JSON with the appropriate outcome value. If the chosen outcome is `fail` or `retry`, include both `failure_reason` and `details`.
-```
-
-#### Prompt complexity scaling
-
-Simple impl/verify prompts (5-10 lines) are fine for straightforward tasks. But prompts for complex workflows should be substantially richer:
-
-- **Simple tasks** (create a file, run a test): 5-10 line prompt
-- **Moderate tasks** (implement a module per spec): 15-25 line prompt with spec references, file lists, acceptance criteria
-- **Complex tasks** (multi-step with external tools, conditional logic): 30-60 line prompt with numbered steps, embedded commands, examples of expected output, and explicit conditional logic
-
-The reference dotfiles in `docs/strongdm/dot specs/` demonstrate production-quality prompts with multi-paragraph instructions, embedded shell commands with examples, numbered steps, and conditional branches within a single prompt.
-
-### Phase 5: Model Selection
-
-Use Phase 0B to decide concrete model IDs, providers, executor plan, parallelism, and thinking. Then:
-
-- Assign `class` attributes based on Phase 2 complexity and node role: default, `hard`, `verify`, `review`.
-- Encode the chosen plan in the graph `model_stylesheet` so nodes inherit `llm_provider`, `llm_model`, and (optionally) `reasoning_effort`.
-
-#### Provider-specific reasoning behavior
-
-**Cerebras GLM 4.7 (`zai-glm-4.7`):**
-- Reasoning is **always on** — there is no `reasoning_effort` control for this model (that parameter only applies to `gpt-oss-120b` on Cerebras). Setting `reasoning_effort` on a GLM 4.7 node is harmless but has no effect.
-- The relevant knob is `clear_thinking` (Cerebras-specific). When `true` (the default), prior turns' reasoning is stripped from context. When `false`, prior reasoning is preserved across turns — essential for agent-loop mode where the model should build on its prior chain-of-thought.
-- The engine automatically sets `clear_thinking: false` for Cerebras when running in agent-loop mode, so no manual configuration is needed in the dotfile or run config.
-- If you need to override this default, pass it via `provider_options` on the request (the openaicompat adapter merges `provider_options[cerebras]` into the request body).
-
-### Phase 6: Self-Validate and Auto-Repair the DOT (Iterate Until It Passes, Cap 10)
-
-Before emitting the final output, you MUST validate the candidate DOT locally and repair any issues, iterating until it passes or you hit the attempt cap (10).
-
-Run these validators (both when available):
-
-1. Graphviz parser check (if `dot` is installed):
-   - `dot -Tsvg <graph.dot> -o /dev/null`
-2. Kilroy Attractor validator:
-   - Prefer `./kilroy attractor validate --graph <graph.dot>` if `./kilroy` exists
-   - Otherwise use `go run ./cmd/kilroy attractor validate --graph <graph.dot>`
-
-Repair loop (max 10 attempts):
-
-1. Draft the DOT in memory as `candidate_dot` (still follow all rules above).
-2. For attempt 1..10:
-   - Write `candidate_dot` to a temporary file (prefer `mktemp`; otherwise write under `.ai/`).
-   - Run Graphviz check (if available). Capture the error output.
-   - Run Kilroy validate. Capture the diagnostics.
-   - If BOTH succeed, stop and emit exactly `candidate_dot` as your final response.
-   - If either fails, apply the smallest possible edits to `candidate_dot` to address the reported errors, then retry.
-3. If attempt 10 still fails:
-   - Programmatic mode: output `DOT_VALIDATION_FAILED` with the last error messages and STOP (no digraph).
-   - Interactive mode: explain what failed and include the last error messages (do not pretend it validates).
-
-Common repairs (use validator output; do not guess blindly):
-
-- Remove any non-DOT text outside the `digraph { ... }`.
-- Fix quoting/escaping in string attributes (especially `model_stylesheet` and `prompt`).
-- Ensure required graph attrs exist: `goal`, `model_stylesheet`, `default_max_retry`, `retry_target`, `fallback_retry_target`.
-- Ensure exactly one `start` and one `exit`, with correct `shape` and reachability.
-- Fix missing semicolons / commas / brackets in node/edge attribute lists.
-- Replace edge `label="success"` style routing with proper `condition="outcome=..."`.
-
-## Kilroy DSL Quick Reference
-
-### Shapes (handler types)
-
-| Shape | Handler | Use |
-|-------|---------|-----|
-| `Mdiamond` | start | Entry point. Exactly one. |
-| `Msquare` | exit | Exit point. Exactly one. |
-| `box` | codergen | LLM task (default for all nodes). |
-| `diamond` | conditional | Pass-through routing point. Routes based on edge conditions against current context. |
-| `hexagon` | wait.human | Human approval gate (only for interactive runners). |
-| `component` | parallel | Fan-out: executes outgoing branches concurrently. |
-| `tripleoctagon` | parallel.fan_in | Fan-in: waits for branches, selects best result. |
-| `parallelogram` | tool | Shell command execution (uses `tool_command` attribute). |
-
-### Node attributes
-
-| Attribute | Description |
-|-----------|-------------|
-| `label` | Display name (defaults to node ID) |
-| `shape` | Handler type: `Mdiamond` (start), `Msquare` (exit), `box` (codergen), `diamond` (conditional), `hexagon` (wait.human), `component` (parallel fan-out), `tripleoctagon` (fan-in), `parallelogram` (tool/shell) |
-| `type` | Explicit handler override (takes precedence over shape) |
-| `prompt` | LLM instruction. Supports `$goal` and `$base_sha` expansion. Also accepted as `llm_prompt` (alias). |
-| `class` | Comma-separated classes for model stylesheet targeting (e.g., `"hard"`, `"verify"`, `"review"`) |
-| `max_retries` | Additional attempts beyond initial execution. `max_retries=3` = 4 total. |
-| `goal_gate` | `true` = node must succeed before pipeline can exit |
-| `retry_target` | Node ID to jump to if this goal_gate fails |
-| `fallback_retry_target` | Secondary retry target |
-| `allow_partial` | `true` = accept PARTIAL_SUCCESS when retries exhausted instead of FAIL. Use on long-running nodes where partial progress is valuable. |
-| `max_agent_turns` | Session budget for this node. Set high enough for the scoped task to complete without premature provider failover. |
-| `timeout` | Duration (e.g., `"300"`, `"900s"`, `"15m"`). Applies to any node type. Bare integers are seconds. |
-| `auto_status` | `true` = auto-generate SUCCESS outcome if handler writes no status.json. Only use on `expand_spec`. |
-| `llm_model` | Override model for this node (overrides stylesheet) |
-| `llm_provider` | Override provider for this node |
-| `reasoning_effort` | `low`, `medium`, `high` |
-| `fidelity` | Context fidelity: `full`, `truncate`, `compact`, `summary:low`, `summary:medium`, `summary:high` |
-| `thread_id` | Thread key for LLM session reuse under `full` fidelity |
-
-### Edge attributes
-
-| Attribute | Description |
-|-----------|-------------|
-| `label` | Display caption and preferred-label routing key |
-| `condition` | Boolean guard: `outcome=success`, `outcome=fail`, `outcome=skip`, etc. AND-only (`&&`). |
-| `weight` | Numeric priority for edge selection (higher wins among equally eligible edges) |
-| `fidelity` | Override fidelity mode for the target node |
-| `thread_id` | Override thread key for session reuse at target node |
-| `loop_restart` | When `true`, terminates the current run and re-launches with a fresh log directory starting at the edge's target node. Use on edges that loop back to much-earlier nodes where accumulated context/logs would be stale. |
-
-### Conditions
-
-```
-condition="outcome=success"
-condition="outcome=fail"
-condition="outcome=success && context.tests_passed=true"
-condition="outcome!=success"
-```
-
-Custom outcome values work: `outcome=port`, `outcome=skip`, `outcome=needs_fix`. Define them in prompts, route on them in edges.
-
-### Canonical outcomes
-
-`success`, `partial_success`, `retry`, `fail`, `skipped`
+## Quick Reference
+
+### Shapes
+
+| Shape | Handler | Purpose |
+|---|---|---|
+| `Mdiamond` | start | Entry node (exactly one) |
+| `Msquare` | exit | Exit node (exactly one) |
+| `box` | codergen | LLM task |
+| `diamond` | conditional | Routes prior outcome only (no prompt execution) |
+| `component` | parallel | Fan-out |
+| `tripleoctagon` | parallel.fan_in | Fan-in |
+| `parallelogram` | tool | Deterministic command/tool gate |
+
+### Required Graph-Level Attributes
+
+| Attribute | Why |
+|---|---|
+| `goal` | Runtime objective and prompt variable |
+| `model_stylesheet` | Model/provider defaults per class |
+| `default_max_retry` | Global retry ceiling |
+| `retry_target` | Recovery target for unsatisfied goal gates |
+| `fallback_retry_target` | Recovery fallback |
+
+### Outcome Values
+
+Canonical values:
+- `success`
+- `partial_success`
+- `retry`
+- `fail`
+- `skipped`
+
+Custom outcomes are allowed if prompts define them explicitly and edges route with `condition="outcome=<value>"`.
 
 ## Anti-Patterns
 
-1. **No verification after implementation (in build pipelines).** Every impl node that produces code MUST have a verify node after it. Never chain impl → impl → impl. Exception: analytical/triage nodes in non-build workflows may use the 2-node pattern (see "Relaxed node patterns" above).
+1. **No verification after implementation (in build pipelines).** Every impl node that produces code MUST have a verify node after it. Never chain impl -> impl -> impl. Exception: analytical/triage nodes in non-build workflows may use the 2-node pattern.
 2. **Labels instead of conditions.** `[label="success"]` does NOT route. Use `[condition="outcome=success"]`.
-3. **All failures → exit.** Failure edges must loop back to the implementation node for retry, not to exit.
+3. **All failures -> exit.** Failure edges must loop back to the implementation node for retry, not to exit.
 4. **Multiple exit nodes.** Exactly one `shape=Msquare` node. Route failures through conditionals, not separate exits.
 5. **Prompts without outcome instructions.** Every prompt must tell the agent what to write in status.json.
-6. **Inlining the spec.** Reference the spec file by path. Don't copy it into prompt attributes. Exception: `expand_spec` node bootstraps the spec.
+6. **Inlining the spec.** Reference the spec file by path. Don't copy it into prompt attributes. Exception: bootstrap nodes (for example `expand_spec`) may inline or copy user-provided content verbatim solely to seed the canonical `.ai/spec.md` (and related `.ai/*` seed artifacts) when no file exists yet.
 7. **Missing graph attributes.** Always set `goal`, `model_stylesheet`, `default_max_retry`.
-8. **Wrong shapes.** Start must be `Mdiamond`. Exit must be `Msquare`. The validator also accepts nodes with id `start`/`exit` regardless of shape, but always use the canonical shapes.
-9. **Unnecessary timeouts.** Do NOT add timeouts to simple impl/verify nodes in linear pipelines — a single CLI run can legitimately take hours. DO add timeouts to nodes in looping pipelines (to prevent infinite hangs) or nodes calling external services. When adding timeouts, use generous values (`"900"` for normal work, `"1800"` for complex implementation, `"2400"` for integration).
-10. **Build files after implementation.** Project setup (module file, directory structure) must be the FIRST implementation node.
-11. **Catastrophic review rollback.** Review failure (`check_review -> impl_X`) must target a LATE node (integration, CLI, or the last major impl). Never loop `check_review` back to `impl_setup` — this throws away all work. Target the last integration or polish node.
-12. **Missing verify class.** Every verify node MUST have `class="verify"` so the model stylesheet applies your intended verify model and thinking.
-13. **Missing expand_spec for vague input.** If no spec file exists in the repo, the pipeline MUST include an `expand_spec` node. Without it, `impl_setup` references `.ai/spec.md` that doesn't exist in the fresh worktree.
-14. **Hardcoding language commands.** Use the correct build/test/lint commands for the project's language. Don't write `go build` for a Python project.
-15. **Missing file-based handoff.** Every node that produces output for downstream nodes must write it to a named `.ai/` file. Every node that consumes prior output must be told which files to read. Relying on context variables for large data (plans, reviews, logs) does not work — use the filesystem.
-16. **Binary-only outcomes in steering nodes.** If a workflow has more than two paths (e.g., process/skip/done), define custom outcome values in the prompt and route on them with conditions. Don't force everything into success/fail.
-17. **Unscoped Go monorepo checks.** Do NOT make repo-wide `go build ./...`, `go vet ./...`, or `go test ./...` required by default. Scope required checks to generated project paths (e.g., `./cmd/<app>`, `./pkg/<app>/...`). Treat blocked repo-wide network checks as advisory/skipped.
-18. **Unscoped lint in verify nodes.** Do NOT use `npm run lint`, `ruff check .`, or any project-wide lint command in verify nodes. Scope lint to changed files using `git diff --name-only $base_sha`. Pre-existing errors in unrelated files cause infinite retry loops where the agent burns tokens trying to fix code it didn't write.
-19. **Overly aggressive API preflight timeouts in run config.** When producing or updating a companion run config for real-provider runs, set `preflight.prompt_probes.timeout_ms: 60000` (60s) as the baseline to reduce startup failures from transient provider latency spikes.
-20. **Missing toolchain readiness gates for non-default build dependencies.** If the deliverable needs tools that are often absent (for example `wasm-pack`, Playwright browsers, mobile SDKs), add an early `shape=parallelogram` tool node that checks prerequisites and blocks the pipeline before expensive LLM stages.
-21. **Auto-install bootstrap without explicit user opt-in (interactive mode).** When tools are missing, do not silently add installer commands to run config. Ask the user first, then apply their choice.
-22. **Toolchain checks with no bootstrap path (when auto-install is intended).** If the run is expected to self-prepare the environment, companion run config must include idempotent `setup.commands` install/bootstrap steps. A check-only gate without setup bootstrap causes immediate hard failure.
-23. **Unguarded failure restarts.** Do NOT set `loop_restart=true` on generic `outcome=fail` edges. Guard restart edges with `context.failure_class=transient_infra` and add a companion deterministic edge without restart (`context.failure_class!=transient_infra`).
-24. **Local CXDB configs without launcher autostart.** In this repo, do not emit companion `run.yaml` that points at local CXDB endpoints but omits `cxdb.autostart` launcher wiring. That creates fragile manual setup and can silently attach to the wrong daemon.
-25. **Non-canonical fail payloads.** Do NOT emit `outcome=fail` or `outcome=retry` without both `failure_reason` and `details`.
-26. **Artifact pollution in feature diffs.** Do NOT allow build/cache/temp/backup artifacts in changed-file diffs unless explicitly required by the spec.
-27. **Overlapping fan-out write scopes.** Do NOT let parallel branches modify shared/core files; reserve shared edits for a dedicated post-fan-in integration node.
-28. **`reasoning_effort` on Cerebras GLM 4.7.** Do NOT set `reasoning_effort` on GLM 4.7 nodes expecting it to control reasoning depth — that parameter only works on Cerebras `gpt-oss-120b`. GLM 4.7 reasoning is always on. The engine automatically sets `clear_thinking: false` for Cerebras agent-loop nodes to preserve reasoning context across turns.
+8. **Wrong shapes.** Start must be `Mdiamond`. Exit must be `Msquare`.
+9. **Unnecessary timeouts.** Do NOT add timeouts to simple impl/verify nodes in linear pipelines; do add timeouts to looping/external-service nodes.
+10. **Build files after implementation.** Project setup (module file, directory structure) must be the first implementation node.
+11. **Catastrophic review rollback.** In inner repair loops, do not route failure directly back to earliest setup nodes; use late-stage repair or outer postmortem/re-plan loops.
+12. **Missing verify class.** Every verify node MUST have `class="verify"` so the stylesheet applies intended verify model/thinking.
+13. **Missing expand_spec for vague input.** If no spec file exists in the repo, include `expand_spec`.
+14. **Hardcoding language commands.** Use language-appropriate build/test/lint commands.
+15. **Missing file-based handoff.** Produce/consume named `.ai/` artifacts for substantial inter-node data.
+16. **Binary-only outcomes in steering nodes.** Use custom outcomes when workflows need >2 paths.
+17. **Unscoped Go monorepo checks.** Do not require repo-wide `go build ./...`, `go vet ./...`, or `go test ./...` by default.
+18. **Unscoped lint in verify nodes.** Do not run repo-wide lint in verify nodes; lint changed files using `git diff --name-only $base_sha`.
+19. **Overly aggressive API preflight timeouts in run config.** Use `preflight.prompt_probes.timeout_ms: 60000` baseline for real-provider runs.
+20. **Missing toolchain readiness gates for non-default dependencies.** Add an early `shape=parallelogram` prerequisite check node.
+21. **Auto-install bootstrap without explicit user opt-in (interactive mode).** Do not silently add installer commands.
+22. **Toolchain checks with no bootstrap path (when auto-install is intended).** If self-prepare is intended, include idempotent `setup.commands`.
+23. **Unguarded failure restarts in inner retry loops.** Do not set `loop_restart=true` on broad `outcome=fail`; guard restart with `context.failure_class=transient_infra`.
+24. **Local CXDB configs without launcher autostart.** In this repo, don't emit local CXDB configs that omit `cxdb.autostart` launcher wiring.
+25. **Non-canonical fail payloads.** Do not emit fail/retry outcomes without both `failure_reason` and `details`.
+26. **Artifact pollution in feature diffs.** Do not allow build/cache/temp/backup artifacts unless explicitly required.
+27. **Overlapping fan-out write scopes.** Do not let parallel branches modify shared/core files; reserve shared edits for post-fan-in integration.
+28. **Using `outcome=pass` as goal-gate terminal success.** For `goal_gate=true`, route terminal success via `outcome=success` or `outcome=partial_success`.
+29. **`reasoning_effort` on Cerebras GLM 4.7.** Do not expect `reasoning_effort` to control GLM 4.7 reasoning depth.
+30. **Parallel code-writing in a shared worktree (default disallowed).** Keep implementation single-writer unless explicit isolated fan-out is requested.
+31. **Generating topology from scratch when a validated template exists.** Start from `skills/english-to-dotfile/reference_template.dot` for node shapes, edges, and routing. "Minimal edits" applies to topology — prompts are always composed from scratch per project.
+32. **Ad-hoc turn budgets.** Do not add `max_agent_turns` by default.
+33. **Putting prompts on diamond nodes.** `shape=diamond` nodes do not execute prompts; use `shape=box` for LLM steering decisions.
+34. **Defaulting to visit-count loop breakers.** Do not add visit-count controls as the default loop guardrail.
+35. **Unresolved model placeholders in final DOT output.** Do not emit placeholders like `DEFAULT_MODEL` in production DOT.
+36. **Dangling artifact reads.** Do not reference `.ai/*` paths unless produced earlier or explicitly provided by repo input.
+37. **Missing explicit failure-class-conditioned routes before fallback in `check_*` nodes.** Keep explicit failure-class-conditioned routes, then add one unconditional fallback edge.
+38. **Ignoring explicit no-fanout constraints.** If user requests no fanout/single-path, do not emit branch families/fan-in nodes.
+39. **Interactive option prompts in programmatic mode.** In `kilroy attractor ingest` and other non-interactive generation, do not ask for low/medium/high; default to medium and output DOT.
+40. **Encoding executor/backend strategy in DOT.** Do not alter graph topology or attributes to force CLI vs API execution; backend policy lives in run config (`llm.providers.*.backend`, `llm.cli_profile`).
+41. **Using unsupported condition operators.** Do not use `||`, `<`, or `>` in edge conditions; split alternatives into separate edges.
+42. **All outgoing edges conditional.** Do not leave a node with only conditional outgoing edges; add one unconditional fallback edge.
+43. **Bypassed prerequisite/tool gates.** Do not wire toolchain/build/file-check gates with unconditional pass-through edges that advance on failure.
+44. **Outcome-blind stage chaining.** Do not connect actionable nodes to next stages with unconditional edges that skip success/fail routing.
+45. **Missing deterministic deliverable checks.** If requirements include concrete output paths, add explicit `shape=parallelogram` checks for file existence (and key invariants when specified).
+46. **Status contract drift across prompts.** Do not omit `$KILROY_STAGE_STATUS_FALLBACK_PATH` or failure/retry payload guidance on any codergen node.
+47. **Handoff filename drift.** Do not write `.ai/foo_log.md` and later read `.ai/implementation_log.md`; producers and consumers must reference the exact same path.
+48. **Unclassified failure back-edges from diamonds.** Do not use `condition="outcome=fail"` alone on back-edges from `shape=diamond`; add `context.failure_class` guards and explicit deterministic fallback.
+49. **Generic failure_reason on semantic verify gates.** Do not let `verify_fidelity` (or similar semantic review nodes) emit a fixed `failure_reason` like `"semantic_fidelity_gap"` without a content-addressable `failure_signature` in meta. The cycle breaker uses `failure_signature` (if present) instead of `failure_reason` to build the dedup key. If the signature doesn't change when different criteria fail, the cycle breaker kills runs that are making real progress. Always instruct semantic verify nodes to set `failure_signature` to a sorted comma-separated list of the specific failed criteria identifiers (e.g. `"AC-3,AC-7,AC-13"`).
+50. **Implement prompt ignores postmortem on repair iterations.** The implement node prompt must strongly condition on `.ai/postmortem_latest.md` existence. When present, it is a REPAIR iteration: read postmortem first, fix only identified gaps, do not regenerate working systems. When absent, execute `.ai/plan_final.md` as a fresh implementation. Do not use weak "if present" / "prioritize" language that lets the LLM treat repair iterations as fresh implementations.
 
-## Notes on Reference Dotfile Conventions
+## Final Pre-Emit Checklist
 
-Some reference dotfiles in `docs/strongdm/dot specs/` use attributes not defined in the Attractor spec. These are harmless (stored but ignored by the engine) and should NOT be emitted by this skill:
-
-- `node_type` (e.g., `stack.steer`, `stack.observe`) — handler type is determined by `shape` or explicit `type` attribute, not by `node_type`
-- `is_codergen` — codergen handler is determined by shape, not by this flag
-- `context_fidelity_default` — use `default_fidelity` (the spec-canonical name; the engine accepts both)
-- `context_thread_default` — use graph-level `thread_id` (the engine accepts both)
-
-## Example: Minimal Pipeline (vague input, Go)
-
-```dot
-digraph linkcheck {
-    graph [
-        goal="Build a Go CLI tool that checks URLs for broken links",
-        rankdir=LR,
-        default_max_retry=3,
-        retry_target="impl_setup",
-        fallback_retry_target="impl_core",
-        model_stylesheet="
-            * { llm_model: DEFAULT_MODEL_ID; llm_provider: DEFAULT_PROVIDER; }
-            .hard { llm_model: HARD_MODEL_ID; llm_provider: HARD_PROVIDER; }
-            .verify { llm_model: VERIFY_MODEL_ID; llm_provider: VERIFY_PROVIDER; reasoning_effort: VERIFY_REASONING; }
-            .review { llm_model: REVIEW_MODEL_ID; llm_provider: REVIEW_PROVIDER; reasoning_effort: REVIEW_REASONING; }
-        "
-    ]
-
-    start [shape=Mdiamond, label="Start"]
-    exit  [shape=Msquare, label="Exit"]
-
-	    // Spec expansion (vague input — bootstraps .ai/spec.md into existence)
-	    expand_spec [
-	        shape=box, auto_status=true,
-	        prompt="Given the requirements: Build a Go CLI tool called linkcheck that takes a URL, crawls it, checks all links for HTTP status, reports broken ones. Supports robots.txt, configurable depth, JSON and text output.\n\nExpand into a detailed spec. Write to .ai/spec.md covering: CLI interface, packages, data types, error handling, test plan.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success"
-	    ]
-
-	    // Project setup
-	    impl_setup [
-	        shape=box,
-	        prompt="Goal: $goal\n\nRead .ai/spec.md. Create Go project: go.mod, cmd/linkcheck/main.go stub, pkg/linkcheck/ directories.\n\nRun: go build ./cmd/linkcheck ./pkg/linkcheck/...\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if builds, outcome=fail with failure_reason and details otherwise."
-	    ]
-
-	    verify_setup [
-	        shape=box, class="verify",
-	        prompt="Verify project setup.\n\nRun:\n1. go build ./cmd/linkcheck ./pkg/linkcheck/...\n2. Lint only changed files: git diff --name-only $base_sha -- '*.go' | xargs -r go vet (skip if no files match)\n3. Structural integrity + formatting check for changed Go files:\n   - `changed=$(git diff --name-only $base_sha -- '*.go')`\n   - if changed files exist, run `gofmt -l` on them and fail if output is non-empty\n4. Check go.mod and cmd/linkcheck exist\n5. Guardrail: `find . -name go.mod` should include only `./go.mod`\n6. Artifact hygiene check: fail if `git diff --name-only $base_sha --` contains paths under `target/`, `dist/`, `build/`, `.pytest_cache/`, `node_modules/`, coverage outputs, or backup/temp patterns.\n\nIMPORTANT: Do NOT run project-wide lint. Only lint files changed by this feature.\n\nWrite results to .ai/verify_setup.md.\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if all pass, outcome=fail with failure_reason and details."
-	    ]
-
-    check_setup [shape=diamond, label="Setup OK?"]
-
-	    // Core implementation
-	    impl_core [
-	        shape=box, class="hard", max_retries=2,
-	        prompt="Goal: $goal\n\nRead .ai/spec.md. Implement: URL crawling, link extraction, HTTP checking, robots.txt parser, output formatters (text + JSON). Create tests.\n\nRun: go test ./cmd/linkcheck/... ./pkg/linkcheck/...\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if tests pass, outcome=fail with failure_reason and details otherwise."
-	    ]
-
-	    verify_core [
-	        shape=box, class="verify",
-	        prompt="Verify core implementation.\n\nRun:\n1. go build ./cmd/linkcheck ./pkg/linkcheck/...\n2. Lint only changed files: git diff --name-only $base_sha -- '*.go' | xargs -r go vet (skip if no files match)\n3. Structural integrity + formatting check for changed Go files:\n   - `changed=$(git diff --name-only $base_sha -- '*.go')`\n   - if changed files exist, run `gofmt -l` on them and fail if output is non-empty\n4. go test ./cmd/linkcheck/... ./pkg/linkcheck/... -v\n5. Artifact hygiene check: fail if `git diff --name-only $base_sha --` contains paths under `target/`, `dist/`, `build/`, `.pytest_cache/`, `node_modules/`, coverage outputs, or backup/temp patterns.\n\nIMPORTANT: Do NOT run project-wide lint. Only lint files changed by this feature.\n\nWrite results to .ai/verify_core.md.\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if all pass, outcome=fail with failure_reason and details."
-	    ]
-
-    check_core [shape=diamond, label="Core OK?"]
-
-	    // Review
-	    review [
-	        shape=box, class="review", goal_gate=true,
-	        prompt="Goal: $goal\n\nRead .ai/spec.md. Review the full implementation against the spec. Check: all features implemented, tests pass, CLI works, error handling correct.\n\nSandboxed validation policy:\n- Required checks are scoped to `cmd/linkcheck` and `pkg/linkcheck`.\n- Repo-wide network-dependent checks are advisory only.\n\nRun: go build ./cmd/linkcheck ./pkg/linkcheck/... && go test ./cmd/linkcheck/... ./pkg/linkcheck/...\n\nWrite review to .ai/final_review.md.\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if complete, outcome=fail with failure_reason and details about what's missing."
-	    ]
-
-    check_review [shape=diamond, label="Review OK?"]
-
-    // Flow
-    start -> expand_spec -> impl_setup -> verify_setup -> check_setup
-    check_setup -> impl_core       [condition="outcome=success"]
-    check_setup -> impl_setup      [condition="outcome=fail", label="retry"]
-
-    impl_core -> verify_core -> check_core
-    check_core -> review           [condition="outcome=success"]
-    check_core -> impl_core        [condition="outcome=fail", label="retry"]
-
-    review -> check_review
-    check_review -> exit           [condition="outcome=success"]
-    check_review -> impl_core      [condition="outcome=fail", label="fix"]
-}
-```
-
-Note how this example follows every rule:
-- `expand_spec` bootstraps the spec (vague input)
-- `impl_setup` has its own verify/check pair
-- `verify_setup` and `verify_core` both have `class="verify"`
-- `check_review` failure loops to `impl_core` (late node), NOT to `impl_setup`
-- Graph has `retry_target` and `fallback_retry_target`
-- Implementation and review prompts include `Goal: $goal`
-- Model stylesheet covers all four classes
+- DOT output only (programmatic).
+- User constraints applied (`no fanout`, provider/model requirements; backend notes aligned with run config when available).
+- `model_stylesheet` resolved with concrete providers/models.
+- All codergen prompts include full status contract.
+- File handoffs are closed (no dangling reads).
+- Condition syntax uses only supported operators (`=`, `!=`, `&&`).
+- Nodes with conditional routes include an unconditional fallback edge.
+- Prerequisite/tool gates route failures explicitly and cannot be bypassed by unconditional pass-through.
+- Explicit deliverable paths are verified by deterministic tool-check nodes.
+- Every codergen prompt includes both `$KILROY_STAGE_STATUS_PATH` and `$KILROY_STAGE_STATUS_FALLBACK_PATH`, plus fail/retry payload guidance.
+- `.ai/*` handoff paths match exactly between producer and consumer nodes.
+- Validation loop passed, or best-repaired DOT emitted per mode rules.

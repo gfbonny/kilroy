@@ -11,20 +11,24 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
-	"github.com/strongdm/kilroy/internal/agent"
-	"github.com/strongdm/kilroy/internal/attractor/model"
-	"github.com/strongdm/kilroy/internal/attractor/modeldb"
-	"github.com/strongdm/kilroy/internal/attractor/runtime"
-	"github.com/strongdm/kilroy/internal/llm"
-	"github.com/strongdm/kilroy/internal/llmclient"
+	"github.com/danshapiro/kilroy/internal/agent"
+	"github.com/danshapiro/kilroy/internal/attractor/model"
+	"github.com/danshapiro/kilroy/internal/attractor/modeldb"
+	"github.com/danshapiro/kilroy/internal/attractor/runtime"
+	"github.com/danshapiro/kilroy/internal/llm"
+	"github.com/danshapiro/kilroy/internal/llmclient"
 )
+
+// anthropicVersionDotRe matches dots between digits in model version numbers
+// (e.g. "4.5", "3.7") without touching other dots.
+var anthropicVersionDotRe = regexp.MustCompile(`(\d)\.(\d)`)
 
 type CodergenRouter struct {
 	cfg     *RunConfigFile
@@ -92,6 +96,13 @@ func (r *CodergenRouter) Run(ctx context.Context, exec *Execution, node *model.N
 	backend := r.backendForProvider(prov)
 	if backend == "" {
 		return "", nil, fmt.Errorf("no backend configured for provider %s", prov)
+	}
+
+	// CLI-only model override: models like gpt-5.3-codex-spark have no API
+	// endpoint. Force CLI backend regardless of provider configuration.
+	if isCLIOnlyModel(modelID) && backend != BackendCLI {
+		warnEngine(exec, fmt.Sprintf("cli-only model override: node=%s model=%s backend=%s->cli", node.ID, modelID, backend))
+		backend = BackendCLI
 	}
 
 	switch backend {
@@ -199,7 +210,15 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 		})
 		return text, nil, nil
 	case "agent_loop":
-		env := agent.NewLocalExecutionEnvironmentWithBaseEnv(execCtx.WorktreeDir, contract.EnvVars)
+		stageEnv := map[string]string{}
+		for k, v := range contract.EnvVars {
+			stageEnv[k] = v
+		}
+		for k, v := range buildStageRuntimeEnv(execCtx, node.ID) {
+			stageEnv[k] = v
+		}
+		overrides := buildAgentLoopOverrides(execCtx.WorktreeDir, stageEnv)
+		env := agent.NewLocalExecutionEnvironmentWithPolicy(execCtx.WorktreeDir, overrides, []string{"CLAUDECODE"})
 		text, used, err := r.withFailoverText(ctx, execCtx, node, client, provider, modelID, func(prov string, mid string) (string, error) {
 			var profile agent.ProviderProfile
 			var profileErr error
@@ -236,6 +255,11 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 			// Give lots of room for transient LLM errors before failing the stage.
 			policy := attractorLLMRetryPolicy(execCtx, node.ID, prov, mid)
 			sessCfg.LLMRetryPolicy = &policy
+			// Spec §9.7: wire pre-hook filter so tool calls can be skipped by
+			// tool_hooks.pre scripts (non-zero exit = skip the tool call).
+			sessCfg.ToolCallFilter = func(toolName, callID, argsJSON string) string {
+				return runPreToolHook(ctx, execCtx, node, stageDir, toolName, callID, argsJSON)
+			}
 			sess, err := agent.NewSession(client, profile, env, sessCfg)
 			if err != nil {
 				return "", err
@@ -266,6 +290,10 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 					if execCtx != nil && execCtx.Engine != nil && execCtx.Engine.CXDB != nil {
 						emitCXDBToolTurns(ctx, execCtx.Engine, node.ID, ev)
 					}
+					// Spec §9.7: execute tool hooks around tool calls.
+					if execCtx != nil && execCtx.Engine != nil {
+						executeToolHookForEvent(ctx, execCtx, node, ev, stageDir)
+					}
 					eventsMu.Lock()
 					events = append(events, ev)
 					eventsMu.Unlock()
@@ -273,9 +301,50 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 				close(done)
 			}()
 
+			// Emit periodic heartbeat events so the stall watchdog
+			// knows the API agent_loop node is alive.
+			heartbeatStop := make(chan struct{})
+			heartbeatDone := make(chan struct{})
+			apiStart := time.Now()
+			go func() {
+				defer close(heartbeatDone)
+				interval := codergenHeartbeatInterval()
+				if interval <= 0 {
+					return
+				}
+				ticker := time.NewTicker(interval)
+				defer ticker.Stop()
+				var lastCount int
+				for {
+					select {
+					case <-ticker.C:
+						eventsMu.Lock()
+						count := len(events)
+						eventsMu.Unlock()
+						if count > lastCount {
+							lastCount = count
+							if execCtx != nil && execCtx.Engine != nil {
+								execCtx.Engine.appendProgress(map[string]any{
+									"event":       "stage_heartbeat",
+									"node_id":     node.ID,
+									"elapsed_s":   int(time.Since(apiStart).Seconds()),
+									"event_count": count,
+								})
+							}
+						}
+					case <-heartbeatStop:
+						return
+					case <-ctx.Done():
+						return
+					}
+				}
+			}()
+
 			text, runErr := sess.ProcessInput(ctx, prompt)
 			sess.Close()
 			<-done
+			close(heartbeatStop)
+			<-heartbeatDone
 			eventsMu.Lock()
 			if err := writeJSON(eventsJSONPath, events); err != nil {
 				warnEngine(execCtx, fmt.Sprintf("write %s: %v", eventsJSONPath, err))
@@ -444,6 +513,9 @@ func shouldFailoverLLMError(err error) bool {
 	if err == nil {
 		return false
 	}
+	if isLocalBootstrapError(err) {
+		return false
+	}
 	if errors.Is(err, agent.ErrTurnLimit) {
 		return false
 	}
@@ -483,6 +555,18 @@ func shouldFailoverLLMError(err error) bool {
 	return true
 }
 
+func isLocalBootstrapError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(strings.TrimSpace(err.Error()))
+	if s == "" {
+		return false
+	}
+	return strings.Contains(s, "getwd: no such file or directory") ||
+		strings.Contains(s, "tool read_file schema: getwd:")
+}
+
 func failoverOrderFromRuntime(primary string, runtimes map[string]ProviderRuntime) ([]string, bool) {
 	primary = normalizeProviderKey(primary)
 	if primary == "" || len(runtimes) == 0 {
@@ -501,13 +585,19 @@ func failoverOrderFromRuntime(primary string, runtimes map[string]ProviderRuntim
 func failoverOrder(primary string) []string {
 	switch normalizeProviderKey(primary) {
 	case "openai":
-		return []string{"anthropic", "google"}
+		return []string{"google"}
 	case "anthropic":
-		return []string{"openai", "google"}
+		return []string{"google"}
 	case "google":
-		return []string{"openai", "anthropic"}
+		return []string{"kimi"}
+	case "kimi":
+		return []string{"zai"}
+	case "zai":
+		return []string{"cerebras"}
+	case "cerebras":
+		return []string{"zai"}
 	default:
-		return []string{"openai", "anthropic", "google"}
+		return nil
 	}
 }
 
@@ -563,6 +653,9 @@ func pickFailoverModel(provider string, catalog *modeldb.Catalog) string {
 			}
 		}
 		return "gpt-5.2-codex"
+	case "kimi":
+		// Keep failover to Kimi pinned to the known stable coding model.
+		return "kimi-k2.5"
 	case "anthropic":
 		best := ""
 		for _, id := range modelIDsForProvider(catalog, "anthropic") {
@@ -590,6 +683,9 @@ func pickFailoverModel(provider string, catalog *modeldb.Catalog) string {
 			}
 		}
 		return providerModelIDFromCatalogKey("google", best)
+	case "cerebras":
+		// Pin to Cerebras-hosted GLM-4.7 model ID.
+		return "zai-glm-4.7"
 	default:
 		return ""
 	}
@@ -827,6 +923,13 @@ func profileForProvider(provider string, modelID string) (agent.ProviderProfile,
 func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *model.Node, provider string, modelID string, prompt string) (string, *runtime.Outcome, error) {
 	stageDir := filepath.Join(execCtx.LogsRoot, node.ID)
 	contract := buildStageStatusContract(execCtx.WorktreeDir)
+	stageEnv := map[string]string{}
+	for k, v := range contract.EnvVars {
+		stageEnv[k] = v
+	}
+	for k, v := range buildStageRuntimeEnv(execCtx, node.ID) {
+		stageEnv[k] = v
+	}
 	providerKey := normalizeProviderKey(provider)
 	stderrPath := filepath.Join(stageDir, "stderr.log")
 	readStderr := func() string {
@@ -868,14 +971,19 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 	}
 	codexSemantics := usesCodexCLISemantics(providerKey, exe)
 
+	// Build the base env once — used by codex initial + retries and non-codex paths.
+	baseEnv := buildBaseNodeEnv(execCtx.WorktreeDir)
+
 	var isolatedEnv []string
 	var isolatedMeta map[string]any
 	if codexSemantics {
 		var err error
-		isolatedEnv, isolatedMeta, err = buildCodexIsolatedEnv(stageDir)
+		isolatedEnv, isolatedMeta, err = buildCodexIsolatedEnv(stageDir, baseEnv)
 		if err != nil {
 			return "", classifiedFailure(err, ""), nil
 		}
+		// CARGO_TARGET_DIR is already set by buildBaseNodeEnv — no need for
+		// the duplicate check that was here before.
 	}
 
 	// Metaspec: if a provider CLI supports both an event stream and a structured final JSON output,
@@ -929,7 +1037,7 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 		inv["codex_total_timeout_seconds"] = int(codexTotalTimeout().Seconds())
 		inv["codex_timeout_retry_max"] = codexTimeoutMaxRetries()
 	} else {
-		inv["env_mode"] = "inherit"
+		inv["env_mode"] = "base+scrub"
 		inv["env_allowlist"] = []string{"*"}
 		if scrubbed := conflictingProviderEnvKeys(providerKey); len(scrubbed) > 0 {
 			inv["env_scrubbed_keys"] = scrubbed
@@ -948,6 +1056,19 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 		return "", classifiedFailure(err, ""), nil
 	}
 
+	if codexSemantics {
+		preflightMeta, preflightOut := maybeRunRustSandboxPreflight(ctx, node, execCtx.WorktreeDir, stageDir, isolatedEnv)
+		if preflightMeta != nil {
+			inv["rust_sandbox_preflight"] = preflightMeta
+			if err := writeJSON(filepath.Join(stageDir, "cli_invocation.json"), inv); err != nil {
+				warnEngine(execCtx, fmt.Sprintf("write cli_invocation.json rust preflight metadata: %v", err))
+			}
+		}
+		if preflightOut != nil {
+			return "", preflightOut, nil
+		}
+	}
+
 	stdoutPath := filepath.Join(stageDir, "stdout.log")
 
 	runOnce := func(args []string) (runErr error, exitCode int, dur time.Duration, err error) {
@@ -963,11 +1084,11 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 		cmd := exec.CommandContext(runCtx, exe, args...)
 		cmd.Dir = execCtx.WorktreeDir
 		if codexSemantics {
-			cmd.Env = mergeEnvWithOverrides(isolatedEnv, contract.EnvVars)
-			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			cmd.Env = mergeEnvWithOverrides(isolatedEnv, stageEnv)
+			setProcessGroupAttr(cmd)
 		} else {
-			baseEnv := scrubConflictingProviderEnvKeys(os.Environ(), providerKey)
-			cmd.Env = mergeEnvWithOverrides(baseEnv, contract.EnvVars)
+			scrubbed := scrubConflictingProviderEnvKeys(baseEnv, providerKey)
+			cmd.Env = mergeEnvWithOverrides(scrubbed, stageEnv)
 		}
 		if promptMode == "stdin" {
 			cmd.Stdin = strings.NewReader(prompt)
@@ -985,11 +1106,30 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 			return nil, -1, 0, err
 		}
 		defer func() { _ = stderrFile.Close() }()
-		cmd.Stdout = stdoutFile
+		// Tee stdout through a parser goroutine to decompose CLI conversation
+		// turns into individual CXDB events in real time.
+		var streamPW *io.PipeWriter
+		var streamDone chan struct{}
+		if !codexSemantics && execCtx != nil && execCtx.Engine != nil && execCtx.Engine.CXDB != nil {
+			pr, pw := io.Pipe()
+			streamPW = pw
+			streamDone = make(chan struct{})
+			go func() {
+				defer close(streamDone)
+				parseCLIOutputStream(ctx, execCtx.Engine, node.ID, pr)
+			}()
+			cmd.Stdout = io.MultiWriter(stdoutFile, pw)
+		} else {
+			cmd.Stdout = stdoutFile
+		}
 		cmd.Stderr = stderrFile
 
 		start := time.Now()
 		if err := cmd.Start(); err != nil {
+			if streamPW != nil {
+				_ = streamPW.Close()
+				<-streamDone
+			}
 			return nil, -1, 0, err
 		}
 
@@ -1005,19 +1145,24 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 			}
 			ticker := time.NewTicker(interval)
 			defer ticker.Stop()
+			var lastStdoutSz, lastStderrSz int64
 			for {
 				select {
 				case <-ticker.C:
 					stdoutSz, _ := fileSize(stdoutPath)
 					stderrSz, _ := fileSize(stderrPath)
-					if execCtx != nil && execCtx.Engine != nil {
-						execCtx.Engine.appendProgress(map[string]any{
-							"event":        "stage_heartbeat",
-							"node_id":      node.ID,
-							"elapsed_s":    int(time.Since(start).Seconds()),
-							"stdout_bytes": stdoutSz,
-							"stderr_bytes": stderrSz,
-						})
+					if stdoutSz > lastStdoutSz || stderrSz > lastStderrSz {
+						lastStdoutSz = stdoutSz
+						lastStderrSz = stderrSz
+						if execCtx != nil && execCtx.Engine != nil {
+							execCtx.Engine.appendProgress(map[string]any{
+								"event":        "stage_heartbeat",
+								"node_id":      node.ID,
+								"elapsed_s":    int(time.Since(start).Seconds()),
+								"stdout_bytes": stdoutSz,
+								"stderr_bytes": stderrSz,
+							})
+						}
 					}
 				case <-heartbeatStop:
 					return
@@ -1037,6 +1182,10 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 		runErr, idleTimedOut, err = waitWithIdleWatchdog(runCtx, cmd, stdoutPath, stderrPath, idleTimeout, killGrace)
 		close(heartbeatStop)
 		<-heartbeatDone
+		if streamPW != nil {
+			_ = streamPW.Close()
+			<-streamDone
+		}
 		if err != nil {
 			return nil, -1, time.Since(start), err
 		}
@@ -1134,7 +1283,7 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 			_ = copyFileContents(stdoutPath, filepath.Join(stageDir, fmt.Sprintf("stdout.state_db_failure_%d.log", stateDBAttempt)))
 			_ = copyFileContents(stderrPath, filepath.Join(stageDir, fmt.Sprintf("stderr.state_db_failure_%d.log", stateDBAttempt)))
 
-			retryEnv, retryMeta, buildErr := buildCodexIsolatedEnvWithName(stageDir, fmt.Sprintf("codex-home-retry%d", stateDBAttempt))
+			retryEnv, retryMeta, buildErr := buildCodexIsolatedEnvWithName(stageDir, fmt.Sprintf("codex-home-retry%d", stateDBAttempt), baseEnv)
 			if buildErr != nil {
 				return "", classifiedFailure(buildErr, readStderr()), nil
 			}
@@ -1168,7 +1317,7 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 			_ = copyFileContents(stdoutPath, filepath.Join(stageDir, fmt.Sprintf("stdout.timeout_failure_%d.log", timeoutAttempt)))
 			_ = copyFileContents(stderrPath, filepath.Join(stageDir, fmt.Sprintf("stderr.timeout_failure_%d.log", timeoutAttempt)))
 
-			retryEnv, retryMeta, buildErr := buildCodexIsolatedEnvWithName(stageDir, fmt.Sprintf("codex-home-timeout-retry%d", timeoutAttempt))
+			retryEnv, retryMeta, buildErr := buildCodexIsolatedEnvWithName(stageDir, fmt.Sprintf("codex-home-timeout-retry%d", timeoutAttempt), baseEnv)
 			if buildErr != nil {
 				return "", classifiedFailure(buildErr, readStderr()), nil
 			}
@@ -1256,11 +1405,16 @@ func insertPromptArg(args []string, prompt string) []string {
 	return out
 }
 
-func buildCodexIsolatedEnv(stageDir string) ([]string, map[string]any, error) {
-	return buildCodexIsolatedEnvWithName(stageDir, "codex-home")
+// buildCodexIsolatedEnv is the convenience wrapper with default home dir name.
+func buildCodexIsolatedEnv(stageDir string, baseEnv []string) ([]string, map[string]any, error) {
+	return buildCodexIsolatedEnvWithName(stageDir, "codex-home", baseEnv)
 }
 
-func buildCodexIsolatedEnvWithName(stageDir string, homeDirName string) ([]string, map[string]any, error) {
+// buildCodexIsolatedEnvWithName applies codex-specific HOME/XDG isolation on top
+// of the provided base environment (from buildBaseNodeEnv). Toolchain paths
+// (CARGO_HOME, RUSTUP_HOME, CARGO_TARGET_DIR, etc.) are already pinned in baseEnv
+// so they survive the HOME override.
+func buildCodexIsolatedEnvWithName(stageDir string, homeDirName string, baseEnv []string) ([]string, map[string]any, error) {
 	codexHome, err := codexIsolatedHomeDir(stageDir, homeDirName)
 	if err != nil {
 		return nil, nil, err
@@ -1278,6 +1432,9 @@ func buildCodexIsolatedEnvWithName(stageDir string, homeDirName string) ([]strin
 
 	seeded := []string{}
 	seedErrors := []string{}
+	// Seed codex config from the ORIGINAL home (before isolation).
+	// Use os.Getenv("HOME") since baseEnv may already have HOME pinned
+	// to the original value by buildBaseNodeEnv.
 	srcHome := strings.TrimSpace(os.Getenv("HOME"))
 	if srcHome != "" {
 		for _, name := range []string{"auth.json", "config.toml"} {
@@ -1294,7 +1451,10 @@ func buildCodexIsolatedEnvWithName(stageDir string, homeDirName string) ([]strin
 		}
 	}
 
-	env := mergeEnvWithOverrides(os.Environ(), map[string]string{
+	// Apply codex-specific overrides on top of the base env.
+	// Toolchain paths (CARGO_HOME, RUSTUP_HOME, etc.) are already pinned
+	// in baseEnv by buildBaseNodeEnv, so they survive this HOME override.
+	env := mergeEnvWithOverrides(baseEnv, map[string]string{
 		"HOME":            codexHome,
 		"CODEX_HOME":      codexStateRoot,
 		"XDG_CONFIG_HOME": xdgConfigHome,
@@ -1398,16 +1558,31 @@ func mergeEnvWithOverrides(base []string, overrides map[string]string) []string 
 	return out
 }
 
+// envHasKey returns true if the given key is present in the environment slice.
+func envHasKey(env []string, key string) bool {
+	prefix := key + "="
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // conflictingProviderEnvKeys returns env var names that must be stripped when
 // launching a given provider's CLI. The Claude CLI uses OAuth/session-based auth
 // by default; an inherited ANTHROPIC_API_KEY causes it to attempt (and fail)
 // external API key authentication instead.
 func conflictingProviderEnvKeys(providerKey string) []string {
+	// CLAUDECODE prevents the Claude CLI from launching (nested session
+	// protection). Strip it for all providers so preflight probes and
+	// codergen runs succeed when Kilroy is invoked from inside Claude Code.
+	common := []string{"CLAUDECODE"}
 	switch normalizeProviderKey(providerKey) {
 	case "anthropic":
-		return []string{"ANTHROPIC_API_KEY"}
+		return append(common, "ANTHROPIC_API_KEY")
 	default:
-		return nil
+		return common
 	}
 }
 
@@ -1522,7 +1697,7 @@ func waitWithIdleWatchdog(ctx context.Context, cmd *exec.Cmd, stdoutPath, stderr
 	const pollInterval = 250 * time.Millisecond
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
-	ownsProcessGroup := cmd != nil && cmd.SysProcAttr != nil && cmd.SysProcAttr.Setpgid
+	ownsProcessGroup := hasProcessGroupAttr(cmd)
 
 	lastActivity := time.Now()
 	lastStdoutSize, _ := fileSize(stdoutPath)
@@ -1544,7 +1719,7 @@ func waitWithIdleWatchdog(ctx context.Context, cmd *exec.Cmd, stdoutPath, stderr
 			}
 			timeoutErr := fmt.Errorf("codex idle timeout after %s with no output", idleTimeout)
 			if ownsProcessGroup {
-				if err := killProcessGroup(cmd, syscall.SIGTERM); err != nil {
+				if err := terminateProcessGroup(cmd); err != nil {
 					return timeoutErr, true, err
 				}
 			}
@@ -1556,7 +1731,7 @@ func waitWithIdleWatchdog(ctx context.Context, cmd *exec.Cmd, stdoutPath, stderr
 				}
 			}
 			if ownsProcessGroup {
-				if err := killProcessGroup(cmd, syscall.SIGKILL); err != nil {
+				if err := forceKillProcessGroup(cmd); err != nil {
 					return timeoutErr, true, err
 				}
 			}
@@ -1568,7 +1743,7 @@ func waitWithIdleWatchdog(ctx context.Context, cmd *exec.Cmd, stdoutPath, stderr
 			}
 		case <-ctx.Done():
 			if ownsProcessGroup {
-				if err := killProcessGroup(cmd, syscall.SIGTERM); err != nil {
+				if err := terminateProcessGroup(cmd); err != nil {
 					return ctx.Err(), false, err
 				}
 				if killGrace > 0 {
@@ -1578,7 +1753,7 @@ func waitWithIdleWatchdog(ctx context.Context, cmd *exec.Cmd, stdoutPath, stderr
 					case <-time.After(killGrace):
 					}
 				}
-				if err := killProcessGroup(cmd, syscall.SIGKILL); err != nil {
+				if err := forceKillProcessGroup(cmd); err != nil {
 					return ctx.Err(), false, err
 				}
 				select {
@@ -1606,23 +1781,6 @@ func fileSize(path string) (int64, error) {
 		return 0, err
 	}
 	return info.Size(), nil
-}
-
-func killProcessGroup(cmd *exec.Cmd, sig syscall.Signal) error {
-	if cmd == nil || cmd.Process == nil {
-		return nil
-	}
-	pgid, err := syscall.Getpgid(cmd.Process.Pid)
-	if err != nil {
-		if errors.Is(err, syscall.ESRCH) {
-			return nil
-		}
-		return err
-	}
-	if err := syscall.Kill(-pgid, sig); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return err
-	}
-	return nil
 }
 
 func emitCXDBToolTurns(ctx context.Context, eng *Engine, nodeID string, ev agent.SessionEvent) {
@@ -1683,6 +1841,17 @@ func defaultCLIInvocation(provider string, modelID string, worktreeDir string) (
 	spec := defaultCLISpecForProvider(provider)
 	if spec == nil {
 		return "", nil
+	}
+	// Strip the "provider/" prefix from OpenRouter-format model IDs
+	// (e.g. "anthropic/claude-sonnet-4.5" → "claude-sonnet-4.5").
+	// CLI binaries expect bare model names.
+	if prefix := normalizeProviderKey(provider) + "/"; strings.HasPrefix(modelID, prefix) {
+		modelID = strings.TrimPrefix(modelID, prefix)
+	}
+	// Anthropic CLI expects dashes in version numbers (claude-sonnet-4-5),
+	// but the OpenRouter catalog uses dots (claude-sonnet-4.5).
+	if normalizeProviderKey(provider) == "anthropic" {
+		modelID = anthropicVersionDotRe.ReplaceAllString(modelID, "${1}-${2}")
 	}
 	exe, args = materializeCLIInvocation(*spec, modelID, worktreeDir, "")
 	return exe, args

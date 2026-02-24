@@ -3,7 +3,7 @@ package engine
 import (
 	"testing"
 
-	"github.com/strongdm/kilroy/internal/attractor/runtime"
+	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
 
 func TestShouldRetryOutcome_ClassGated(t *testing.T) {
@@ -48,6 +48,24 @@ func TestShouldRetryOutcome_ClassGated(t *testing.T) {
 			out:   runtime.Outcome{Status: runtime.StatusFail, FailureReason: "unknown"},
 			class: "",
 			want:  false,
+		},
+		{
+			name:  "fail budget_exhausted retries",
+			out:   runtime.Outcome{Status: runtime.StatusFail, FailureReason: "turn limit reached"},
+			class: failureClassBudgetExhausted,
+			want:  true,
+		},
+		{
+			name:  "fail compilation_loop retries",
+			out:   runtime.Outcome{Status: runtime.StatusFail, FailureReason: "same 3 errors after 20 turns"},
+			class: failureClassCompilationLoop,
+			want:  true,
+		},
+		{
+			name:  "retry budget_exhausted retries",
+			out:   runtime.Outcome{Status: runtime.StatusRetry, FailureReason: "budget spent"},
+			class: failureClassBudgetExhausted,
+			want:  true,
 		},
 	}
 

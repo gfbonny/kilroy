@@ -6268,6 +6268,40 @@
       "expiration_date": null
     },
     {
+      "id": "minimax/minimax-m2.5",
+      "canonical_slug": "minimax/minimax-m2.5",
+      "hugging_face_id": "",
+      "name": "MiniMax: MiniMax M2.5",
+      "created": 1771200000,
+      "description": "MiniMax M2.5 - advanced reasoning and coding model with agentic capabilities",
+      "context_length": 196608,
+      "architecture": {
+        "modality": "text->text",
+        "input_modalities": ["text"],
+        "output_modalities": ["text"],
+        "tokenizer": "Other",
+        "instruct_type": null
+      },
+      "pricing": {
+        "prompt": "0.00000015",
+        "completion": "0.0000012",
+        "image": "0",
+        "request": "0",
+        "input_cache_read": "0",
+        "input_cache_write": "0",
+        "web_search": "0",
+        "internal_reasoning": "0"
+      },
+      "top_provider": {
+        "context_length": 196608,
+        "max_completion_tokens": 16384,
+        "is_moderated": false
+      },
+      "supported_parameters": ["tools", "temperature", "top_p", "max_tokens", "stream", "stop"],
+      "per_request_limits": null,
+      "expiration_date": null
+    },
+    {
       "id": "mistralai/codestral-2508",
       "canonical_slug": "mistralai/codestral-2508",
       "hugging_face_id": "",
@@ -10951,6 +10985,44 @@
         "top_p": null,
         "frequency_penalty": null
       },
+      "expiration_date": null
+    },
+    {
+      "id": "openai/gpt-5.3-codex-spark",
+      "canonical_slug": "openai/gpt-5.3-codex-spark-20260212",
+      "hugging_face_id": "",
+      "name": "OpenAI: GPT-5.3-Codex-Spark",
+      "created": 1739491200,
+      "description": "GPT-5.3-Codex-Spark is a smaller, faster distillation of GPT-5.3-Codex optimized for real-time coding on Cerebras WSE-3 hardware. CLI-only (no API). 128k context, text-only, 1000+ tok/s.",
+      "context_length": 128000,
+      "architecture": {
+        "modality": "text->text",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tokenizer": "GPT",
+        "instruct_type": null
+      },
+      "pricing": {
+        "prompt": "0",
+        "completion": "0"
+      },
+      "top_provider": {
+        "context_length": 128000,
+        "max_completion_tokens": 16384,
+        "is_moderated": false
+      },
+      "per_request_limits": null,
+      "supported_parameters": [
+        "max_tokens",
+        "reasoning",
+        "tool_choice",
+        "tools"
+      ],
+      "default_parameters": {},
       "expiration_date": null
     },
     {

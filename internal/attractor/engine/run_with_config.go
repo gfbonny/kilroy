@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/strongdm/kilroy/internal/attractor/gitutil"
-	"github.com/strongdm/kilroy/internal/attractor/model"
-	"github.com/strongdm/kilroy/internal/attractor/modeldb"
-	"github.com/strongdm/kilroy/internal/cxdb"
+	"github.com/danshapiro/kilroy/internal/attractor/gitutil"
+	"github.com/danshapiro/kilroy/internal/attractor/model"
+	"github.com/danshapiro/kilroy/internal/attractor/modeldb"
+	"github.com/danshapiro/kilroy/internal/cxdb"
 )
 
 // RunWithConfig executes a run using the metaspec run configuration file schema.
@@ -21,19 +21,28 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	}
 	applyConfigDefaults(cfg)
 
+	// Create handler registry early so we can wire KnownTypes into validation
+	// and use it for provider requirement checks below.
+	reg := NewDefaultRegistry()
+
 	// Prepare graph (parse + transforms + validate).
-	g, _, err := Prepare(dotSource)
+	g, _, err := PrepareWithOptions(dotSource, PrepareOptions{
+		RepoPath:   cfg.Repo.Path,
+		KnownTypes: reg.KnownTypes(),
+	})
 	if err != nil {
 		return nil, err
 	}
 
 	// Ensure backend is specified for each provider used by the graph.
+	// Use the handler registry to identify nodes that require an LLM provider
+	// instead of hardcoding shape checks.
 	usedProviders := map[string]bool{}
 	for _, n := range g.Nodes {
 		if n == nil {
 			continue
 		}
-		if n.Shape() != "box" {
+		if pr, ok := reg.Resolve(n).(ProviderRequiringHandler); !ok || !pr.RequiresProvider() {
 			continue
 		}
 		p := strings.TrimSpace(n.Attr("llm_provider", ""))
@@ -85,6 +94,9 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	}
 	opts.AllowTestShim = overrides.AllowTestShim
 	opts.ForceModels = normalizeForceModels(overrides.ForceModels)
+	opts.ProgressSink = overrides.ProgressSink
+	opts.Interviewer = overrides.Interviewer
+	opts.OnEngineReady = overrides.OnEngineReady
 
 	if err := opts.applyDefaults(); err != nil {
 		return nil, err
@@ -160,7 +172,8 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	if err != nil {
 		return nil, err
 	}
-	if err := validateProviderModelPairs(g, runtimes, catalog, opts); err != nil {
+	catalogChecks, catalogErr := validateProviderModelPairs(g, runtimes, catalog, opts)
+	if catalogErr != nil {
 		report := &providerPreflightReport{
 			GeneratedAt:         time.Now().UTC().Format(time.RFC3339Nano),
 			CLIProfile:          normalizedCLIProfile(cfg),
@@ -169,45 +182,49 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 			CapabilityProbeMode: capabilityProbeMode(),
 			PromptProbeMode:     promptProbeMode(cfg),
 		}
-		report.addCheck(providerPreflightCheck{
-			Name:    "provider_model_catalog",
-			Status:  preflightStatusFail,
-			Message: err.Error(),
-		})
+		for _, c := range catalogChecks {
+			report.addCheck(c)
+		}
 		_ = writePreflightReport(opts.LogsRoot, report)
-		return nil, err
+		return nil, catalogErr
 	}
-	if _, err := runProviderCLIPreflight(ctx, g, runtimes, cfg, opts, catalog); err != nil {
+	if _, err := runProviderCLIPreflight(ctx, g, runtimes, cfg, opts, catalog, catalogChecks); err != nil {
 		return nil, err
 	}
 
-	// CXDB is required in v1 and must be reachable.
-	cxdbClient, bin, startup, err := ensureCXDBReady(ctx, cfg, opts.LogsRoot, opts.RunID)
-	if err != nil {
-		return nil, err
+	var sink *CXDBSink
+	var startup *CXDBStartupInfo
+	if !overrides.DisableCXDB {
+		// CXDB is required in v1 and must be reachable.
+		cxdbClient, bin, cxdbStartup, err := ensureCXDBReady(ctx, cfg, opts.LogsRoot, opts.RunID)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = bin.Close() }()
+		startup = cxdbStartup
+		if startup != nil {
+			// Defer process shutdown after bin close is deferred so shutdown runs first (LIFO).
+			defer func() { _ = startup.shutdownManagedProcesses() }()
+		}
+		if startup != nil && overrides.OnCXDBStartup != nil {
+			overrides.OnCXDBStartup(startup)
+		}
+		bundleID, bundle, _, err := cxdb.KilroyAttractorRegistryBundle()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := cxdbClient.PublishRegistryBundle(ctx, bundleID, bundle); err != nil {
+			return nil, err
+		}
+		ci, err := createContextWithFallback(ctx, cxdbClient, bin)
+		if err != nil {
+			return nil, err
+		}
+		sink = NewCXDBSink(cxdbClient, bin, opts.RunID, ci.ContextID, ci.HeadTurnID, bundleID)
 	}
-	defer func() { _ = bin.Close() }()
-	if startup != nil {
-		// Defer process shutdown after bin close is deferred so shutdown runs first (LIFO).
-		defer func() { _ = startup.shutdownManagedProcesses() }()
-	}
-	if startup != nil && overrides.OnCXDBStartup != nil {
-		overrides.OnCXDBStartup(startup)
-	}
-	bundleID, bundle, _, err := cxdb.KilroyAttractorRegistryBundle()
-	if err != nil {
-		return nil, err
-	}
-	if _, err := cxdbClient.PublishRegistryBundle(ctx, bundleID, bundle); err != nil {
-		return nil, err
-	}
-	ci, err := createContextWithFallback(ctx, cxdbClient, bin)
-	if err != nil {
-		return nil, err
-	}
-	sink := NewCXDBSink(cxdbClient, bin, opts.RunID, ci.ContextID, ci.HeadTurnID, bundleID)
 
 	eng := newBaseEngine(g, dotSource, opts)
+	eng.Registry = reg // reuse the registry from validation (avoids creating a duplicate)
 	eng.RunConfig = cfg
 	eng.Context = NewContextWithGraphAttrs(g)
 	eng.CodergenBackend = NewCodergenRouterWithRuntimes(cfg, catalog, runtimes)
@@ -225,6 +242,10 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 		}
 	}
 
+	if overrides.OnEngineReady != nil {
+		overrides.OnEngineReady(eng)
+	}
+
 	res, err := eng.run(ctx)
 	if err != nil {
 		return nil, err
@@ -235,12 +256,18 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	return res, nil
 }
 
-func validateProviderModelPairs(g *model.Graph, runtimes map[string]ProviderRuntime, catalog *modeldb.Catalog, opts RunOptions) error {
+func validateProviderModelPairs(g *model.Graph, runtimes map[string]ProviderRuntime, catalog *modeldb.Catalog, opts RunOptions) ([]providerPreflightCheck, error) {
 	if g == nil || catalog == nil {
-		return nil
+		return nil, nil
 	}
+	reg := NewDefaultRegistry()
+	var checks []providerPreflightCheck
+	warnedUncovered := map[string]bool{}
 	for _, n := range g.Nodes {
-		if n == nil || n.Shape() != "box" {
+		if n == nil {
+			continue
+		}
+		if pr, ok := reg.Resolve(n).(ProviderRequiringHandler); !ok || !pr.RequiresProvider() {
 			continue
 		}
 		provider := normalizeProviderKey(n.Attr("llm_provider", ""))
@@ -250,7 +277,7 @@ func validateProviderModelPairs(g *model.Graph, runtimes map[string]ProviderRunt
 		}
 		rt, ok := runtimes[provider]
 		if !ok {
-			return fmt.Errorf("preflight: provider %s missing runtime definition", provider)
+			return checks, fmt.Errorf("preflight: provider %s missing runtime definition", provider)
 		}
 		backend := rt.Backend
 		if backend != BackendCLI && backend != BackendAPI {
@@ -259,11 +286,36 @@ func validateProviderModelPairs(g *model.Graph, runtimes map[string]ProviderRunt
 		if _, forced := forceModelForProvider(opts.ForceModels, provider); forced {
 			continue
 		}
+		if !modeldb.CatalogCoversProvider(catalog, provider) {
+			if !warnedUncovered[provider] {
+				warnedUncovered[provider] = true
+				checks = append(checks, providerPreflightCheck{
+					Name:     "provider_model_catalog",
+					Provider: provider,
+					Status:   preflightStatusWarn,
+					Message:  fmt.Sprintf("model validation skipped: provider %s not in catalog (prompt probe will validate)", provider),
+					Details: map[string]any{
+						"model":   modelID,
+						"backend": string(backend),
+					},
+				})
+			}
+			continue
+		}
 		if !modeldb.CatalogHasProviderModel(catalog, provider, modelID) {
-			return fmt.Errorf("preflight: llm_provider=%s backend=%s model=%s not present in run catalog", provider, backend, modelID)
+			checks = append(checks, providerPreflightCheck{
+				Name:     "provider_model_catalog",
+				Provider: provider,
+				Status:   preflightStatusWarn,
+				Message:  fmt.Sprintf("llm_provider=%s backend=%s model=%s not present in run catalog (catalog may be stale; prompt probe will validate)", provider, backend, modelID),
+				Details: map[string]any{
+					"model":   modelID,
+					"backend": string(backend),
+				},
+			})
 		}
 	}
-	return nil
+	return checks, nil
 }
 
 func loadCatalogForRun(path string) (*modeldb.Catalog, error) {

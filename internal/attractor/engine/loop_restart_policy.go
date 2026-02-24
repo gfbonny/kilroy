@@ -5,15 +5,20 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/strongdm/kilroy/internal/attractor/model"
-	"github.com/strongdm/kilroy/internal/attractor/runtime"
+	"github.com/danshapiro/kilroy/internal/attractor/model"
+	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
 
 const (
 	failureClassTransientInfra       = "transient_infra"
 	failureClassDeterministic        = "deterministic"
 	failureClassCanceled             = "canceled"
+	failureClassBudgetExhausted      = "budget_exhausted"
+	failureClassCompilationLoop      = "compilation_loop"
+	failureClassStructural           = "structural"
 	defaultLoopRestartSignatureLimit = 3
+	// 0 disables visit-count cycle breaking unless max_node_visits is explicitly set.
+	defaultMaxNodeVisits = 0
 )
 
 var (
@@ -26,6 +31,10 @@ var (
 		"context deadline exceeded",
 		"connection refused",
 		"connection reset",
+		"could not resolve host",
+		"could not resolve hostname",
+		"temporary failure in name resolution",
+		"network is unreachable",
 		"broken pipe",
 		"tls handshake timeout",
 		"i/o timeout",
@@ -43,9 +52,34 @@ var (
 		"transport is closing",
 		"stream disconnected",
 		"stream closed before",
+		"index.crates.io",
+		"download of config.json failed",
+		"toolchain_or_dependency_registry_unavailable",
+		"toolchain dependency resolution blocked by network",
+		"toolchain_workspace_io",
+		"cross-device link",
+		"invalid cross-device link",
+		"os error 18",
 		"502",
 		"503",
 		"504",
+	}
+	budgetExhaustedReasonHints = []string{
+		"turn limit",
+		"max_turns",
+		"max turns",
+		"token limit reached",
+		"token limit exceeded",
+		"max tokens",
+		"max_tokens",
+		"context length exceeded",
+		"context window exceeded",
+		"budget exhausted",
+	}
+	structuralReasonHints = []string{
+		"write_scope_violation",
+		"write scope violation",
+		"scope violation",
 	}
 )
 
@@ -73,6 +107,16 @@ func classifyFailureClass(out runtime.Outcome) string {
 			return failureClassTransientInfra
 		}
 	}
+	for _, hint := range budgetExhaustedReasonHints {
+		if strings.Contains(reason, hint) {
+			return failureClassBudgetExhausted
+		}
+	}
+	for _, hint := range structuralReasonHints {
+		if strings.Contains(reason, hint) {
+			return failureClassStructural
+		}
+	}
 	return failureClassDeterministic
 }
 
@@ -94,16 +138,40 @@ func readFailureClassHint(out runtime.Outcome) string {
 	return ""
 }
 
+func readFailureSignatureHint(out runtime.Outcome) string {
+	if out.Meta != nil {
+		if raw, ok := out.Meta["failure_signature"]; ok {
+			if s := strings.TrimSpace(fmt.Sprint(raw)); s != "" && s != "<nil>" {
+				return s
+			}
+		}
+	}
+	if out.ContextUpdates != nil {
+		if raw, ok := out.ContextUpdates["failure_signature"]; ok {
+			if s := strings.TrimSpace(fmt.Sprint(raw)); s != "" && s != "<nil>" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
 func normalizedFailureClass(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "", "<nil>":
 		return ""
-	case "transient", "transient_infra", "transient-infra", "infra_transient", "transient infra", "infrastructure_transient", "retryable":
+	case "transient", "transient_infra", "transient-infra", "infra_transient", "transient infra", "infrastructure_transient", "retryable", "toolchain_workspace_io", "toolchain-workspace-io", "toolchain_or_dependency_registry_unavailable", "toolchain-dependency-registry-unavailable":
 		return failureClassTransientInfra
 	case "canceled", "cancelled":
 		return failureClassCanceled
 	case "deterministic", "non_transient", "non-transient", "permanent", "logic", "product":
 		return failureClassDeterministic
+	case "budget_exhausted", "budget-exhausted", "budget exhausted", "budget":
+		return failureClassBudgetExhausted
+	case "compilation_loop", "compilation-loop", "compilation loop", "compile_loop", "compile-loop":
+		return failureClassCompilationLoop
+	case "structural", "structure", "scope_violation", "write_scope_violation":
+		return failureClassStructural
 	default:
 		return failureClassDeterministic
 	}
@@ -114,6 +182,15 @@ func normalizedFailureClassOrDefault(raw string) string {
 		return cls
 	}
 	return failureClassDeterministic
+}
+
+// isSignatureTrackedFailureClass returns true if the failure class should be
+// tracked by the deterministic failure cycle breaker. Structural failures are
+// included so they accumulate signatures in the main loop (in subgraphs they
+// are caught earlier by the immediate structural abort).
+func isSignatureTrackedFailureClass(failureClass string) bool {
+	cls := normalizedFailureClassOrDefault(failureClass)
+	return cls == failureClassDeterministic || cls == failureClassStructural
 }
 
 func loopRestartSignatureLimit(g *model.Graph) int {
@@ -127,11 +204,25 @@ func loopRestartSignatureLimit(g *model.Graph) int {
 	return limit
 }
 
+func maxNodeVisits(g *model.Graph) int {
+	if g == nil {
+		return defaultMaxNodeVisits
+	}
+	limit := parseInt(g.Attrs["max_node_visits"], defaultMaxNodeVisits)
+	if limit < 1 {
+		return defaultMaxNodeVisits
+	}
+	return limit
+}
+
 func restartFailureSignature(nodeID string, out runtime.Outcome, failureClass string) string {
 	if !isFailureLoopRestartOutcome(out) {
 		return ""
 	}
-	reason := normalizeFailureReason(out.FailureReason)
+	reason := normalizeFailureReason(readFailureSignatureHint(out))
+	if reason == "" {
+		reason = normalizeFailureReason(out.FailureReason)
+	}
 	if reason == "" {
 		reason = "status=" + strings.ToLower(strings.TrimSpace(string(out.Status)))
 	}

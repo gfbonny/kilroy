@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/strongdm/kilroy/internal/attractor/model"
-	"github.com/strongdm/kilroy/internal/attractor/runtime"
+	"github.com/danshapiro/kilroy/internal/attractor/model"
+	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
 
 func TestRun_LoopRestartCreatesNewLogDirectory(t *testing.T) {
@@ -32,7 +32,7 @@ func TestRun_LoopRestartCreatesNewLogDirectory(t *testing.T) {
 	// The backend returns fail on the first call to "work", success on the second.
 	dot := []byte(`
 digraph G {
-  graph [goal="test loop restart"]
+  graph [goal="test loop restart", default_max_retry=0]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
   work  [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do work"]
@@ -548,6 +548,144 @@ func TestClassifyFailureClass_StreamDisconnectIsTransient(t *testing.T) {
 	}
 }
 
+func TestRun_StuckCycleNodeVisitLimit(t *testing.T) {
+	repo := t.TempDir()
+	runCmd(t, repo, "git", "init")
+	runCmd(t, repo, "git", "config", "user.name", "tester")
+	runCmd(t, repo, "git", "config", "user.email", "tester@example.com")
+	_ = os.WriteFile(filepath.Join(repo, "README.md"), []byte("hello\n"), 0o644)
+	runCmd(t, repo, "git", "add", "-A")
+	runCmd(t, repo, "git", "commit", "-m", "init")
+
+	// Graph where implement always succeeds but verify always fails,
+	// and the retry edge goes back to implement WITHOUT loop_restart.
+	// Either the signature-based cycle breaker or the node-visit limit
+	// will catch this — the key invariant is that the run terminates.
+	dot := []byte(`
+digraph G {
+  graph [goal="test stuck cycle", max_node_visits="5"]
+  start  [shape=Mdiamond]
+  exit   [shape=Msquare]
+  impl   [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="implement"]
+  verify [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="verify"]
+  check  [shape=diamond]
+  start -> impl -> verify -> check
+  check -> exit [condition="outcome=success"]
+  check -> impl [condition="outcome=fail"]
+}
+`)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	var callCount atomic.Int64
+	backend := &countingBackend{
+		fn: func(ctx context.Context, exec *Execution, node *model.Node, prompt string) (string, *runtime.Outcome, error) {
+			callCount.Add(1)
+			if node.ID == "impl" {
+				return "ok", &runtime.Outcome{Status: runtime.StatusSuccess}, nil
+			}
+			// verify always fails with varying messages (simulating AI variance)
+			n := callCount.Load()
+			return "fail", &runtime.Outcome{
+				Status:        runtime.StatusFail,
+				FailureReason: fmt.Sprintf("test failure variant %d: missing dependency xyz", n),
+			}, nil
+		},
+	}
+
+	g, _, err := Prepare(dot)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	logsRoot := t.TempDir()
+	eng := &Engine{
+		Graph:           g,
+		Options:         RunOptions{RepoPath: repo, RunID: "test-stuck-cycle", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
+		DotSource:       dot,
+		LogsRoot:        logsRoot,
+		WorktreeDir:     filepath.Join(logsRoot, "worktree"),
+		Context:         runtime.NewContext(),
+		Registry:        NewDefaultRegistry(),
+		Interviewer:     &AutoApproveInterviewer{},
+		CodergenBackend: backend,
+	}
+	eng.RunBranch = "attractor/run/test-stuck-cycle"
+
+	_, err = eng.run(ctx)
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	// Accept either the signature-based cycle breaker or the node-visit limit.
+	isCycleError := strings.Contains(err.Error(), "stuck in a cycle") ||
+		strings.Contains(err.Error(), "deterministic failure cycle")
+	if !isCycleError {
+		t.Fatalf("expected stuck-cycle or deterministic-failure-cycle error, got: %v", err)
+	}
+	// With max_node_visits=5 and >=, impl halts on its 5th visit (before executing),
+	// so 4 complete cycles: impl(4) + verify(4) = 8 backend calls max.
+	// The signature breaker may fire even sooner (at 3 repeated signatures).
+	if callCount.Load() > 12 {
+		t.Fatalf("expected backend called <= 12 times, got %d", callCount.Load())
+	}
+
+	// Verify final.json was written with failure
+	finalBytes, err := os.ReadFile(filepath.Join(logsRoot, "final.json"))
+	if err != nil {
+		t.Fatalf("read final.json: %v", err)
+	}
+	var final runtime.FinalOutcome
+	if err := json.Unmarshal(finalBytes, &final); err != nil {
+		t.Fatalf("unmarshal final.json: %v", err)
+	}
+	if final.Status != runtime.FinalFail {
+		t.Fatalf("final status = %q, want %q", final.Status, runtime.FinalFail)
+	}
+	isFinalCycleError := strings.Contains(final.FailureReason, "stuck in a cycle") ||
+		strings.Contains(final.FailureReason, "deterministic failure cycle")
+	if !isFinalCycleError {
+		t.Fatalf("final failure_reason = %q, want stuck-cycle or deterministic-failure-cycle", final.FailureReason)
+	}
+}
+
+func TestMaxNodeVisits_GraphAttrOverride(t *testing.T) {
+	g := &model.Graph{Attrs: map[string]string{"max_node_visits": "7"}}
+	if got := maxNodeVisits(g); got != 7 {
+		t.Fatalf("maxNodeVisits with attr=7: got %d want 7", got)
+	}
+}
+
+func TestMaxNodeVisits_DefaultWhenMissing(t *testing.T) {
+	g := &model.Graph{Attrs: map[string]string{}}
+	if got := maxNodeVisits(g); got != defaultMaxNodeVisits {
+		t.Fatalf("maxNodeVisits default: got %d want %d", got, defaultMaxNodeVisits)
+	}
+	if got := maxNodeVisits(nil); got != defaultMaxNodeVisits {
+		t.Fatalf("maxNodeVisits nil: got %d want %d", got, defaultMaxNodeVisits)
+	}
+	if defaultMaxNodeVisits != 0 {
+		t.Fatalf("defaultMaxNodeVisits = %d, want 0 (disabled by default)", defaultMaxNodeVisits)
+	}
+}
+
+func TestMaxNodeVisits_DisabledForZeroOrInvalidValues(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		attr string
+	}{
+		{name: "explicit zero", attr: "0"},
+		{name: "negative", attr: "-5"},
+		{name: "invalid", attr: "banana"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := &model.Graph{Attrs: map[string]string{"max_node_visits": tc.attr}}
+			if got := maxNodeVisits(g); got != 0 {
+				t.Fatalf("maxNodeVisits(%q): got %d want 0", tc.attr, got)
+			}
+		})
+	}
+}
+
 func readProgressEvents(t *testing.T, path string) []map[string]any {
 	t.Helper()
 	b, err := os.ReadFile(path)
@@ -615,7 +753,7 @@ func TestLoopRestart_PersistsContextKeys(t *testing.T) {
 	// each iteration. After a restart, the value should carry over.
 	dot := []byte(`
 digraph G {
-  graph [goal="test context persistence", loop_restart_persist_keys="completed_features,skipped_features"]
+  graph [goal="test context persistence", default_max_retry=0, loop_restart_persist_keys="completed_features,skipped_features"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
   work  [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do work"]
@@ -718,7 +856,7 @@ func TestLoopRestart_PersistKeysProgressEvent(t *testing.T) {
 
 	dot := []byte(`
 digraph G {
-  graph [goal="test persist keys in progress", loop_restart_persist_keys="my_key"]
+  graph [goal="test persist keys in progress", default_max_retry=0, loop_restart_persist_keys="my_key"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
   work  [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do work"]

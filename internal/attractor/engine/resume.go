@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/strongdm/kilroy/internal/attractor/gitutil"
-	"github.com/strongdm/kilroy/internal/attractor/modeldb"
-	"github.com/strongdm/kilroy/internal/attractor/runtime"
-	"github.com/strongdm/kilroy/internal/cxdb"
+	"github.com/danshapiro/kilroy/internal/attractor/gitutil"
+	"github.com/danshapiro/kilroy/internal/attractor/modeldb"
+	"github.com/danshapiro/kilroy/internal/attractor/runtime"
+	"github.com/danshapiro/kilroy/internal/cxdb"
 )
 
 var restartSuffixRE = regexp.MustCompile(`^restart-(\d+)$`)
@@ -148,7 +148,10 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 			return nil, err
 		}
 		catalog = cat
-		backend = NewCodergenRouter(cfg, catalog)
+		backend, err = newResumeCodergenBackend(cfg, catalog)
+		if err != nil {
+			return nil, err
+		}
 
 		// Re-attach to the existing CXDB context head (metaspec required).
 		baseURL := strings.TrimSpace(ov.CXDBHTTPBaseURL)
@@ -321,12 +324,76 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 		}
 	}
 
+	// Implicit fan-out: mirror forward-path logic for multi-edge convergence.
+	allEdges, edgeErr := selectAllEligibleEdges(eng.Graph, lastNodeID, lastOutcome, eng.Context)
+	if edgeErr != nil {
+		return nil, edgeErr
+	}
+	if len(allEdges) > 1 {
+		joinID, joinErr := findJoinNode(eng.Graph, allEdges)
+		if joinErr == nil && joinID != "" {
+			exec := &Execution{
+				Graph:       eng.Graph,
+				Context:     eng.Context,
+				LogsRoot:    eng.LogsRoot,
+				WorktreeDir: eng.WorktreeDir,
+				Engine:      eng,
+				Artifacts:   eng.Artifacts,
+			}
+			results, baseSHA, dispatchErr := dispatchParallelBranches(ctx, exec, lastNodeID, allEdges, joinID)
+			if dispatchErr != nil {
+				return nil, dispatchErr
+			}
+			stageDir := filepath.Join(eng.LogsRoot, lastNodeID)
+			_ = os.MkdirAll(stageDir, 0o755)
+			_ = writeJSON(filepath.Join(stageDir, "parallel_results.json"), results)
+
+			eng.Context.ApplyUpdates(map[string]any{
+				"parallel.join_node": joinID,
+				"parallel.results":   results,
+			})
+			eng.appendProgress(map[string]any{
+				"event":       "implicit_fan_out",
+				"source_node": lastNodeID,
+				"join_node":   joinID,
+				"branches":    len(results),
+				"base_sha":    baseSHA,
+			})
+
+			eng.incomingEdge = nil
+			res, err = eng.runLoop(ctx, joinID, append([]string{}, cp.CompletedNodes...), copyStringIntMap(cp.NodeRetries), nodeOutcomes)
+			if err != nil {
+				return nil, err
+			}
+			if startup != nil {
+				res.CXDBUIURL = strings.TrimSpace(startup.UIURL)
+			}
+			return res, nil
+		}
+	}
+
 	nextHop, err := resolveNextHop(eng.Graph, lastNodeID, lastOutcome, eng.Context, classifyFailureClass(lastOutcome))
 	if err != nil {
 		return nil, err
 	}
 	if nextHop == nil || nextHop.Edge == nil {
 		if lastOutcome.Status == runtime.StatusFail {
+			// Mirror forward-path fallback: try the retry_target chain before dying.
+			// Skip for fan-in nodes with deterministic failures — resolveNextHop
+			// already considered retry_target and intentionally blocked it.
+			fanInDeterministic := isFanInFailureLike(eng.Graph, lastNodeID, lastOutcome.Status) &&
+				normalizedFailureClassOrDefault(classifyFailureClass(lastOutcome)) == failureClassDeterministic
+			retryTarget := resolveRetryTarget(eng.Graph, lastNodeID)
+			if retryTarget != "" && !fanInDeterministic {
+				eng.appendProgress(map[string]any{
+					"event":          "no_matching_fail_edge_fallback",
+					"node_id":        lastNodeID,
+					"retry_target":   retryTarget,
+					"failure_reason": lastOutcome.FailureReason,
+				})
+				eng.incomingEdge = nil
+				return eng.runLoop(ctx, retryTarget, append([]string{}, cp.CompletedNodes...), copyStringIntMap(cp.NodeRetries), nodeOutcomes)
+			}
 			return nil, fmt.Errorf("resume: stage failed with no outgoing fail edge: %s", strings.TrimSpace(lastOutcome.FailureReason))
 		}
 		// Nothing to do; treat as completed.
@@ -371,6 +438,16 @@ func firstExistingPath(paths ...string) string {
 		}
 	}
 	return ""
+}
+
+func newResumeCodergenBackend(cfg *RunConfigFile, catalog *modeldb.Catalog) (CodergenBackend, error) {
+	// Resume consumes snapshotted graph+config from a previously validated run,
+	// so we only need runtime materialization here (not full preflight validation).
+	runtimes, err := resolveProviderRuntimes(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return NewCodergenRouterWithRuntimes(cfg, catalog, runtimes), nil
 }
 
 func loadManifest(path string) (*manifest, error) {

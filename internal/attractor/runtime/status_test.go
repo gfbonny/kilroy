@@ -90,24 +90,30 @@ func TestOutcome_Validate_FailureReasonRequiredForFailAndRetry(t *testing.T) {
 
 func TestDecodeOutcomeJSON_AcceptsCanonicalAndLegacyShapes(t *testing.T) {
 	// Canonical metaspec shape.
-	o1, err := DecodeOutcomeJSON([]byte(`{"status":"success","preferred_label":"x"}`))
+	o1, err := DecodeOutcomeJSON([]byte(`{"status":"success","preferred_label":"x","details":{"k":"v"}}`))
 	if err != nil {
 		t.Fatalf("DecodeOutcomeJSON canonical: %v", err)
 	}
 	if o1.Status != StatusSuccess || o1.PreferredLabel != "x" {
 		t.Fatalf("canonical decode: %+v", o1)
 	}
+	if got, ok := o1.Details.(map[string]any); !ok || got["k"] != "v" {
+		t.Fatalf("canonical details not preserved: %+v", o1.Details)
+	}
 	if o1.SuggestedNextIDs == nil || o1.ContextUpdates == nil || o1.Meta == nil {
 		t.Fatalf("expected non-nil slices/maps after canonicalize: %+v", o1)
 	}
 
 	// Legacy-ish shape.
-	o2, err := DecodeOutcomeJSON([]byte(`{"outcome":"SUCCESS","preferred_next_label":"Yes","suggested_next_ids":["a"],"context_updates":{"k":"v"},"notes":"n"}`))
+	o2, err := DecodeOutcomeJSON([]byte(`{"outcome":"SUCCESS","preferred_next_label":"Yes","suggested_next_ids":["a"],"context_updates":{"k":"v"},"notes":"n","details":["d1","d2"]}`))
 	if err != nil {
 		t.Fatalf("DecodeOutcomeJSON legacy: %v", err)
 	}
 	if o2.Status != StatusSuccess || o2.PreferredLabel != "Yes" {
 		t.Fatalf("legacy decode: %+v", o2)
+	}
+	if got, ok := o2.Details.([]any); !ok || len(got) != 2 || got[0] != "d1" || got[1] != "d2" {
+		t.Fatalf("legacy details not preserved: %+v", o2.Details)
 	}
 	if len(o2.SuggestedNextIDs) != 1 || o2.SuggestedNextIDs[0] != "a" {
 		t.Fatalf("legacy suggested_next_ids: %+v", o2.SuggestedNextIDs)

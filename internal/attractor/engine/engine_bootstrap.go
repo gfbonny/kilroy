@@ -1,8 +1,8 @@
 package engine
 
 import (
-	"github.com/strongdm/kilroy/internal/attractor/model"
-	"github.com/strongdm/kilroy/internal/attractor/runtime"
+	"github.com/danshapiro/kilroy/internal/attractor/model"
+	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
 
 func newBaseEngine(g *model.Graph, dotSource []byte, opts RunOptions) *Engine {
@@ -15,6 +15,13 @@ func newBaseEngine(g *model.Graph, dotSource []byte, opts RunOptions) *Engine {
 		Context:     runtime.NewContext(),
 		Registry:    NewDefaultRegistry(),
 		Interviewer: &AutoApproveInterviewer{},
+		Artifacts:   NewArtifactStore(opts.LogsRoot, DefaultFileBackingThreshold),
+	}
+	if opts.ProgressSink != nil {
+		e.progressSink = opts.ProgressSink
+	}
+	if opts.Interviewer != nil {
+		e.Interviewer = opts.Interviewer
 	}
 	e.RunBranch = buildRunBranch(opts.RunBranchPrefix, opts.RunID)
 	return e

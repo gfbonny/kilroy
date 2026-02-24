@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/strongdm/kilroy/internal/attractor/gitutil"
-	"github.com/strongdm/kilroy/internal/attractor/model"
-	"github.com/strongdm/kilroy/internal/attractor/runtime"
+	"github.com/danshapiro/kilroy/internal/attractor/gitutil"
+	"github.com/danshapiro/kilroy/internal/attractor/model"
+	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
 
 type ParallelHandler struct{}
@@ -88,23 +88,104 @@ func (h *ParallelHandler) Execute(ctx context.Context, exec *Execution, node *mo
 		return runtime.Outcome{Status: runtime.StatusFail, FailureReason: "parallel node has no outgoing edges"}, nil
 	}
 
-	joinID, err := findJoinFanInNode(exec.Graph, branches)
+	// Allow explicit parallel fan-out nodes (shape=component) to converge on either:
+	// - An explicit fan-in node (shape=tripleoctagon), or
+	// - Any other topological convergence node (e.g. a consolidate box).
+	//
+	// This supports "map then reduce" patterns where the reducer node should
+	// run once after all branches complete, without invoking FanInHandler
+	// winner-selection behavior.
+	joinID, err := findJoinNode(exec.Graph, branches)
 	if err != nil {
 		return runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()}, nil
 	}
 
-	stageDir := filepath.Join(exec.LogsRoot, node.ID)
-	_ = os.MkdirAll(stageDir, 0o755)
+	// Spec §4.8: read join_policy and error_policy from node attributes.
+	jp, ep := parallelPolicies(node)
 
-	// Kilroy git model: create the parallel node checkpoint commit FIRST so branch work is a descendant.
-	// The parallel node itself is orchestration-only; its outcome is always SUCCESS unless orchestration fails.
-	msg := fmt.Sprintf("attractor(%s): %s (%s)", exec.Engine.Options.RunID, node.ID, runtime.StatusSuccess)
-	baseSHA, err := gitutil.CommitAllowEmpty(exec.WorktreeDir, msg)
+	// Spec §9.6: emit ParallelStarted CXDB event.
+	parallelStart := time.Now()
+	exec.Engine.cxdbParallelStarted(ctx, node.ID, len(branches),
+		string(jp), string(ep))
+
+	results, baseSHA, err := dispatchParallelBranchesWithPolicy(ctx, exec, node.ID, branches, joinID, jp, ep, node)
 	if err != nil {
 		return runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()}, err
 	}
 
-	maxParallel := parseInt(node.Attr("max_parallel", ""), 4)
+	// Spec §9.6: emit ParallelCompleted CXDB event.
+	successCount, failCount := 0, 0
+	for _, r := range results {
+		if r.Outcome.Status == runtime.StatusSuccess || r.Outcome.Status == runtime.StatusPartialSuccess {
+			successCount++
+		} else if r.Outcome.Status == runtime.StatusFail {
+			failCount++
+		}
+	}
+	exec.Engine.cxdbParallelCompleted(ctx, node.ID, successCount, failCount,
+		time.Since(parallelStart).Milliseconds())
+
+	// Spec §4.8: apply error_policy=ignore to filter failed results BEFORE
+	// join evaluation, so ignored failures don't affect join policy outcome.
+	filteredResults := filterResultsByErrorPolicy(ep, results)
+
+	// Spec §4.8: evaluate join_policy to determine aggregate outcome.
+	policyOutcome := evaluateJoinPolicy(jp, node, filteredResults)
+
+	// Use filtered results for context propagation to fan-in handler.
+	contextResults := filteredResults
+
+	stageDir := filepath.Join(exec.LogsRoot, node.ID)
+	_ = os.MkdirAll(stageDir, 0o755)
+	_ = writeJSON(filepath.Join(stageDir, "parallel_results.json"), results)
+
+	return runtime.Outcome{
+		Status:        policyOutcome.Status,
+		Notes:         fmt.Sprintf("parallel fan-out complete (%d branches), join=%s; %s", len(results), joinID, policyOutcome.Notes),
+		FailureReason: policyOutcome.FailureReason,
+		ContextUpdates: map[string]any{
+			"parallel.join_node": joinID,
+			"parallel.results":   contextResults,
+		},
+		Meta: map[string]any{
+			"kilroy.git_checkpoint_sha": baseSHA,
+		},
+	}, nil
+}
+
+// dispatchParallelBranches runs branches in parallel and returns the results.
+// It creates a checkpoint commit, spawns worktrees for each branch, runs subgraphs,
+// and collects results. This is the shared core used by both explicit ParallelHandler
+// and implicit edge-topology fan-out.
+func dispatchParallelBranches(
+	ctx context.Context,
+	exec *Execution,
+	sourceNodeID string,
+	branches []*model.Edge,
+	joinID string,
+) ([]parallelBranchResult, string, error) {
+	if exec == nil || exec.Engine == nil || exec.Graph == nil {
+		return nil, "", fmt.Errorf("dispatchParallelBranches: missing execution context")
+	}
+	if len(branches) == 0 {
+		return nil, "", fmt.Errorf("dispatchParallelBranches: no branches")
+	}
+
+	// Resolve the source node for max_parallel and branch naming.
+	sourceNode := exec.Graph.Nodes[sourceNodeID]
+	if sourceNode == nil {
+		// Create a minimal node so runBranch has something to reference.
+		sourceNode = &model.Node{ID: sourceNodeID, Attrs: map[string]string{}}
+	}
+
+	// Kilroy git model: create the checkpoint commit FIRST so branch work is a descendant.
+	msg := fmt.Sprintf("attractor(%s): %s (%s)", exec.Engine.Options.RunID, sourceNodeID, runtime.StatusSuccess)
+	baseSHA, err := exec.Engine.commitAllowEmptyCheckpoint(msg)
+	if err != nil {
+		return nil, "", err
+	}
+
+	maxParallel := parseInt(sourceNode.Attr("max_parallel", ""), 4)
 	if maxParallel <= 0 {
 		maxParallel = 4
 	}
@@ -118,6 +199,7 @@ func (h *ParallelHandler) Execute(ctx context.Context, exec *Execution, node *mo
 		edge *model.Edge
 	}
 
+	h := &ParallelHandler{}
 	jobs := make(chan job)
 	results := make([]parallelBranchResult, len(branches))
 	var wg sync.WaitGroup
@@ -129,7 +211,7 @@ func (h *ParallelHandler) Execute(ctx context.Context, exec *Execution, node *mo
 			if e == nil {
 				continue
 			}
-			res := h.runBranch(ctx, exec, node, baseSHA, joinID, j.idx, e, &gitMu)
+			res := h.runBranch(ctx, exec, sourceNode, baseSHA, joinID, j.idx, e, &gitMu)
 			results[j.idx] = res
 		}
 	}
@@ -156,21 +238,7 @@ func (h *ParallelHandler) Execute(ctx context.Context, exec *Execution, node *mo
 		return results[i].StartNodeID < results[j].StartNodeID
 	})
 
-	// Persist results as a stage artifact for easier inspection.
-	_ = writeJSON(filepath.Join(stageDir, "parallel_results.json"), results)
-
-	out := runtime.Outcome{
-		Status: runtime.StatusSuccess,
-		Notes:  fmt.Sprintf("parallel fan-out complete (%d branches), join=%s", len(results), joinID),
-		ContextUpdates: map[string]any{
-			"parallel.join_node": joinID,
-			"parallel.results":   results,
-		},
-		Meta: map[string]any{
-			"kilroy.git_checkpoint_sha": baseSHA,
-		},
-	}
-	return out, nil
+	return results, baseSHA, nil
 }
 
 func (h *ParallelHandler) runBranch(ctx context.Context, exec *Execution, parallelNode *model.Node, baseSHA, joinID string, idx int, edge *model.Edge, gitMu *sync.Mutex) parallelBranchResult {
@@ -319,6 +387,7 @@ func (h *ParallelHandler) runBranch(ctx context.Context, exec *Execution, parall
 		Graph:              exec.Graph,
 		Options:            exec.Engine.Options,
 		DotSource:          exec.Engine.DotSource,
+		RunConfig:          exec.Engine.RunConfig,
 		RunBranch:          branchName,
 		WorktreeDir:        worktreeDir,
 		LogsRoot:           branchRoot,
@@ -365,6 +434,9 @@ func (h *ParallelHandler) runBranch(ctx context.Context, exec *Execution, parall
 		emitBranchProgress(eventName, extra)
 	}
 	emitBranchProgress("branch_subgraph_start", nil)
+	// Spec §9.6: emit ParallelBranchStarted CXDB event.
+	branchStart := time.Now()
+	exec.Engine.cxdbParallelBranchStarted(ctx, parallelNode.ID, key, idx)
 	keepaliveStop := make(chan struct{})
 	keepaliveDone := make(chan struct{})
 	keepaliveInterval := branchHeartbeatKeepaliveInterval(exec.Engine.Options.StallTimeout)
@@ -400,6 +472,9 @@ func (h *ParallelHandler) runBranch(ctx context.Context, exec *Execution, parall
 		doneExtra["branch_failure_reason"] = reason
 	}
 	emitBranchProgress("branch_subgraph_done", doneExtra)
+	// Spec §9.6: emit ParallelBranchCompleted CXDB event.
+	exec.Engine.cxdbParallelBranchCompleted(ctx, parallelNode.ID, key, idx,
+		strings.TrimSpace(string(res.Outcome.Status)), time.Since(branchStart).Milliseconds())
 	res.BranchKey = key
 	res.BranchName = branchName
 	res.StartNodeID = edge.To
@@ -483,14 +558,8 @@ func (h *FanInHandler) Execute(ctx context.Context, exec *Execution, node *model
 	}, nil
 }
 
+// ManagerLoopHandler is defined in manager_loop.go.
 type ManagerLoopHandler struct{}
-
-func (h *ManagerLoopHandler) Execute(ctx context.Context, exec *Execution, node *model.Node) (runtime.Outcome, error) {
-	_ = ctx
-	_ = exec
-	_ = node
-	return runtime.Outcome{Status: runtime.StatusFail, FailureReason: "stack.manager_loop not implemented in v1"}, nil
-}
 
 func decodeParallelResults(raw any) ([]parallelBranchResult, error) {
 	switch v := raw.(type) {
@@ -691,6 +760,109 @@ func bfsFanInDistances(g *model.Graph, start string) map[string]int {
 				continue
 			}
 			if seen[e.To] {
+				continue
+			}
+			seen[e.To] = true
+			queue = append(queue, item{id: e.To, dist: it.dist + 1})
+		}
+	}
+	return out
+}
+
+// findJoinNode finds the convergence point for a set of branches.
+// Prefers tripleoctagon (explicit fan-in) nodes. Falls back to any node
+// reachable from ALL branches (topological convergence).
+func findJoinNode(g *model.Graph, branches []*model.Edge) (string, error) {
+	if g == nil {
+		return "", fmt.Errorf("graph is nil")
+	}
+	if len(branches) == 0 {
+		return "", fmt.Errorf("no branches")
+	}
+
+	// First, try the existing fan-in-only search — if a tripleoctagon exists, prefer it.
+	joinID, err := findJoinFanInNode(g, branches)
+	if err == nil && joinID != "" {
+		return joinID, nil
+	}
+
+	// Fallback: find any convergence node reachable from all branches.
+	type cand struct {
+		id      string
+		maxDist int
+		sumDist int
+	}
+
+	reachable := make([]map[string]int, 0, len(branches))
+	for _, e := range branches {
+		if e == nil {
+			continue
+		}
+		dists := bfsAllDistances(g, e.To)
+		reachable = append(reachable, dists)
+	}
+	if len(reachable) == 0 {
+		return "", fmt.Errorf("no valid branches")
+	}
+
+	// Intersection: nodes reachable from all branches.
+	var cands []cand
+	for id, d0 := range reachable[0] {
+		maxD := d0
+		sumD := d0
+		ok := true
+		for i := 1; i < len(reachable); i++ {
+			d, exists := reachable[i][id]
+			if !exists {
+				ok = false
+				break
+			}
+			sumD += d
+			if d > maxD {
+				maxD = d
+			}
+		}
+		if ok {
+			cands = append(cands, cand{id: id, maxDist: maxD, sumDist: sumD})
+		}
+	}
+	if len(cands) == 0 {
+		return "", fmt.Errorf("no convergence node reachable from all branches")
+	}
+
+	sort.SliceStable(cands, func(i, j int) bool {
+		if cands[i].maxDist != cands[j].maxDist {
+			return cands[i].maxDist < cands[j].maxDist
+		}
+		if cands[i].sumDist != cands[j].sumDist {
+			return cands[i].sumDist < cands[j].sumDist
+		}
+		return cands[i].id < cands[j].id
+	})
+	return cands[0].id, nil
+}
+
+// bfsAllDistances returns distances from start to ALL reachable nodes (not just fan-in nodes).
+func bfsAllDistances(g *model.Graph, start string) map[string]int {
+	type item struct {
+		id   string
+		dist int
+	}
+	seen := map[string]bool{start: true}
+	queue := []item{{id: start, dist: 0}}
+	out := map[string]int{}
+
+	for len(queue) > 0 {
+		it := queue[0]
+		queue = queue[1:]
+		// Record first (shortest) distance for every node except start itself.
+		if it.id != start {
+			if _, exists := out[it.id]; !exists {
+				out[it.id] = it.dist
+			}
+		}
+		for _, e := range g.Outgoing(it.id) {
+			if e == nil || seen[e.To] {
 				continue
 			}
 			seen[e.To] = true

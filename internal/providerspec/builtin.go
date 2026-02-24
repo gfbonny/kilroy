@@ -18,7 +18,7 @@ var builtinSpecs = map[string]Spec{
 			HelpProbeArgs:      []string{"exec", "--help"},
 			CapabilityAll:      []string{"--json", "--sandbox"},
 		},
-		Failover: []string{"anthropic", "google"},
+		Failover: []string{"google"},
 	},
 	"anthropic": {
 		Key: "anthropic",
@@ -32,12 +32,12 @@ var builtinSpecs = map[string]Spec{
 		},
 		CLI: &CLISpec{
 			DefaultExecutable:  "claude",
-			InvocationTemplate: []string{"-p", "--output-format", "stream-json", "--verbose", "--model", "{{model}}", "{{prompt}}"},
+			InvocationTemplate: []string{"-p", "--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose", "--model", "{{model}}", "{{prompt}}"},
 			PromptMode:         "arg",
 			HelpProbeArgs:      []string{"--help"},
-			CapabilityAll:      []string{"--output-format", "stream-json", "--verbose"},
+			CapabilityAll:      []string{"--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"},
 		},
-		Failover: []string{"openai", "google"},
+		Failover: []string{"google"},
 	},
 	"google": {
 		Key:     "google",
@@ -58,7 +58,7 @@ var builtinSpecs = map[string]Spec{
 			CapabilityAll:      []string{"--output-format"},
 			CapabilityAnyOf:    [][]string{{"--yolo", "--approval-mode"}},
 		},
-		Failover: []string{"openai", "anthropic"},
+		Failover: []string{"kimi"},
 	},
 	"kimi": {
 		Key:     "kimi",
@@ -71,7 +71,7 @@ var builtinSpecs = map[string]Spec{
 			ProviderOptionsKey: "anthropic",
 			ProfileFamily:      "openai",
 		},
-		Failover: []string{"openai", "zai"},
+		Failover: []string{"zai"},
 	},
 	"zai": {
 		Key:     "zai",
@@ -84,7 +84,7 @@ var builtinSpecs = map[string]Spec{
 			ProviderOptionsKey: "zai",
 			ProfileFamily:      "openai",
 		},
-		Failover: []string{"openai", "kimi"},
+		Failover: []string{"cerebras"},
 	},
 	"cerebras": {
 		Key:     "cerebras",
@@ -97,7 +97,20 @@ var builtinSpecs = map[string]Spec{
 			ProviderOptionsKey: "cerebras",
 			ProfileFamily:      "openai",
 		},
-		Failover: []string{"openai", "zai"},
+		Failover: []string{"zai"},
+	},
+	"minimax": {
+		Key:     "minimax",
+		Aliases: []string{"minimax-ai"},
+		API: &APISpec{
+			Protocol:           ProtocolOpenAIChatCompletions,
+			DefaultBaseURL:     "https://api.minimax.io",
+			DefaultPath:        "/v1/chat/completions",
+			DefaultAPIKeyEnv:   "MINIMAX_API_KEY",
+			ProviderOptionsKey: "minimax",
+			ProfileFamily:      "openai",
+		},
+		Failover: []string{"cerebras"},
 	},
 }
 

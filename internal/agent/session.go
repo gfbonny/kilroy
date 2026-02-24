@@ -12,7 +12,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
-	"github.com/strongdm/kilroy/internal/llm"
+	"github.com/danshapiro/kilroy/internal/llm"
 )
 
 type SessionConfig struct {
@@ -36,6 +36,13 @@ type SessionConfig struct {
 	// ProviderOptions is merged into every LLM request as provider_options.
 	// Use this for provider-specific parameters (e.g., Cerebras clear_thinking).
 	ProviderOptions map[string]any
+
+	// ToolCallFilter, when non-nil, is invoked before each tool call is executed.
+	// It receives the tool name, call ID, and arguments JSON. If it returns a
+	// non-empty string, the tool call is skipped and the returned string is used
+	// as the tool result (with IsError=true). This enables pre-hook scripts to
+	// veto tool calls.
+	ToolCallFilter func(toolName, callID, argsJSON string) (skipReason string)
 
 	EnableLoopDetection *bool
 	LoopDetectionWindow int
@@ -250,6 +257,27 @@ func (s *Session) execTool(ctx context.Context, call llm.ToolCallData) ToolExecR
 		"call_id":        call.ID,
 		"arguments_json": string(argsJSON),
 	})
+
+	// Spec §9.7: ToolCallFilter allows pre-hooks to veto tool calls.
+	if s.cfg.ToolCallFilter != nil {
+		if skipReason := s.cfg.ToolCallFilter(call.Name, call.ID, string(argsJSON)); skipReason != "" {
+			res := ToolExecResult{
+				ToolName:   call.Name,
+				CallID:     call.ID,
+				Output:     skipReason,
+				FullOutput: skipReason,
+				IsError:    true,
+			}
+			s.emit(EventToolCallEnd, map[string]any{
+				"tool_name":   res.ToolName,
+				"call_id":     res.CallID,
+				"is_error":    res.IsError,
+				"full_output": res.FullOutput,
+				"skipped":     true,
+			})
+			return res
+		}
+	}
 
 	// Session-level tools (subagents) are registered in the registry with closures.
 	res := s.reg.ExecuteCall(ctx, s.env, call)
@@ -503,8 +531,8 @@ func (s *Session) processOneInput(ctx context.Context, input string) (string, er
 			if repeats >= s.cfg.LoopDetectionWindow {
 				loopWarned = true
 				s.emit(EventLoopDetection, map[string]any{"fingerprint": fp, "repeats": repeats})
-				s.appendTurn(TurnSteering, llm.User("Loop detection: you are repeating the same tool calls. Stop and change approach."))
-				s.emit(EventSteeringInjected, map[string]any{"text": "Loop detection: you are repeating the same tool calls. Stop and change approach."})
+				s.appendTurn(TurnSteering, llm.User(loopDetectionSteeringPrompt))
+				s.emit(EventSteeringInjected, map[string]any{"text": loopDetectionSteeringPrompt})
 			}
 		}
 
@@ -619,13 +647,24 @@ func malformedToolCallsFingerprint(calls []llm.ToolCallData, results []ToolExecR
 
 // Tool registration.
 
+// argStr extracts a string argument from a tool-call args map.
+// When the key is missing or the value is nil, it returns "" instead of "<nil>"
+// (which is what fmt.Sprint(nil) would produce).
+func argStr(args map[string]any, key string) string {
+	v, ok := args[key]
+	if !ok || v == nil {
+		return ""
+	}
+	return fmt.Sprint(v)
+}
+
 func registerCoreTools(reg *ToolRegistry, s *Session) error {
 	// read_file
 	if err := reg.Register(RegisteredTool{
 		Definition: defReadFile(),
 		Exec: func(ctx context.Context, env ExecutionEnvironment, args map[string]any) (any, error) {
 			_ = ctx
-			path := fmt.Sprint(args["file_path"])
+			path := argStr(args, "file_path")
 			var offset *int
 			var limit *int
 			if v, ok := args["offset"]; ok {
@@ -703,7 +742,7 @@ func registerCoreTools(reg *ToolRegistry, s *Session) error {
 		Definition: defWriteFile(),
 		Exec: func(ctx context.Context, env ExecutionEnvironment, args map[string]any) (any, error) {
 			_ = ctx
-			return env.WriteFile(fmt.Sprint(args["file_path"]), fmt.Sprint(args["content"]))
+			return env.WriteFile(argStr(args, "file_path"), argStr(args, "content"))
 		},
 	}); err != nil {
 		return err
@@ -718,7 +757,7 @@ func registerCoreTools(reg *ToolRegistry, s *Session) error {
 			if v, ok := args["replace_all"].(bool); ok {
 				replaceAll = v
 			}
-			return env.EditFile(fmt.Sprint(args["file_path"]), fmt.Sprint(args["old_string"]), fmt.Sprint(args["new_string"]), replaceAll)
+			return env.EditFile(argStr(args, "file_path"), argStr(args, "old_string"), argStr(args, "new_string"), replaceAll)
 		},
 	})
 
@@ -726,7 +765,7 @@ func registerCoreTools(reg *ToolRegistry, s *Session) error {
 	if err := reg.Register(RegisteredTool{
 		Definition: defShell(),
 		Exec: func(ctx context.Context, env ExecutionEnvironment, args map[string]any) (any, error) {
-			cmd := fmt.Sprint(args["command"])
+			cmd := argStr(args, "command")
 			timeout := s.cfg.DefaultCommandTimeoutMS
 			if v, ok := args["timeout_ms"].(float64); ok && int(v) > 0 {
 				timeout = int(v)
@@ -765,7 +804,7 @@ func registerCoreTools(reg *ToolRegistry, s *Session) error {
 		Definition: defListDir(),
 		Exec: func(ctx context.Context, env ExecutionEnvironment, args map[string]any) (any, error) {
 			_ = ctx
-			path := fmt.Sprint(args["path"])
+			path := argStr(args, "path")
 			depth := 1
 			if v, ok := args["depth"].(float64); ok && int(v) > 0 {
 				depth = int(v)
@@ -779,9 +818,9 @@ func registerCoreTools(reg *ToolRegistry, s *Session) error {
 		Definition: defGrep(),
 		Exec: func(ctx context.Context, env ExecutionEnvironment, args map[string]any) (any, error) {
 			_ = ctx
-			pat := fmt.Sprint(args["pattern"])
-			path := fmt.Sprint(args["path"])
-			glob := fmt.Sprint(args["glob_filter"])
+			pat := argStr(args, "pattern")
+			path := argStr(args, "path")
+			glob := argStr(args, "glob_filter")
 			ci := false
 			if v, ok := args["case_insensitive"].(bool); ok {
 				ci = v
@@ -801,8 +840,8 @@ func registerCoreTools(reg *ToolRegistry, s *Session) error {
 		Definition: defGlob(),
 		Exec: func(ctx context.Context, env ExecutionEnvironment, args map[string]any) (any, error) {
 			_ = ctx
-			pat := fmt.Sprint(args["pattern"])
-			path := fmt.Sprint(args["path"])
+			pat := argStr(args, "pattern")
+			path := argStr(args, "path")
 			matches, err := env.Glob(pat, path)
 			if err != nil {
 				return "", err
@@ -818,7 +857,7 @@ func registerCoreTools(reg *ToolRegistry, s *Session) error {
 		Definition: defApplyPatch(),
 		Exec: func(ctx context.Context, env ExecutionEnvironment, args map[string]any) (any, error) {
 			_ = ctx
-			patch := fmt.Sprint(args["patch"])
+			patch := argStr(args, "patch")
 			return ApplyPatch(env.WorkingDirectory(), patch)
 		},
 	})
@@ -828,7 +867,7 @@ func registerCoreTools(reg *ToolRegistry, s *Session) error {
 		Definition: defSpawnAgent(),
 		Exec: func(ctx context.Context, env ExecutionEnvironment, args map[string]any) (any, error) {
 			_ = env
-			task := fmt.Sprint(args["task"])
+			task := argStr(args, "task")
 			return s.spawnAgent(ctx, task)
 		},
 	})
@@ -836,7 +875,7 @@ func registerCoreTools(reg *ToolRegistry, s *Session) error {
 		Definition: defSendInput(),
 		Exec: func(ctx context.Context, env ExecutionEnvironment, args map[string]any) (any, error) {
 			_ = env
-			return s.sendInput(ctx, fmt.Sprint(args["agent_id"]), fmt.Sprint(args["input"]))
+			return s.sendInput(ctx, argStr(args, "agent_id"), argStr(args, "input"))
 		},
 	})
 	_ = reg.Register(RegisteredTool{
@@ -847,14 +886,14 @@ func registerCoreTools(reg *ToolRegistry, s *Session) error {
 			if v, ok := args["timeout_ms"].(float64); ok && int(v) > 0 {
 				timeout = int(v)
 			}
-			return s.waitAgent(ctx, fmt.Sprint(args["agent_id"]), timeout)
+			return s.waitAgent(ctx, argStr(args, "agent_id"), timeout)
 		},
 	})
 	_ = reg.Register(RegisteredTool{
 		Definition: defCloseAgent(),
 		Exec: func(ctx context.Context, env ExecutionEnvironment, args map[string]any) (any, error) {
 			_ = env
-			return s.closeAgent(fmt.Sprint(args["agent_id"]))
+			return s.closeAgent(argStr(args, "agent_id"))
 		},
 	})
 

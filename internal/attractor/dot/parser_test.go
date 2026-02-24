@@ -3,7 +3,7 @@ package dot
 import (
 	"testing"
 
-	"github.com/strongdm/kilroy/internal/attractor/model"
+	"github.com/danshapiro/kilroy/internal/attractor/model"
 )
 
 func TestParse_SimpleChainedEdgesAndDefaults(t *testing.T) {
@@ -120,6 +120,28 @@ digraph G {
 		if !contains(classes, "loop-a") {
 			t.Fatalf("%s classes: got %#v", id, classes)
 		}
+	}
+}
+
+func TestParse_TopLevelNegativeNumericValue(t *testing.T) {
+	src := []byte(`
+digraph G {
+    some_threshold = -1
+    float_val = -3.5
+    start [shape=Mdiamond]
+    exit  [shape=Msquare]
+    start -> exit
+}
+`)
+	g, err := Parse(src)
+	if err != nil {
+		t.Fatalf("Parse() error: %v", err)
+	}
+	if got := g.Attrs["some_threshold"]; got != "-1" {
+		t.Fatalf("some_threshold: got %q, want %q", got, "-1")
+	}
+	if got := g.Attrs["float_val"]; got != "-3.5" {
+		t.Fatalf("float_val: got %q, want %q", got, "-3.5")
 	}
 }
 

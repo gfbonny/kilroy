@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag is on main
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Tagged commit is not on the main branch."
+            echo "The release skill requires tagging a commit on main."
+            echo "See skills/release-kilroy/SKILL.md step 7."
+            exit 1
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+
+      - name: Verify RELEASE_NOTES.md exists
+        run: |
+          if [ ! -f RELEASE_NOTES.md ]; then
+            echo "::error::RELEASE_NOTES.md not found at the tagged commit."
+            echo "The release skill (skills/release-kilroy/SKILL.md) requires writing"
+            echo "RELEASE_NOTES.md and committing it before tagging. See step 5."
+            exit 1
+          fi
+
+      - name: Verify version.go matches tag
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CODE_VERSION=$(grep 'var Version' internal/version/version.go | sed 's/.*"\(.*\)".*/\1/')
+          if [ "$TAG_VERSION" != "$CODE_VERSION" ]; then
+            echo "::error::version.go ($CODE_VERSION) does not match tag ($TAG_VERSION)."
+            echo "Bump internal/version/version.go before tagging. See skills/release-kilroy/SKILL.md step 5."
+            exit 1
+          fi
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Validate GoReleaser config
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean --release-notes=RELEASE_NOTES.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

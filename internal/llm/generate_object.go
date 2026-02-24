@@ -7,6 +7,8 @@ import (
 	"fmt"
 
 	"github.com/santhosh-tekuri/jsonschema/v5"
+
+	"github.com/danshapiro/kilroy/internal/jsonschemautil"
 )
 
 type GenerateObjectOptions struct {
@@ -56,15 +58,5 @@ func GenerateObject(ctx context.Context, opts GenerateObjectOptions) (*GenerateR
 }
 
 func compileJSONSchema(schema map[string]any) (*jsonschema.Schema, error) {
-	c := jsonschema.NewCompiler()
-	c.Draft = jsonschema.Draft2020
-	b, err := json.Marshal(schema)
-	if err != nil {
-		return nil, err
-	}
-	if err := c.AddResource("schema.json", bytes.NewReader(b)); err != nil {
-		return nil, err
-	}
-	return c.Compile("schema.json")
+	return jsonschemautil.CompileMapSchema(schema, jsonschema.Draft2020)
 }
-

@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/strongdm/kilroy/internal/attractor/model"
-	"github.com/strongdm/kilroy/internal/attractor/runtime"
+	"github.com/danshapiro/kilroy/internal/attractor/model"
+	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
 
 type canceledSubgraphFixtureResult struct {
@@ -544,4 +544,22 @@ func fileExists(path string) bool {
 	}
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// structuralImplFixtureHandler always succeeds — simulates a passing impl node.
+type structuralImplFixtureHandler struct{}
+
+func (h *structuralImplFixtureHandler) Execute(ctx context.Context, exec *Execution, node *model.Node) (runtime.Outcome, error) {
+	return runtime.Outcome{Status: runtime.StatusSuccess, Notes: "impl succeeded"}, nil
+}
+
+// structuralVerifyFixtureHandler always fails with write_scope_violation —
+// simulates a verify node that detects files outside the declared scope.
+type structuralVerifyFixtureHandler struct{}
+
+func (h *structuralVerifyFixtureHandler) Execute(ctx context.Context, exec *Execution, node *model.Node) (runtime.Outcome, error) {
+	return runtime.Outcome{
+		Status:        runtime.StatusFail,
+		FailureReason: "write_scope_violation: changed paths outside declared scope",
+	}, nil
 }

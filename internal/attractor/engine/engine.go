@@ -8,17 +8,18 @@ import (
 	"path/filepath"
 	rdebug "runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/strongdm/kilroy/internal/attractor/cond"
-	"github.com/strongdm/kilroy/internal/attractor/dot"
-	"github.com/strongdm/kilroy/internal/attractor/gitutil"
-	"github.com/strongdm/kilroy/internal/attractor/model"
-	"github.com/strongdm/kilroy/internal/attractor/runtime"
-	"github.com/strongdm/kilroy/internal/attractor/style"
-	"github.com/strongdm/kilroy/internal/attractor/validate"
+	"github.com/danshapiro/kilroy/internal/attractor/cond"
+	"github.com/danshapiro/kilroy/internal/attractor/dot"
+	"github.com/danshapiro/kilroy/internal/attractor/gitutil"
+	"github.com/danshapiro/kilroy/internal/attractor/model"
+	"github.com/danshapiro/kilroy/internal/attractor/runtime"
+	"github.com/danshapiro/kilroy/internal/attractor/style"
+	"github.com/danshapiro/kilroy/internal/attractor/validate"
 )
 
 type RunOptions struct {
@@ -47,6 +48,10 @@ type RunOptions struct {
 	// Allows explicit opt-in for test-shim CLI execution profile.
 	AllowTestShim bool
 
+	// When true, skip CXDB startup entirely. eng.CXDB remains nil;
+	// all downstream consumers already nil-check before use.
+	DisableCXDB bool
+
 	// Optional provider-level model overrides (provider -> model id).
 	// When set, the forced model is used for execution and bypasses model-catalog
 	// membership validation for that provider.
@@ -63,6 +68,20 @@ type RunOptions struct {
 	// Optional cap for LLM retries in codergen routing.
 	// Pointer preserves explicit zero versus unset semantics from config.
 	MaxLLMRetries *int
+
+	// Optional callback invoked for every progress event (same data written to
+	// progress.ndjson). The map is a deep-copied snapshot safe for concurrent
+	// use by the caller. Used by the HTTP server to fan events to SSE clients.
+	ProgressSink func(map[string]any)
+
+	// Optional interviewer for human-in-the-loop gates. Defaults to
+	// AutoApproveInterviewer when nil.
+	Interviewer Interviewer
+
+	// Optional callback invoked after the engine is fully initialized but
+	// before the main loop starts. Allows callers to capture an engine
+	// reference for context inspection, etc.
+	OnEngineReady func(e *Engine)
 }
 
 func (o *RunOptions) applyDefaults() error {
@@ -132,6 +151,10 @@ type Engine struct {
 	// Optional: normalized event sink (CXDB).
 	CXDB *CXDBSink
 
+	// Artifact store for the run (spec §5.5). Initialized once per run;
+	// handlers access it via Execution.Artifacts.
+	Artifacts *ArtifactStore
+
 	// Model catalog snapshot metadata (metaspec).
 	ModelCatalogSHA    string
 	ModelCatalogSource string
@@ -149,7 +172,9 @@ type Engine struct {
 	terminalOutcomePersisted bool
 
 	// Deterministic failure cycle detection: tracks failure signatures across
-	// consecutive stages in the main loop. Resets on any successful stage.
+	// stages in the main loop. Never reset on success — signatures are keyed
+	// by nodeID so a successful node cannot collide with a failing one, and
+	// resetting would defeat the breaker in impl-succeeds/verify-fails cycles.
 	loopFailureSignatures map[string]int
 
 	progressMu sync.Mutex
@@ -204,6 +229,13 @@ type Result struct {
 
 type PrepareOptions struct {
 	Transforms []Transform
+	// RepoPath is the repository root directory. When set, prompt_file attributes
+	// on nodes are resolved relative to this path before other transforms run.
+	RepoPath string
+	// KnownTypes is an optional list of handler type strings. When non-empty,
+	// the TypeKnownRule lint rule is added to validation so that nodes with
+	// explicit type= attributes not in this set produce a warning.
+	KnownTypes []string
 }
 
 // Prepare parses/transforms/validates a graph.
@@ -225,7 +257,13 @@ func PrepareWithOptions(dotSource []byte, opts PrepareOptions) (*model.Graph, []
 		return nil, nil, err
 	}
 
-	// Built-in transforms: stylesheet, $goal expansion.
+	// Built-in transforms: prompt_file resolution, stylesheet, $goal expansion.
+	// prompt_file runs first so loaded content gets stylesheet defaults and $goal expansion.
+	if opts.RepoPath != "" {
+		if err := expandPromptFiles(g, opts.RepoPath); err != nil {
+			return g, nil, fmt.Errorf("prompt_file expansion: %w", err)
+		}
+	}
 	if raw := strings.TrimSpace(g.Attrs["model_stylesheet"]); raw != "" {
 		rules, err := style.ParseStylesheet(raw)
 		if err != nil {
@@ -250,11 +288,21 @@ func PrepareWithOptions(dotSource []byte, opts PrepareOptions) (*model.Graph, []
 		}
 	}
 
-	diags := validate.Validate(g)
+	// Spec §7.3: validate_or_raise collects ALL error-severity diagnostics
+	// and reports them together, rather than returning on the first error.
+	var extraRules []validate.LintRule
+	if len(opts.KnownTypes) > 0 {
+		extraRules = append(extraRules, validate.NewTypeKnownRule(opts.KnownTypes))
+	}
+	diags := validate.Validate(g, extraRules...)
+	var errs []string
 	for _, d := range diags {
 		if d.Severity == validate.SeverityError {
-			return g, diags, fmt.Errorf("validation error: %s: %s", d.Rule, d.Message)
+			errs = append(errs, d.Rule+": "+d.Message)
 		}
+	}
+	if len(errs) > 0 {
+		return g, diags, fmt.Errorf("validation failed: %s", strings.Join(errs, "; "))
 	}
 	return g, diags, nil
 }
@@ -264,12 +312,17 @@ func Run(ctx context.Context, dotSource []byte, opts RunOptions) (*Result, error
 	if err := opts.applyDefaults(); err != nil {
 		return nil, err
 	}
-	g, _, err := Prepare(dotSource)
+	reg := NewDefaultRegistry()
+	g, _, err := PrepareWithOptions(dotSource, PrepareOptions{
+		RepoPath:   opts.RepoPath,
+		KnownTypes: reg.KnownTypes(),
+	})
 	if err != nil {
 		return nil, err
 	}
 
 	eng := newBaseEngine(g, dotSource, opts)
+	eng.Registry = reg
 	eng.CodergenBackend = &SimulatedCodergenBackend{}
 
 	return eng.run(ctx)
@@ -309,6 +362,8 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 	if err := os.MkdirAll(e.LogsRoot, 0o755); err != nil {
 		return nil, err
 	}
+	// Record PID so attractor status can detect a running process.
+	_ = os.WriteFile(filepath.Join(e.LogsRoot, "run.pid"), []byte(strconv.Itoa(os.Getpid())), 0o644)
 	// Snapshot the run config for repeatability and resume.
 	if e.RunConfig != nil {
 		_ = writeJSON(filepath.Join(e.LogsRoot, "run_config.json"), e.RunConfig)
@@ -380,6 +435,8 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 }
 
 func (e *Engine) runLoop(ctx context.Context, current string, completed []string, nodeRetries map[string]int, nodeOutcomes map[string]runtime.Outcome) (*Result, error) {
+	nodeVisits := map[string]int{}
+	visitLimit := maxNodeVisits(e.Graph)
 	for {
 		if err := runContextError(ctx); err != nil {
 			return nil, err
@@ -388,6 +445,28 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		if node == nil {
 			return nil, fmt.Errorf("missing node: %s", current)
 		}
+
+		// Stuck-cycle detection: count how many times each node has been
+		// visited in this iteration. When max_node_visits is set (>0) and a
+		// node reaches that limit, halt — the pipeline is stuck in a retry
+		// loop (e.g., implement succeeds but verify always fails due to
+		// environment issues). This catches cycles that the signature-based
+		// circuit breaker misses because the AI writes varying error messages.
+		nodeVisits[current]++
+		if visitLimit > 0 && nodeVisits[current] >= visitLimit {
+			reason := fmt.Sprintf(
+				"run aborted: node %q visited %d times in this iteration (limit %d); pipeline is stuck in a cycle",
+				current, nodeVisits[current], visitLimit,
+			)
+			e.appendProgress(map[string]any{
+				"event":       "stuck_cycle_breaker",
+				"node_id":     current,
+				"visit_count": nodeVisits[current],
+				"visit_limit": visitLimit,
+			})
+			return nil, fmt.Errorf("%s", reason)
+		}
+
 		prev := ""
 		if len(completed) > 0 {
 			prev = completed[len(completed)-1]
@@ -396,8 +475,13 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		e.Context.Set("current_node", current)
 		e.Context.Set("completed_nodes", append([]string{}, completed...))
 
-		// Resolve fidelity/thread info for LLM nodes for checkpointing + resume semantics.
-		if resolvedHandlerType(node) == "codergen" {
+		// Spec §5.1: set built-in context key internal.retry_count.<node_id>.
+		// Initialize to current retry count (0 on first visit, or restored value on resume).
+		e.Context.Set(fmt.Sprintf("internal.retry_count.%s", current), nodeRetries[current])
+
+		// Resolve fidelity/thread info for handlers that declare fidelity awareness
+		// (e.g., LLM nodes) for checkpointing + resume semantics.
+		if fa, ok := e.Registry.Resolve(node).(FidelityAwareHandler); ok && fa.UsesFidelity() {
 			mode, threadKey := resolveFidelityAndThread(e.Graph, e.incomingEdge, node)
 			if strings.TrimSpace(e.forceNextFidelity) != "" && !e.forceNextFidelityUsed {
 				mode = strings.TrimSpace(e.forceNextFidelity)
@@ -495,7 +579,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		// if the same signature has repeated too many times — this prevents
 		// infinite loops when, e.g., a provider auth token expires and
 		// every stage fails identically.
-		if isFailureLoopRestartOutcome(out) && normalizedFailureClassOrDefault(failureClass) == failureClassDeterministic {
+		if isFailureLoopRestartOutcome(out) && isSignatureTrackedFailureClass(failureClass) {
 			sig := restartFailureSignature(node.ID, out, failureClass)
 			if sig != "" {
 				if e.loopFailureSignatures == nil {
@@ -528,8 +612,6 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 					return nil, fmt.Errorf("%s", reason)
 				}
 			}
-		} else if out.Status == runtime.StatusSuccess {
-			e.loopFailureSignatures = nil // reset on success
 		}
 
 		// Checkpoint (git commit + checkpoint.json).
@@ -540,9 +622,10 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		e.lastCheckpointSHA = sha
 		e.cxdbCheckpointSaved(ctx, node.ID, out.Status, sha)
 
-		// Kilroy v1: parallel nodes control the next hop (join node) via context.
-		// This keeps the DOT surface simple while allowing deterministic fan-out/fan-in.
+		// Kilroy v1: explicit parallel nodes control the next hop via context.
+		isExplicitParallel := false
 		if t := strings.TrimSpace(node.TypeOverride()); t == "parallel" || (t == "" && shapeToType(node.Shape()) == "parallel") {
+			isExplicitParallel = true
 			join := strings.TrimSpace(e.Context.GetString("parallel.join_node", ""))
 			if join == "" {
 				return nil, fmt.Errorf("parallel node missing parallel.join_node in context")
@@ -552,6 +635,52 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 			continue
 		}
 
+		// Implicit fan-out: when a non-parallel node has multiple eligible outgoing
+		// edges that converge at a common downstream node, dispatch them in parallel.
+		if !isExplicitParallel {
+			allEdges, edgeErr := selectAllEligibleEdges(e.Graph, node.ID, out, e.Context)
+			if edgeErr != nil {
+				return nil, edgeErr
+			}
+			if len(allEdges) > 1 {
+				joinID, joinErr := findJoinNode(e.Graph, allEdges)
+				if joinErr == nil && joinID != "" {
+					exec := &Execution{
+						Graph:       e.Graph,
+						Context:     e.Context,
+						LogsRoot:    e.LogsRoot,
+						WorktreeDir: e.WorktreeDir,
+						Engine:      e,
+						Artifacts:   e.Artifacts,
+					}
+					results, baseSHA, dispatchErr := dispatchParallelBranches(ctx, exec, node.ID, allEdges, joinID)
+					if dispatchErr != nil {
+						return nil, dispatchErr
+					}
+					stageDir := filepath.Join(e.LogsRoot, node.ID)
+					_ = os.MkdirAll(stageDir, 0o755)
+					_ = writeJSON(filepath.Join(stageDir, "parallel_results.json"), results)
+
+					e.Context.ApplyUpdates(map[string]any{
+						"parallel.join_node": joinID,
+						"parallel.results":   results,
+					})
+					e.appendProgress(map[string]any{
+						"event":       "implicit_fan_out",
+						"source_node": node.ID,
+						"join_node":   joinID,
+						"branches":    len(results),
+						"base_sha":    baseSHA,
+					})
+
+					e.incomingEdge = nil
+					current = joinID
+					continue
+				}
+				// If no convergence node found, fall through to single-edge selection.
+			}
+		}
+
 		// Resolve next hop with fan-in failure policy.
 		nextHop, err := resolveNextHop(e.Graph, node.ID, out, e.Context, failureClass)
 		if err != nil {
@@ -559,6 +688,24 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		}
 		if nextHop == nil || nextHop.Edge == nil {
 			if out.Status == runtime.StatusFail {
+				// Before dying, try the retry_target chain (same fallback as goal gates).
+				// Skip for fan-in nodes with deterministic failures — resolveNextHop
+				// already considered retry_target and intentionally blocked it to
+				// prevent infinite loops where the same branches fail identically.
+				fanInDeterministic := isFanInFailureLike(e.Graph, node.ID, out.Status) &&
+					normalizedFailureClassOrDefault(failureClass) == failureClassDeterministic
+				retryTarget := resolveRetryTarget(e.Graph, node.ID)
+				if retryTarget != "" && !fanInDeterministic {
+					e.appendProgress(map[string]any{
+						"event":          "no_matching_fail_edge_fallback",
+						"node_id":        node.ID,
+						"retry_target":   retryTarget,
+						"failure_reason": out.FailureReason,
+					})
+					e.incomingEdge = nil
+					current = retryTarget
+					continue
+				}
 				failedTurnID, _ := e.cxdbRunFailed(ctx, node.ID, sha, out.FailureReason)
 				final := runtime.FinalOutcome{
 					Timestamp:         time.Now().UTC(),
@@ -828,15 +975,19 @@ func (e *Engine) executeNode(ctx context.Context, node *model.Node) (runtime.Out
 			LogsRoot:    e.LogsRoot,
 			WorktreeDir: e.WorktreeDir,
 			Engine:      e,
+			Artifacts:   e.Artifacts,
 		}, node)
 	}()
 	if err != nil {
 		// Preserve any metadata (failure_class, failure_signature) the handler
 		// attached to the outcome. Only override Status and FailureReason.
+		// Spec §4.12: handler exceptions are converted to FAIL, not RETRY.
+		// The failure classification safety net (shouldRetryOutcome) will still
+		// promote transient failures to retryable based on failure_class metadata.
 		if cause := context.Cause(ctx); cause != nil && cause != context.Canceled && cause != context.DeadlineExceeded {
 			err = cause
 		}
-		out.Status = runtime.StatusRetry
+		out.Status = runtime.StatusFail
 		out.FailureReason = err.Error()
 	}
 
@@ -920,10 +1071,11 @@ func (e *Engine) harvestPartialStatus(stageDir string, node *model.Node) map[str
 }
 
 func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries map[string]int) (runtime.Outcome, error) {
-	// Spec: conditional nodes are pass-through routing points. Retrying them based on
-	// a prior stage's FAIL/RETRY just burns retry budget and can create misleading
-	// "max retries exceeded" failures. Execute exactly once.
-	if resolvedHandlerType(node) == "conditional" {
+	// Handlers that implement SingleExecutionHandler with SkipRetry()=true are
+	// pass-through routing points. Retrying them based on a prior stage's
+	// FAIL/RETRY just burns retry budget and can create misleading "max retries
+	// exceeded" failures. Execute exactly once.
+	if se, ok := e.Registry.Resolve(node).(SingleExecutionHandler); ok && se.SkipRetry() {
 		e.appendProgress(map[string]any{
 			"event":   "stage_attempt_start",
 			"node_id": node.ID,
@@ -942,14 +1094,30 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 		return out, nil
 	}
 
-	maxRetries := parseInt(node.Attr("max_retries", ""), 0)
-	if maxRetries == 0 {
-		maxRetries = parseInt(e.Graph.Attrs["default_max_retry"], 0)
+	// Spec §3.5: retry precedence is (1) node max_retries, (2) graph default_max_retry,
+	// (3) built-in default of 3. Use -1 sentinel to distinguish "not set" from "explicitly 0"
+	// so that max_retries=0 on a node genuinely means "no retries".
+	maxRetries := parseInt(node.Attr("max_retries", ""), -1)
+	if maxRetries < 0 {
+		maxRetries = parseInt(e.Graph.Attrs["default_max_retry"], -1)
 	}
 	if maxRetries < 0 {
-		maxRetries = 0
+		maxRetries = 3 // built-in default per spec §2.5
 	}
 	maxAttempts := maxRetries + 1
+
+	// --- Escalation setup ---
+	escalationChain := parseEscalationModels(node.Attr("escalation_models", ""))
+	rbe := retriesBeforeEscalation(e.Graph)
+	origModel := node.Attrs["llm_model"]
+	origProvider := node.Attrs["llm_provider"]
+	defer func() {
+		// Always restore original attrs, even on early return.
+		node.Attrs["llm_model"] = origModel
+		node.Attrs["llm_provider"] = origProvider
+	}()
+	escalationFailCount := 0 // consecutive escalatable failures on the current model
+	escalationIdx := -1      // -1 = using default model; 0+ = index into escalationChain
 
 	allowPartial := strings.EqualFold(node.Attr("allow_partial", "false"), "true")
 	stageDir := filepath.Join(e.LogsRoot, node.ID)
@@ -981,7 +1149,19 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 			return out, nil
 		}
 
+		// Spec §3.3: custom (non-canonical) outcomes are routing decisions, not failures.
+		// If the outcome matches any outgoing edge condition, return it as-is so the
+		// main loop's edge selection can route on it. Reference dotfiles
+		// (consensus_task.dot, semport.dot) use this pattern for multi-way branching
+		// from box nodes (e.g. outcome=needs_dod, outcome=process, outcome=port).
+		if !out.Status.IsCanonical() && hasMatchingOutgoingCondition(e.Graph, node.ID, out, e.Context) {
+			retries[node.ID] = 0
+			return out, nil
+		}
+
 		failureClass := classifyFailureClass(out)
+		// Spec §9.6: emit StageFailed CXDB event on failure.
+		willRetry := false // updated below if retry is possible
 		canRetry := false
 		if attempt < maxAttempts {
 			// Tool command nodes (shape=parallelogram) always retry when
@@ -990,13 +1170,47 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 			isToolNode := strings.TrimSpace(node.Attr("tool_command", "")) != ""
 			if isToolNode {
 				canRetry = out.Status == runtime.StatusFail || out.Status == runtime.StatusRetry
-			} else {
-				canRetry = shouldRetryOutcome(out, failureClass)
+			} else if shouldRetryOutcome(out, failureClass) {
+				canRetry = true
+				// Check if escalation applies (capability failures, not transient)
+				if isEscalatableFailureClass(failureClass) && len(escalationChain) > 0 {
+					escalationFailCount++
+					if escalationFailCount > rbe && escalationIdx < len(escalationChain)-1 {
+						prevProvider := node.Attrs["llm_provider"]
+						prevModel := node.Attrs["llm_model"]
+						escalationIdx++
+						next := escalationChain[escalationIdx]
+						node.Attrs["llm_model"] = next.Model
+						node.Attrs["llm_provider"] = next.Provider
+						escalationFailCount = 0
+						e.appendProgress(map[string]any{
+							"event":          "escalation_model_switch",
+							"node_id":        node.ID,
+							"attempt":        attempt,
+							"from_provider":  prevProvider,
+							"from_model":     prevModel,
+							"to_provider":    next.Provider,
+							"to_model":       next.Model,
+							"escalation_idx": escalationIdx,
+							"failure_class":  failureClass,
+						})
+					}
+				}
+				// For transient_infra: no model change, just retry same model.
 			}
 		}
 		if canRetry {
+			willRetry = true
+		}
+		// Spec §9.6: emit StageFailed CXDB event.
+		e.cxdbStageFailed(ctx, node, out.FailureReason, willRetry, attempt)
+		if canRetry {
 			retries[node.ID]++
+			// Spec §5.1: update built-in context key internal.retry_count.<node_id> on each retry.
+			e.Context.Set(fmt.Sprintf("internal.retry_count.%s", node.ID), retries[node.ID])
 			delay := backoffDelayForNode(e.Options.RunID, e.Graph, node, attempt)
+			// Spec §9.6: emit StageRetrying CXDB event.
+			e.cxdbStageRetrying(ctx, node, attempt+1, delay.Milliseconds())
 			e.appendProgress(map[string]any{
 				"event":     "stage_retry_sleep",
 				"node_id":   node.ID,
@@ -1106,7 +1320,7 @@ func (e *Engine) checkpoint(nodeID string, out runtime.Outcome, completed []stri
 	}
 	if sha == "" {
 		var err error
-		sha, err = gitutil.CommitAllowEmpty(e.WorktreeDir, msg)
+		sha, err = e.commitAllowEmptyCheckpoint(msg)
 		if err != nil {
 			return "", err
 		}
@@ -1148,6 +1362,20 @@ func (e *Engine) checkpoint(nodeID string, out runtime.Outcome, completed []stri
 		return "", err
 	}
 	return sha, nil
+}
+
+func (e *Engine) checkpointExcludeGlobs() []string {
+	if e == nil || e.RunConfig == nil {
+		return nil
+	}
+	return append([]string{}, e.RunConfig.Git.CheckpointExcludeGlobs...)
+}
+
+func (e *Engine) commitAllowEmptyCheckpoint(message string) (string, error) {
+	if e == nil {
+		return "", fmt.Errorf("engine is nil")
+	}
+	return gitutil.CommitAllowEmptyWithExcludes(e.WorktreeDir, message, e.checkpointExcludeGlobs())
 }
 
 func (e *Engine) writeManifest(baseSHA string) error {
@@ -1447,13 +1675,31 @@ func parseInt(s string, def int) int {
 }
 
 func defaultLogsRoot(runID string) string {
-	base := os.Getenv("XDG_STATE_HOME")
+	base := strings.TrimSpace(os.Getenv("XDG_STATE_HOME"))
 	if base == "" {
-		home := os.Getenv("HOME")
+		home := strings.TrimSpace(os.Getenv("HOME"))
 		if home == "" {
-			base = "."
+			if h, err := os.UserHomeDir(); err == nil {
+				home = strings.TrimSpace(h)
+			}
+		}
+		if home == "" {
+			// Last-resort fallback: use an absolute directory so relative
+			// worktree paths behave consistently across git invocations.
+			if wd, err := os.Getwd(); err == nil && strings.TrimSpace(wd) != "" {
+				base = wd
+			} else if abs, err := filepath.Abs("."); err == nil {
+				base = abs
+			} else {
+				base = "."
+			}
 		} else {
 			base = filepath.Join(home, ".local", "state")
+		}
+	}
+	if !filepath.IsAbs(base) {
+		if abs, err := filepath.Abs(base); err == nil {
+			base = abs
 		}
 	}
 	return filepath.Join(base, "kilroy", "attractor", "runs", runID)
@@ -1497,7 +1743,7 @@ func expandBaseSHA(g *model.Graph, baseSHA string) {
 }
 
 func isTerminal(n *model.Node) bool {
-	return n != nil && (n.Shape() == "Msquare" || strings.EqualFold(n.ID, "exit") || strings.EqualFold(n.ID, "end"))
+	return n != nil && (n.Shape() == "Msquare" || n.Shape() == "doublecircle" || strings.EqualFold(n.ID, "exit") || strings.EqualFold(n.ID, "end"))
 }
 
 func checkGoalGates(g *model.Graph, outcomes map[string]runtime.Outcome) (bool, string) {
@@ -1518,7 +1764,7 @@ func checkGoalGates(g *model.Graph, outcomes map[string]runtime.Outcome) (bool, 
 
 func findStartNodeID(g *model.Graph) string {
 	for id, n := range g.Nodes {
-		if n != nil && n.Shape() == "Mdiamond" {
+		if n != nil && (n.Shape() == "Mdiamond" || n.Shape() == "circle") {
 			return id
 		}
 	}
@@ -1532,17 +1778,68 @@ func findStartNodeID(g *model.Graph) string {
 
 // selectNextEdge implements attractor-spec edge selection with deterministic tie-breaks (metaspec).
 func selectNextEdge(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context) (*model.Edge, error) {
-	edges := g.Outgoing(from)
+	edges, err := selectAllEligibleEdges(g, from, out, ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(edges) == 0 {
+		return nil, nil
+	}
+	return bestEdge(edges), nil
+}
+
+// hasMatchingOutgoingCondition returns true if any outgoing edge from the given
+// node has a condition that matches the outcome. Used by executeWithRetry to
+// recognize custom outcomes (e.g. "needs_dod", "process") as routing decisions
+// rather than failures requiring retry. A snapshot of the live context is used
+// with the outcome's context_updates applied, mirroring what the main loop does
+// before edge selection (engine.go §523-525).
+func hasMatchingOutgoingCondition(g *model.Graph, nodeID string, out runtime.Outcome, ctx *runtime.Context) bool {
+	// Clone the context and apply the outcome's updates so that conditions
+	// referencing context.* keys set by this node evaluate correctly.
+	evalCtx := ctx.Clone()
+	evalCtx.ApplyUpdates(out.ContextUpdates)
+	evalCtx.Set("outcome", string(out.Status))
+	for _, e := range g.Outgoing(nodeID) {
+		if e == nil {
+			continue
+		}
+		c := strings.TrimSpace(e.Condition())
+		if c == "" {
+			continue
+		}
+		ok, err := cond.Evaluate(c, out, evalCtx)
+		if err == nil && ok {
+			return true
+		}
+	}
+	return false
+}
+
+// selectAllEligibleEdges returns all edges that are eligible for traversal from the given node.
+// When multiple edges are returned, the caller should treat this as an implicit fan-out.
+// Preferred-label and suggested-next-ID narrowing still apply — if they narrow to a single edge,
+// only that edge is returned (no fan-out).
+func selectAllEligibleEdges(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context) ([]*model.Edge, error) {
+	rawEdges := g.Outgoing(from)
+	if len(rawEdges) == 0 {
+		return nil, nil
+	}
+
+	// Filter nil edges once for use in all subsequent steps.
+	var edges []*model.Edge
+	for _, e := range rawEdges {
+		if e != nil {
+			edges = append(edges, e)
+		}
+	}
 	if len(edges) == 0 {
 		return nil, nil
 	}
 
-	// Eligible conditional edges.
+	// Step 1: Eligible conditional edges.
 	var condMatched []*model.Edge
 	for _, e := range edges {
-		if e == nil {
-			continue
-		}
 		c := strings.TrimSpace(e.Condition())
 		if c == "" {
 			continue
@@ -1556,47 +1853,53 @@ func selectNextEdge(g *model.Graph, from string, out runtime.Outcome, ctx *runti
 		}
 	}
 	if len(condMatched) > 0 {
-		return bestEdge(condMatched), nil
+		return condMatched, nil
 	}
 
-	// Unconditional edges are eligible when no condition matched.
-	var uncond []*model.Edge
-	for _, e := range edges {
-		if e == nil {
-			continue
-		}
-		if strings.TrimSpace(e.Condition()) == "" {
-			uncond = append(uncond, e)
-		}
-	}
-	if len(uncond) == 0 {
-		return nil, nil
-	}
-
-	// Preferred label match (in declaration order).
+	// Step 2: Preferred label match narrows to one.
+	// Per spec §3.3, iterates ALL edges (not just unconditional).
 	if strings.TrimSpace(out.PreferredLabel) != "" {
 		want := normalizeLabel(out.PreferredLabel)
-		sort.SliceStable(uncond, func(i, j int) bool { return uncond[i].Order < uncond[j].Order })
-		for _, e := range uncond {
+		sorted := make([]*model.Edge, len(edges))
+		copy(sorted, edges)
+		sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Order < sorted[j].Order })
+		for _, e := range sorted {
 			if normalizeLabel(e.Label()) == want {
-				return e, nil
+				return []*model.Edge{e}, nil
 			}
 		}
 	}
 
-	// Suggested next IDs.
+	// Step 3: Suggested next IDs narrow to one.
+	// Per spec §3.3, iterates ALL edges (not just unconditional).
 	if len(out.SuggestedNextIDs) > 0 {
-		sort.SliceStable(uncond, func(i, j int) bool { return uncond[i].Order < uncond[j].Order })
+		sorted := make([]*model.Edge, len(edges))
+		copy(sorted, edges)
+		sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Order < sorted[j].Order })
 		for _, suggested := range out.SuggestedNextIDs {
-			for _, e := range uncond {
+			for _, e := range sorted {
 				if e.To == suggested {
-					return e, nil
+					return []*model.Edge{e}, nil
 				}
 			}
 		}
 	}
 
-	return bestEdge(uncond), nil
+	// Steps 4 & 5: Weight with lexical tiebreak (unconditional edges only).
+	var uncond []*model.Edge
+	for _, e := range edges {
+		if strings.TrimSpace(e.Condition()) == "" {
+			uncond = append(uncond, e)
+		}
+	}
+	if len(uncond) > 0 {
+		return uncond, nil
+	}
+
+	// Fallback: any edge (spec §3.3). All edges have conditions and none
+	// matched, and no unconditional edge exists. Return ALL edges so the
+	// caller can apply weight-then-lexical tiebreaking via bestEdge.
+	return edges, nil
 }
 
 func bestEdge(edges []*model.Edge) *model.Edge {

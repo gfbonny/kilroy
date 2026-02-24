@@ -9,3 +9,7 @@
 /cli_wrote.txt
 /status.json
 /tmp/
+/logs/
+
+# GoReleaser build output
+/dist/

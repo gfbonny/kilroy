@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -105,18 +106,17 @@ digraph G {
   start -> a -> exit
 }
 `)
+	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "api-no-shim-gate", LogsRoot: t.TempDir()})
-	if err == nil {
-		t.Fatalf("expected error, got nil")
-	}
-	if strings.Contains(err.Error(), "--allow-test-shim") {
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "api-no-shim-gate", LogsRoot: logsRoot})
+	// The test_shim gate should NOT apply to API-only providers.
+	if err != nil && strings.Contains(err.Error(), "--allow-test-shim") {
 		t.Fatalf("did not expect test_shim gate for api-only run: %v", err)
 	}
-	want := "preflight: llm_provider=openai backend=api model=gpt-5.3-codex not present in run catalog"
-	if !strings.Contains(err.Error(), want) {
-		t.Fatalf("expected provider/model catalog error %q, got %v", want, err)
+	// Catalog miss is now a warn (not hard fail), so it should not be the error.
+	if err != nil && strings.Contains(err.Error(), "not present in run catalog") {
+		t.Fatalf("catalog miss should be a warning not a hard failure, got %v", err)
 	}
 }
 
@@ -222,6 +222,50 @@ digraph G {
 	}
 }
 
+func TestRunWithConfig_WritesPIDFile(t *testing.T) {
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+	pinned := writePinnedCatalog(t)
+	cxdbSrv := newCXDBTestServer(t)
+
+	dot := []byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  start -> exit
+}
+`)
+	cfg := &RunConfigFile{}
+	cfg.Version = 1
+	cfg.Repo.Path = repo
+	cfg.CXDB.BinaryAddr = cxdbSrv.BinaryAddr()
+	cfg.CXDB.HTTPBaseURL = cxdbSrv.URL()
+	cfg.ModelDB.OpenRouterModelInfoPath = pinned
+	cfg.ModelDB.OpenRouterModelInfoUpdatePolicy = "pinned"
+	cfg.Git.RunBranchPrefix = "attractor/run"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	res, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "pid-file", LogsRoot: logsRoot})
+	if err != nil {
+		t.Fatalf("RunWithConfig: %v", err)
+	}
+
+	pidPath := filepath.Join(res.LogsRoot, "run.pid")
+	b, readErr := os.ReadFile(pidPath)
+	if readErr != nil {
+		t.Fatalf("expected run.pid to exist after foreground run, got: %v", readErr)
+	}
+	pidStr := strings.TrimSpace(string(b))
+	if pidStr == "" {
+		t.Fatal("run.pid is empty")
+	}
+	pid, parseErr := strconv.Atoi(pidStr)
+	if parseErr != nil || pid <= 0 {
+		t.Fatalf("run.pid contains invalid pid: %q", pidStr)
+	}
+}
+
 func writeProviderCatalogForTest(t *testing.T) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "catalog.json")
@@ -242,6 +286,14 @@ func writeProviderCatalogForTest(t *testing.T) string {
       "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
       "pricing": {"prompt": "0.000001", "completion": "0.000002"},
       "top_provider": {"context_length": 131072, "max_completion_tokens": 8192}
+    },
+    {
+      "id": "minimax/minimax-m2.5",
+      "context_length": 196608,
+      "supported_parameters": ["tools"],
+      "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+      "pricing": {"prompt": "0.00000015", "completion": "0.0000012"},
+      "top_provider": {"context_length": 196608, "max_completion_tokens": 16384}
     }
   ]
 }`), 0o644); err != nil {
@@ -278,6 +330,14 @@ func TestRunWithConfig_AcceptsKimiAndZaiAPIProviders(t *testing.T) {
 			baseURL:  "http://127.0.0.1:1",
 			path:     "/api/coding/paas/v4/chat/completions",
 		},
+		{
+			provider: "minimax",
+			model:    "minimax-m2.5",
+			protocol: "openai_chat_completions",
+			keyEnv:   "MINIMAX_API_KEY",
+			baseURL:  "http://127.0.0.1:1",
+			path:     "/v1/chat/completions",
+		},
 	}
 
 	for _, tc := range cases {
@@ -289,16 +349,19 @@ digraph G {
   a [shape=box, llm_provider=%s, llm_model=%s, prompt="hi"]
   start -> a -> exit
 }
-`, tc.provider, tc.model))
+	`, tc.provider, tc.model))
 			cfg := &RunConfigFile{Version: 1}
 			cfg.Repo.Path = repo
 			cfg.CXDB.BinaryAddr = cxdbSrv.BinaryAddr()
 			cfg.CXDB.HTTPBaseURL = cxdbSrv.URL()
 			cfg.ModelDB.OpenRouterModelInfoPath = catalogPath
 			cfg.ModelDB.OpenRouterModelInfoUpdatePolicy = "pinned"
+			zeroRetries := 0
+			cfg.RuntimePolicy.MaxLLMRetries = &zeroRetries
 			cfg.LLM.Providers = map[string]ProviderConfig{
 				tc.provider: {
-					Backend: BackendAPI,
+					Backend:  BackendAPI,
+					Failover: []string{},
 					API: ProviderAPIConfig{
 						Protocol:      tc.protocol,
 						APIKeyEnv:     tc.keyEnv,
@@ -308,8 +371,21 @@ digraph G {
 					},
 				},
 			}
+			for _, envKey := range []string{
+				"OPENAI_API_KEY",
+				"ANTHROPIC_API_KEY",
+				"GEMINI_API_KEY",
+				"KIMI_API_KEY",
+				"ZAI_API_KEY",
+				"CEREBRAS_API_KEY",
+				"MINIMAX_API_KEY",
+			} {
+				t.Setenv(envKey, "")
+			}
 			t.Setenv(tc.keyEnv, "k-test")
-			_, err := RunWithConfig(context.Background(), dot, cfg, RunOptions{RunID: "r1-" + tc.provider, LogsRoot: t.TempDir()})
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "r1-" + tc.provider, LogsRoot: t.TempDir()})
 			if err != nil {
 				if strings.Contains(err.Error(), "unsupported provider") {
 					t.Fatalf("provider should be accepted, got %v", err)

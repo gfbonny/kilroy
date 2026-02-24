@@ -9,6 +9,40 @@ High-level flow:
 3. Execute node-by-node with coding agents in an isolated git worktree (`attractor run`).
 4. Resume interrupted runs from logs, CXDB, or run branch (`attractor resume`).
 
+## Installation
+
+### Homebrew (macOS and Linux)
+
+```bash
+brew tap danshapiro/kilroy
+brew install kilroy
+```
+
+### Go Install
+
+```bash
+go install github.com/danshapiro/kilroy/cmd/kilroy@latest
+```
+
+### Binary Download
+
+Download the latest release from [GitHub Releases](https://github.com/danshapiro/kilroy/releases).
+
+| Platform       | Archive                          |
+|----------------|----------------------------------|
+| macOS (Apple)  | `kilroy_*_darwin_arm64.tar.gz`   |
+| macOS (Intel)  | `kilroy_*_darwin_amd64.tar.gz`   |
+| Linux (x86_64) | `kilroy_*_linux_amd64.tar.gz`    |
+| Linux (ARM64)  | `kilroy_*_linux_arm64.tar.gz`    |
+| Windows        | `kilroy_*_windows_amd64.zip`     |
+| Windows (ARM)  | `kilroy_*_windows_arm64.zip`     |
+
+### Build from Source
+
+```bash
+go build -o kilroy ./cmd/kilroy
+```
+
 ## What Is CXDB?
 
 CXDB is the execution database Kilroy uses for observability and recovery.
@@ -38,7 +72,7 @@ This implementation is based on the Attractor specification by StrongDM at `http
 | Graph DSL + engine semantics | DOT schema, handler model, edge selection, retry, conditions, context fidelity | Concrete Go engine implementation details and defaults |
 | Coding-agent loop | Session model, tool loop behavior, provider-aligned tool concepts | Local tool execution wiring and CLI/API backend routing choices |
 | Unified LLM model | Provider-neutral request/response/tool/streaming contracts | Concrete provider adapters and environment wiring |
-| Provider support | Conceptual provider abstraction | Provider plug-in runtime with built-ins: OpenAI, Anthropic, Google, Kimi, ZAI |
+| Provider support | Conceptual provider abstraction | Provider plug-in runtime with built-ins: OpenAI, Anthropic, Google, Kimi, ZAI, Minimax |
 | Backend selection | Spec allows flexible backend choices | Backend is mandatory per provider (`api`/`cli`), no implicit defaults |
 | Checkpointing + persistence | Attractor/CXDB contracts | Required git branch/worktree/commit-per-node and concrete artifact layout |
 | Ingestion | Ingestor behavior described in spec docs | `attractor ingest` implementation: Claude CLI + `english-to-dotfile` skill |
@@ -68,7 +102,7 @@ go build -o kilroy ./cmd/kilroy
 
 Notes:
 
-- Ingest auto-detects `skills/english-to-dotfile/SKILL.md` under `--repo` (default: cwd).
+- Ingest auto-detects `skills/english-to-dotfile/SKILL.md` from `--repo` (default: cwd), then falls back to paths relative to the `kilroy` binary (including Homebrew-style `../share/kilroy/skills/...`) and Go module-cache install roots from build metadata (`go install`).
 - Use `--skill <path>` if your skill file is elsewhere.
 
 ### 3) Validate the pipeline
@@ -249,10 +283,10 @@ Observe and intervene during long runs:
 Provider runtime architecture:
 
 - Providers are protocol-driven and configured under `llm.providers.<provider>`.
-- Built-ins include `openai`, `anthropic`, `google`, `kimi`, `zai`, and `cerebras`.
-- Provider aliases: `gemini`/`google_ai_studio` -> `google`, `moonshot`/`moonshotai` -> `kimi`, `z-ai`/`z.ai` -> `zai`, `cerebras-ai` -> `cerebras`.
+- Built-ins include `openai`, `anthropic`, `google`, `kimi`, `zai`, `cerebras`, and `minimax`.
+- Provider aliases: `gemini`/`google_ai_studio` -> `google`, `moonshot`/`moonshotai` -> `kimi`, `z-ai`/`z.ai` -> `zai`, `cerebras-ai` -> `cerebras`, `minimax-ai` -> `minimax`.
 - CLI contracts are built-in for `openai`, `anthropic`, and `google`.
-- `kimi`, `zai`, and `cerebras` are API-only in this release.
+- `kimi`, `zai`, `cerebras`, and `minimax` are API-only in this release.
 - `profile_family` selects agent behavior/tooling profile only; API requests still route by `llm_provider` (native provider key).
 
 CLI backend command mappings:
@@ -275,6 +309,7 @@ API backend environment variables:
 - Kimi (Coding API key): `KIMI_API_KEY`
 - ZAI: `ZAI_API_KEY`
 - Cerebras: `CEREBRAS_API_KEY`
+- Minimax: `MINIMAX_API_KEY` (`MINIMAX_BASE_URL` optional)
 
 API prompt-probe tuning (preflight):
 
@@ -326,10 +361,11 @@ kilroy attractor status --logs-root <dir> [--json]
 kilroy attractor stop --logs-root <dir> [--grace-ms <ms>] [--force]
 kilroy attractor validate --graph <file.dot>
 kilroy attractor ingest [--output <file.dot>] [--model <model>] [--skill <skill.md>] <requirements>
+kilroy attractor serve [--addr <host:port>]
 ```
 
 `--force-model` can be passed multiple times (for example, `--force-model openai=gpt-5.2-codex --force-model google=gemini-3-pro-preview`) to override node model selection by provider.
-Supported providers are `openai`, `anthropic`, `google`, `kimi`, and `zai` (aliases accepted).
+Supported providers are `openai`, `anthropic`, `google`, `kimi`, `zai`, and `minimax` (aliases accepted).
 
 Additional ingest flags:
 
@@ -340,6 +376,32 @@ Exit codes:
 
 - `0`: run/resume finished with final status `success`, or validate succeeded
 - `1`: command failed, validation error, or final status was not `success`
+
+## HTTP Server Mode (Experimental)
+
+**This feature is experimental and subject to breaking changes.**
+
+`kilroy attractor serve` starts an HTTP server that exposes pipeline management via a REST API with Server-Sent Events (SSE) for real-time progress streaming. This enables remote pipeline submission, live observability dashboards, and web-based human-in-the-loop gates.
+
+```bash
+kilroy attractor serve                    # listens on 127.0.0.1:8080
+kilroy attractor serve --addr :9090       # custom address
+```
+
+Endpoints:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Server health and pipeline count |
+| `POST` | `/pipelines` | Submit a pipeline run |
+| `GET` | `/pipelines/{id}` | Pipeline status |
+| `GET` | `/pipelines/{id}/events` | SSE event stream |
+| `POST` | `/pipelines/{id}/cancel` | Cancel a running pipeline |
+| `GET` | `/pipelines/{id}/context` | Engine runtime context |
+| `GET` | `/pipelines/{id}/questions` | Pending human-gate questions |
+| `POST` | `/pipelines/{id}/questions/{qid}/answer` | Answer a question |
+
+The server defaults to localhost-only binding and includes CSRF protection. There is no authentication — do not expose to untrusted networks.
 
 ## Skills Included In This Repo
 

@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/strongdm/kilroy/internal/agent"
-	"github.com/strongdm/kilroy/internal/attractor/model"
-	"github.com/strongdm/kilroy/internal/attractor/modeldb"
-	"github.com/strongdm/kilroy/internal/llm"
-	"github.com/strongdm/kilroy/internal/providerspec"
+	"github.com/danshapiro/kilroy/internal/agent"
+	"github.com/danshapiro/kilroy/internal/attractor/model"
+	"github.com/danshapiro/kilroy/internal/attractor/modeldb"
+	"github.com/danshapiro/kilroy/internal/llm"
+	"github.com/danshapiro/kilroy/internal/providerspec"
 )
 
 type okAdapter struct{ name string }
@@ -35,17 +35,16 @@ func TestCodergenRouter_WithFailoverText_FailsOverToDifferentProvider(t *testing
 	cfg := &RunConfigFile{Version: 1}
 	cfg.LLM.Providers = map[string]ProviderConfig{
 		"openai":      {Backend: BackendAPI},
-		"anthropic":   {Backend: BackendAPI},
 		"google":      {Backend: BackendAPI},
 		"gemini":      {Backend: BackendAPI}, // alias should be normalized away
 		"unsupported": {Backend: BackendAPI},
 	}
-	// Only "openai|anthropic|google" are recognized by normalizeProviderKey; others are ignored by withFailoverText.
+	// Only builtin providers are recognized by normalizeProviderKey; others are ignored by withFailoverText.
 
 	catalog := &modeldb.Catalog{
 		Models: map[string]modeldb.ModelEntry{
-			// Include a region-prefixed model key to validate providerModelIDFromCatalogKey stripping.
-			"us/claude-opus-4-6-20260205": {Provider: "anthropic", Mode: "chat"},
+			// Include a provider-prefixed model key to validate providerModelIDFromCatalogKey stripping.
+			"gemini/gemini-2.5-pro": {Provider: "google", Mode: "chat"},
 		},
 	}
 
@@ -53,7 +52,7 @@ func TestCodergenRouter_WithFailoverText_FailsOverToDifferentProvider(t *testing
 
 	client := llm.NewClient()
 	client.Register(&okAdapter{name: "openai"})
-	client.Register(&okAdapter{name: "anthropic"})
+	client.Register(&okAdapter{name: "google"})
 
 	node := &model.Node{ID: "stage-a"}
 
@@ -70,11 +69,11 @@ func TestCodergenRouter_WithFailoverText_FailsOverToDifferentProvider(t *testing
 		if prov == "openai" {
 			return "", fmt.Errorf("synthetic openai failure")
 		}
-		if prov == "anthropic" {
-			if mid != "claude-opus-4-6-20260205" {
+		if prov == "google" {
+			if mid != "gemini-2.5-pro" {
 				return "", fmt.Errorf("unexpected fallback model: %q", mid)
 			}
-			return "ok-from-anthropic", nil
+			return "ok-from-google", nil
 		}
 		return "", fmt.Errorf("unexpected provider: %q", prov)
 	})
@@ -85,39 +84,39 @@ func TestCodergenRouter_WithFailoverText_FailsOverToDifferentProvider(t *testing
 	if err != nil {
 		t.Fatalf("withFailoverText error: %v", err)
 	}
-	if txt != "ok-from-anthropic" {
+	if txt != "ok-from-google" {
 		t.Fatalf("text: got %q", txt)
 	}
-	if used.Provider != "anthropic" {
-		t.Fatalf("used provider: got %q want %q", used.Provider, "anthropic")
+	if used.Provider != "google" {
+		t.Fatalf("used provider: got %q want %q", used.Provider, "google")
 	}
-	if used.Model != "claude-opus-4-6-20260205" {
-		t.Fatalf("used model: got %q want %q", used.Model, "claude-opus-4-6-20260205")
+	if used.Model != "gemini-2.5-pro" {
+		t.Fatalf("used model: got %q want %q", used.Model, "gemini-2.5-pro")
 	}
 }
 
 func TestCodergenRouter_WithFailoverText_AppliesForceModelToFailoverProvider(t *testing.T) {
 	cfg := &RunConfigFile{Version: 1}
 	cfg.LLM.Providers = map[string]ProviderConfig{
-		"openai":    {Backend: BackendAPI},
-		"anthropic": {Backend: BackendAPI},
+		"openai": {Backend: BackendAPI},
+		"google": {Backend: BackendAPI},
 	}
 	catalog := &modeldb.Catalog{
 		Models: map[string]modeldb.ModelEntry{
-			"us/claude-opus-4-6-20260205": {Provider: "anthropic", Mode: "chat"},
+			"gemini/gemini-2.5-pro": {Provider: "google", Mode: "chat"},
 		},
 	}
 
 	r := NewCodergenRouter(cfg, catalog)
 	client := llm.NewClient()
 	client.Register(&okAdapter{name: "openai"})
-	client.Register(&okAdapter{name: "anthropic"})
+	client.Register(&okAdapter{name: "google"})
 
 	node := &model.Node{ID: "stage-a"}
 	execCtx := &Execution{
 		Engine: &Engine{
 			Options: RunOptions{
-				ForceModels: map[string]string{"anthropic": "claude-force-override"},
+				ForceModels: map[string]string{"google": "gemini-force-override"},
 			},
 		},
 	}
@@ -129,25 +128,25 @@ func TestCodergenRouter_WithFailoverText_AppliesForceModelToFailoverProvider(t *
 		if prov == "openai" {
 			return "", fmt.Errorf("synthetic openai failure")
 		}
-		if prov == "anthropic" {
-			if mid != "claude-force-override" {
+		if prov == "google" {
+			if mid != "gemini-force-override" {
 				return "", fmt.Errorf("unexpected fallback model: %q", mid)
 			}
-			return "ok-from-anthropic-force", nil
+			return "ok-from-google-force", nil
 		}
 		return "", fmt.Errorf("unexpected provider: %q", prov)
 	})
 	if err != nil {
 		t.Fatalf("withFailoverText error: %v", err)
 	}
-	if txt != "ok-from-anthropic-force" {
+	if txt != "ok-from-google-force" {
 		t.Fatalf("text: got %q", txt)
 	}
-	if used.Provider != "anthropic" {
-		t.Fatalf("used provider: got %q want %q", used.Provider, "anthropic")
+	if used.Provider != "google" {
+		t.Fatalf("used provider: got %q want %q", used.Provider, "google")
 	}
-	if used.Model != "claude-force-override" {
-		t.Fatalf("used model: got %q want %q", used.Model, "claude-force-override")
+	if used.Model != "gemini-force-override" {
+		t.Fatalf("used model: got %q want %q", used.Model, "gemini-force-override")
 	}
 }
 
@@ -189,6 +188,26 @@ func TestFailoverOrder_ExplicitEmptyFailoverPreserved(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("expected empty failover order, got %v", got)
+	}
+}
+
+func TestFailoverOrder_DefaultsAreSingleHop(t *testing.T) {
+	cases := []struct {
+		provider string
+		want     string
+	}{
+		{provider: "openai", want: "google"},
+		{provider: "anthropic", want: "google"},
+		{provider: "google", want: "kimi"},
+		{provider: "kimi", want: "zai"},
+		{provider: "zai", want: "cerebras"},
+		{provider: "cerebras", want: "zai"},
+	}
+	for _, tc := range cases {
+		got := failoverOrder(tc.provider)
+		if len(got) != 1 || got[0] != tc.want {
+			t.Fatalf("%s failover=%v want [%s]", tc.provider, got, tc.want)
+		}
 	}
 }
 
@@ -266,6 +285,26 @@ func TestPickFailoverModelFromRuntime_ZAINormalizesProviderPrefixedFallback(t *t
 	}
 }
 
+func TestPickFailoverModelFromRuntime_KimiPinnedToK2_5(t *testing.T) {
+	rt := map[string]ProviderRuntime{
+		"kimi": {Key: "kimi"},
+	}
+	got := pickFailoverModelFromRuntime("kimi", rt, nil, "gpt-5.2-codex")
+	if got != "kimi-k2.5" {
+		t.Fatalf("expected stable kimi model kimi-k2.5, got %q", got)
+	}
+}
+
+func TestPickFailoverModelFromRuntime_CerebrasPinnedToZAIGLM47(t *testing.T) {
+	rt := map[string]ProviderRuntime{
+		"cerebras": {Key: "cerebras"},
+	}
+	got := pickFailoverModelFromRuntime("cerebras", rt, nil, "glm-4.7")
+	if got != "zai-glm-4.7" {
+		t.Fatalf("expected stable cerebras model zai-glm-4.7, got %q", got)
+	}
+}
+
 func TestEnsureAPIClient_UsesSyncOnce(t *testing.T) {
 	var calls atomic.Int32
 	r := NewCodergenRouterWithRuntimes(&RunConfigFile{}, nil, map[string]ProviderRuntime{
@@ -328,5 +367,12 @@ func TestShouldFailoverLLMError_TurnLimitDoesNotFailover(t *testing.T) {
 	}
 	if shouldFailoverLLMError(fmt.Errorf("turn limit reached")) {
 		t.Fatalf("legacy turn-limit string should not trigger failover")
+	}
+}
+
+func TestShouldFailoverLLMError_GetwdBootstrapErrorDoesNotFailover(t *testing.T) {
+	err := fmt.Errorf("tool read_file schema: getwd: no such file or directory")
+	if shouldFailoverLLMError(err) {
+		t.Fatalf("getwd bootstrap errors should not trigger failover")
 	}
 }

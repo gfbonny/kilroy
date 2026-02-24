@@ -21,11 +21,14 @@ func TestResolveProviderRuntimes_MergesBuiltinAndConfigOverrides(t *testing.T) {
 	if rt["kimi"].API.Protocol != "anthropic_messages" {
 		t.Fatalf("kimi protocol mismatch")
 	}
-	if _, ok := rt["openai"]; !ok {
-		t.Fatalf("expected failover target runtime for openai")
+	if _, ok := rt["zai"]; !ok {
+		t.Fatalf("expected failover target runtime for zai")
 	}
-	if rt["openai"].API.DefaultPath != "/v1/responses" {
-		t.Fatalf("expected synthesized openai default path")
+	if rt["zai"].API.DefaultPath != "/api/coding/paas/v4/chat/completions" {
+		t.Fatalf("expected synthesized zai default path")
+	}
+	if _, ok := rt["cerebras"]; !ok {
+		t.Fatalf("expected recursive failover target runtime for cerebras")
 	}
 	if got := rt["kimi"].APIHeaders(); got["X-Trace"] != "1" {
 		t.Fatalf("expected runtime headers copy, got %v", got)
@@ -73,8 +76,8 @@ func TestResolveProviderRuntimes_OmittedFailoverUsesBuiltinFallback(t *testing.T
 	if err != nil {
 		t.Fatalf("resolveProviderRuntimes: %v", err)
 	}
-	if got := rt["zai"].Failover; len(got) != 2 || got[0] != "openai" || got[1] != "kimi" {
-		t.Fatalf("zai failover=%v want [openai kimi]", got)
+	if got := rt["zai"].Failover; len(got) != 1 || got[0] != "cerebras" {
+		t.Fatalf("zai failover=%v want [cerebras]", got)
 	}
 	if rt["zai"].FailoverExplicit {
 		t.Fatalf("zai failover should not be marked explicit when omitted")

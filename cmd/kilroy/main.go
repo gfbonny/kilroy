@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -10,8 +13,13 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/strongdm/kilroy/internal/attractor/engine"
-	"github.com/strongdm/kilroy/internal/providerspec"
+	"github.com/danshapiro/kilroy/internal/attractor/engine"
+	"github.com/danshapiro/kilroy/internal/providerspec"
+	"github.com/danshapiro/kilroy/internal/version"
+)
+
+const (
+	skipCLIHeadlessWarningFlag = "--skip-cli-headless-warning"
 )
 
 func signalCancelContext() (context.Context, func()) {
@@ -44,6 +52,9 @@ func main() {
 	}
 
 	switch os.Args[1] {
+	case "--version", "-v", "version":
+		fmt.Printf("kilroy %s\n", version.Version)
+		os.Exit(0)
 	case "attractor":
 		attractor(os.Args[2:])
 	default:
@@ -54,14 +65,16 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
-	fmt.Fprintln(os.Stderr, "  kilroy attractor run [--detach] [--allow-test-shim] [--confirm-stale-build] [--force-model <provider=model>] --graph <file.dot> --config <run.yaml> [--run-id <id>] [--logs-root <dir>]")
+	fmt.Fprintln(os.Stderr, "  kilroy --version")
+	fmt.Fprintln(os.Stderr, "  kilroy attractor run [--detach] [--allow-test-shim] [--confirm-stale-build] [--no-cxdb] [--force-model <provider=model>] --graph <file.dot> --config <run.yaml> [--run-id <id>] [--logs-root <dir>]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor resume --logs-root <dir>")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor resume --cxdb <http_base_url> --context-id <id>")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor resume --run-branch <attractor/run/...> [--repo <path>]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor status [--logs-root <dir> | --latest] [--json] [--follow|-f] [--cxdb] [--raw] [--watch] [--interval <sec>]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor stop --logs-root <dir> [--grace-ms <ms>] [--force]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor validate --graph <file.dot>")
-	fmt.Fprintln(os.Stderr, "  kilroy attractor ingest [--output <file.dot>] [--model <model>] [--skill <skill.md>] <requirements>")
+	fmt.Fprintln(os.Stderr, "  kilroy attractor ingest [--output <file.dot>] [--model <model>] [--skill <skill.md>] [--repo <path>] [--max-turns <n>] <requirements>")
+	fmt.Fprintln(os.Stderr, "  kilroy attractor serve [--addr <host:port>]")
 }
 
 func attractor(args []string) {
@@ -82,6 +95,8 @@ func attractor(args []string) {
 		attractorValidate(args[1:])
 	case "ingest":
 		attractorIngest(args[1:])
+	case "serve":
+		attractorServe(args[1:])
 	default:
 		usage()
 		os.Exit(1)
@@ -96,6 +111,8 @@ func attractorRun(args []string) {
 	var detach bool
 	var allowTestShim bool
 	var confirmStaleBuild bool
+	var noCXDB bool
+	var skipCLIHeadlessWarning bool
 	var forceModelSpecs []string
 
 	for i := 0; i < len(args); i++ {
@@ -106,6 +123,10 @@ func attractorRun(args []string) {
 			allowTestShim = true
 		case "--confirm-stale-build":
 			confirmStaleBuild = true
+		case "--no-cxdb":
+			noCXDB = true
+		case skipCLIHeadlessWarningFlag:
+			skipCLIHeadlessWarning = true
 		case "--force-model":
 			i++
 			if i >= len(args) {
@@ -162,6 +183,18 @@ func attractorRun(args []string) {
 	}
 
 	if detach {
+		cfg, err := engine.LoadRunConfigFile(configPath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if !skipCLIHeadlessWarning && runConfigUsesCLIProviders(cfg) {
+			if !confirmCLIHeadlessWarning(os.Stdin, os.Stderr) {
+				fmt.Fprintln(os.Stderr, "preflight aborted: declined provider CLI headless-risk warning")
+				os.Exit(1)
+			}
+		}
+
 		if runID == "" {
 			id, err := engine.NewRunID()
 			if err != nil {
@@ -178,6 +211,14 @@ func attractorRun(args []string) {
 			}
 			logsRoot = root
 		}
+		absGraphPath, absConfigPath, absLogsRoot, err := resolveDetachedPaths(graphPath, configPath, logsRoot)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		graphPath = absGraphPath
+		configPath = absConfigPath
+		logsRoot = absLogsRoot
 
 		childArgs := []string{"attractor", "run", "--graph", graphPath, "--config", configPath}
 		if runID != "" {
@@ -192,6 +233,10 @@ func attractorRun(args []string) {
 		if confirmStaleBuild {
 			childArgs = append(childArgs, "--confirm-stale-build")
 		}
+		if noCXDB {
+			childArgs = append(childArgs, "--no-cxdb")
+		}
+		childArgs = append(childArgs, skipCLIHeadlessWarningFlag)
 		for _, spec := range canonicalForceSpecs {
 			childArgs = append(childArgs, "--force-model", spec)
 		}
@@ -214,6 +259,12 @@ func attractorRun(args []string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	if !skipCLIHeadlessWarning && runConfigUsesCLIProviders(cfg) {
+		if !confirmCLIHeadlessWarning(os.Stdin, os.Stderr) {
+			fmt.Fprintln(os.Stderr, "preflight aborted: declined provider CLI headless-risk warning")
+			os.Exit(1)
+		}
+	}
 
 	// Default: no deadline. CLI runs (especially with provider CLIs) can take hours.
 	ctx, cleanupSignalCtx := signalCancelContext()
@@ -222,6 +273,7 @@ func attractorRun(args []string) {
 		RunID:         runID,
 		LogsRoot:      logsRoot,
 		AllowTestShim: allowTestShim,
+		DisableCXDB:   noCXDB,
 		ForceModels:   forceModels,
 		OnCXDBStartup: func(info *engine.CXDBStartupInfo) {
 			if info == nil {
@@ -304,6 +356,38 @@ func normalizeRunProviderKey(provider string) string {
 func isSupportedForceModelProvider(provider string) bool {
 	_, ok := providerspec.Builtin(provider)
 	return ok
+}
+
+func runConfigUsesCLIProviders(cfg *engine.RunConfigFile) bool {
+	if cfg == nil {
+		return false
+	}
+	for _, providerCfg := range cfg.LLM.Providers {
+		if providerCfg.Backend == engine.BackendCLI {
+			return true
+		}
+	}
+	return false
+}
+
+func confirmCLIHeadlessWarning(in io.Reader, out io.Writer) bool {
+	if in == nil {
+		in = os.Stdin
+	}
+	if out == nil {
+		out = os.Stderr
+	}
+	_, _ = io.WriteString(out, cliHeadlessWarningPrompt)
+	s, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false
+	}
+	answer := strings.ToLower(strings.TrimSpace(s))
+	// Y/n defaults to yes.
+	if answer == "" {
+		return true
+	}
+	return answer == "y" || answer == "yes"
 }
 
 func supportedForceModelProvidersCSV() string {
