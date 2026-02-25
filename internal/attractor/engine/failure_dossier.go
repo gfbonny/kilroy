@@ -17,6 +17,9 @@ import (
 const (
 	failureDossierFileName             = "failure_dossier.json"
 	failureDossierWorktreeRelativePath = ".ai/failure_dossier.json"
+	toolInvocationFileName             = "tool_invocation.json"
+	toolTimingFileName                 = "tool_timing.json"
+	toolStderrFileName                 = "stderr.log"
 
 	failureDossierContextPathKey         = "context.failure_dossier.path"
 	failureDossierContextLogsPathKey     = "context.failure_dossier.logs_path"
@@ -77,6 +80,8 @@ func (e *Engine) updateFailureDossierContext(node *model.Node, out runtime.Outco
 	}
 
 	dossier := e.buildFailureDossier(node, out, failureClass, retries)
+	// Latest failure wins: this file is intentionally overwritten on each
+	// fail/retry outcome so the next codergen stage reads current evidence.
 	logsPath := filepath.Join(e.LogsRoot, failureDossierFileName)
 	if err := writeJSON(logsPath, dossier); err != nil {
 		e.Warn(fmt.Sprintf("failure dossier write (%s): %v", logsPath, err))
@@ -84,7 +89,7 @@ func (e *Engine) updateFailureDossierContext(node *model.Node, out runtime.Outco
 		return
 	}
 
-	worktreePath := logsPath
+	contextPath := logsPath
 	if strings.TrimSpace(e.WorktreeDir) != "" {
 		wtPath := filepath.Join(e.WorktreeDir, failureDossierWorktreeRelativePath)
 		if err := os.MkdirAll(filepath.Dir(wtPath), 0o755); err != nil {
@@ -92,11 +97,11 @@ func (e *Engine) updateFailureDossierContext(node *model.Node, out runtime.Outco
 		} else if err := writeJSON(wtPath, dossier); err != nil {
 			e.Warn(fmt.Sprintf("failure dossier write (%s): %v", wtPath, err))
 		} else {
-			worktreePath = failureDossierWorktreeRelativePath
+			contextPath = failureDossierWorktreeRelativePath
 		}
 	}
 
-	e.Context.Set(failureDossierContextPathKey, worktreePath)
+	e.Context.Set(failureDossierContextPathKey, contextPath)
 	e.Context.Set(failureDossierContextLogsPathKey, logsPath)
 	e.Context.Set(failureDossierContextFailedNodeKey, dossier.FailedNodeID)
 	e.Context.Set(failureDossierContextFailureClassKey, dossier.FailureClass)
@@ -105,7 +110,7 @@ func (e *Engine) updateFailureDossierContext(node *model.Node, out runtime.Outco
 		"event":          "failure_dossier_updated",
 		"failed_node_id": dossier.FailedNodeID,
 		"failure_class":  dossier.FailureClass,
-		"path":           worktreePath,
+		"path":           contextPath,
 	})
 }
 
@@ -188,9 +193,9 @@ func buildFailureDossierTool(stageDir string, out runtime.Outcome) *failureDossi
 	if strings.TrimSpace(stageDir) == "" {
 		return nil
 	}
-	ti := readToolInvocation(filepath.Join(stageDir, "tool_invocation.json"))
-	tt := readToolTiming(filepath.Join(stageDir, "tool_timing.json"))
-	stderr := readFileExcerpt(filepath.Join(stageDir, "stderr.log"), 4000)
+	ti := readToolInvocation(filepath.Join(stageDir, toolInvocationFileName))
+	tt := readToolTiming(filepath.Join(stageDir, toolTimingFileName))
+	stderr := readFileExcerpt(filepath.Join(stageDir, toolStderrFileName), 4000)
 
 	if strings.TrimSpace(ti.Command) == "" && strings.TrimSpace(stderr) == "" {
 		if v, ok := out.ContextUpdates["tool.output"]; ok {
