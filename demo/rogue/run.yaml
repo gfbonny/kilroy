@@ -66,7 +66,7 @@ runtime_policy:
 preflight:
   prompt_probes:
     enabled: true
-    transports: [complete, stream]
+    transports: [complete]
     timeout_ms: 15000
     retries: 1
     base_delay_ms: 500
