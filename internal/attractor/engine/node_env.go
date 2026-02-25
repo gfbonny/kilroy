@@ -7,11 +7,12 @@ import (
 )
 
 const (
-	runIDEnvKey        = "KILROY_RUN_ID"
-	nodeIDEnvKey       = "KILROY_NODE_ID"
-	logsRootEnvKey     = "KILROY_LOGS_ROOT"
-	stageLogsDirEnvKey = "KILROY_STAGE_LOGS_DIR"
-	worktreeDirEnvKey  = "KILROY_WORKTREE_DIR"
+	runIDEnvKey          = "KILROY_RUN_ID"
+	nodeIDEnvKey         = "KILROY_NODE_ID"
+	logsRootEnvKey       = "KILROY_LOGS_ROOT"
+	stageLogsDirEnvKey   = "KILROY_STAGE_LOGS_DIR"
+	worktreeDirEnvKey    = "KILROY_WORKTREE_DIR"
+	inputsManifestEnvKey = "KILROY_INPUTS_MANIFEST_PATH"
 )
 
 // buildBaseNodeEnv constructs the base environment for any node execution.
@@ -68,6 +69,17 @@ func buildStageRuntimeEnv(execCtx *Execution, nodeID string) map[string]string {
 	}
 	if worktree := strings.TrimSpace(execCtx.WorktreeDir); worktree != "" {
 		out[worktreeDirEnvKey] = worktree
+	}
+	if execCtx.Engine != nil && execCtx.Engine.inputMaterializationEnabled() {
+		manifestPath := strings.TrimSpace(execCtx.Engine.currentInputManifestPath)
+		if manifestPath == "" && strings.TrimSpace(execCtx.LogsRoot) != "" && strings.TrimSpace(nodeID) != "" {
+			manifestPath = inputStageManifestPath(execCtx.LogsRoot, nodeID)
+		}
+		if strings.TrimSpace(manifestPath) != "" {
+			if _, err := os.Stat(manifestPath); err == nil {
+				out[inputsManifestEnvKey] = manifestPath
+			}
+		}
 	}
 	return out
 }

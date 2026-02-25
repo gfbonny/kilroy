@@ -304,6 +304,18 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 			promptText = preamble + "\n\n" + strings.TrimSpace(promptText)
 		}
 	}
+	if env := buildStageRuntimeEnv(exec, node.ID); len(env) > 0 {
+		if manifestPath := strings.TrimSpace(env[inputsManifestEnvKey]); manifestPath != "" {
+			preamble := strings.TrimSpace(mustRenderInputMaterializationPromptPreamble(manifestPath))
+			if preamble != "" {
+				if strings.TrimSpace(promptText) == "" {
+					promptText = preamble
+				} else {
+					promptText = preamble + "\n\n" + strings.TrimSpace(promptText)
+				}
+			}
+		}
+	}
 	if exec != nil && exec.Engine != nil && strings.TrimSpace(contract.PrimaryPath) != "" {
 		exec.Engine.appendProgress(map[string]any{
 			"event":                "status_contract",

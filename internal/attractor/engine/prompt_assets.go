@@ -17,6 +17,8 @@ var (
 	preflightPromptProbeAgentLoopSystemRaw string
 	//go:embed prompts/stage_status_contract_preamble.tmpl
 	stageStatusContractPromptPreambleTemplateRaw string
+	//go:embed prompts/input_materialization_preamble.tmpl
+	inputMaterializationPromptPreambleTemplateRaw string
 )
 
 var (
@@ -25,6 +27,9 @@ var (
 	preflightPromptProbeAgentLoopSystem   = mustEmbeddedPromptText("preflight_probe_agent_loop_system", preflightPromptProbeAgentLoopSystemRaw)
 	stageStatusContractPromptPreambleTmpl = template.Must(
 		template.New("stage_status_contract_preamble").Parse(stageStatusContractPromptPreambleTemplateRaw),
+	)
+	inputMaterializationPromptPreambleTmpl = template.Must(
+		template.New("input_materialization_preamble").Parse(inputMaterializationPromptPreambleTemplateRaw),
 	)
 )
 
@@ -52,4 +57,20 @@ func mustEmbeddedPromptText(name, raw string) string {
 		panic(fmt.Sprintf("embedded prompt %q is empty", name))
 	}
 	return text
+}
+
+func mustRenderInputMaterializationPromptPreamble(manifestPath string) string {
+	var buf bytes.Buffer
+	err := inputMaterializationPromptPreambleTmpl.Execute(&buf, map[string]string{
+		"InputsManifestPathEnvKey": inputsManifestEnvKey,
+		"ManifestPath":             strings.TrimSpace(manifestPath),
+	})
+	if err != nil {
+		panic(fmt.Sprintf("render input materialization prompt preamble: %v", err))
+	}
+	text := strings.TrimRight(buf.String(), "\r\n")
+	if strings.TrimSpace(text) == "" {
+		panic("render input materialization prompt preamble: empty output")
+	}
+	return text + "\n"
 }
