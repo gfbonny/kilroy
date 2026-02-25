@@ -254,6 +254,7 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	eng.InputMaterializationPolicy = inputMaterializationPolicyFromConfig(cfg)
 	eng.InputReferenceInferer = inputInferer
 	eng.InputInferenceCache = map[string][]InferredReference{}
+	eng.InputSourceTargetMap = map[string]string{}
 	if strings.TrimSpace(resolved.Warning) != "" {
 		eng.Warn(resolved.Warning)
 		eng.Context.AppendLog(resolved.Warning)

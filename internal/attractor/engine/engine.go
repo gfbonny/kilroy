@@ -169,6 +169,7 @@ type Engine struct {
 	InputReferenceInferer      InputReferenceInferer
 	InputInferenceCache        map[string][]InferredReference
 	InputSourceTargetMap       map[string]string
+	currentInputManifestPath   string
 
 	warningsMu sync.Mutex
 	Warnings   []string
@@ -386,6 +387,9 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 	// If worktree exists (e.g., re-run), remove and recreate.
 	_ = gitutil.RemoveWorktree(e.Options.RepoPath, e.WorktreeDir)
 	if err := gitutil.AddWorktree(e.Options.RepoPath, e.WorktreeDir, e.RunBranch); err != nil {
+		return nil, err
+	}
+	if err := e.materializeRunStartupInputs(ctx); err != nil {
 		return nil, err
 	}
 
@@ -960,6 +964,11 @@ func (e *Engine) executeNode(ctx context.Context, node *model.Node) (runtime.Out
 	// attempt left a status.json behind and the handler doesn't write a new one, we'd incorrectly
 	// treat the stale file as authoritative. Clear it before each attempt.
 	_ = os.Remove(filepath.Join(stageDir, "status.json"))
+	if err := e.materializeStageInputs(ctx, node.ID); err != nil {
+		out := inputFailureOutcomeFromMaterializationError(err)
+		_ = writeJSON(filepath.Join(stageDir, "status.json"), out)
+		return out, nil
+	}
 	var (
 		out runtime.Outcome
 		err error

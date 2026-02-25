@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
+	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
 
 type InputSourceTargetMapEntry struct {
@@ -55,6 +57,13 @@ type InputMaterializationPolicy struct {
 	InferProvider    string
 	InferModel       string
 }
+
+const (
+	inputManifestFileName       = "inputs_manifest.json"
+	inputSnapshotDirName        = "input_snapshot"
+	inputSnapshotFilesSubdir    = "files"
+	inputInferenceCacheFileName = "inference_cache.json"
+)
 
 func inputMaterializationPolicyFromConfig(cfg *RunConfigFile) InputMaterializationPolicy {
 	if cfg == nil {
@@ -624,4 +633,324 @@ func isAbsolutePathLike(path string) bool {
 		return true
 	}
 	return windowsAbsPathRE.MatchString(path)
+}
+
+func inputRunManifestPath(logsRoot string) string {
+	return filepath.Join(strings.TrimSpace(logsRoot), inputManifestFileName)
+}
+
+func inputStageManifestPath(logsRoot string, nodeID string) string {
+	return filepath.Join(strings.TrimSpace(logsRoot), strings.TrimSpace(nodeID), inputManifestFileName)
+}
+
+func inputSnapshotFilesRoot(logsRoot string) string {
+	return filepath.Join(strings.TrimSpace(logsRoot), inputSnapshotDirName, inputSnapshotFilesSubdir)
+}
+
+func inputInferenceCachePath(logsRoot string) string {
+	return filepath.Join(strings.TrimSpace(logsRoot), inputSnapshotDirName, inputInferenceCacheFileName)
+}
+
+func (e *Engine) inputMaterializationEnabled() bool {
+	if e == nil {
+		return false
+	}
+	return e.InputMaterializationPolicy.Enabled
+}
+
+func (e *Engine) materializeRunStartupInputs(ctx context.Context) error {
+	if !e.inputMaterializationEnabled() {
+		return nil
+	}
+	_, err := e.materializeInputsWithPolicy(ctx, inputMaterializationRunScope, "", []string{
+		e.Options.RepoPath,
+	}, e.WorktreeDir, inputSnapshotFilesRoot(e.LogsRoot), inputRunManifestPath(e.LogsRoot), false)
+	return err
+}
+
+func (e *Engine) materializeStageInputs(ctx context.Context, nodeID string) error {
+	e.currentInputManifestPath = ""
+	if !e.inputMaterializationEnabled() {
+		return nil
+	}
+	roots := []string{e.WorktreeDir}
+	snapshot := inputSnapshotFilesRoot(e.LogsRoot)
+	if strings.TrimSpace(snapshot) != "" {
+		roots = append(roots, snapshot)
+	}
+	manifestPath := inputStageManifestPath(e.LogsRoot, nodeID)
+	manifest, err := e.materializeInputsWithPolicy(ctx, inputMaterializationStageScope, nodeID, roots, e.WorktreeDir, "", manifestPath, true)
+	if err != nil {
+		return err
+	}
+	if manifest != nil {
+		// Keep the run-level manifest in sync with the latest closure expansion.
+		_ = writeJSON(inputRunManifestPath(e.LogsRoot), manifest)
+		e.currentInputManifestPath = manifestPath
+	}
+	return nil
+}
+
+func (e *Engine) materializeBranchStartupInputs(ctx context.Context, parentWorktree string, parentLogsRoot string) error {
+	if !e.inputMaterializationEnabled() {
+		return nil
+	}
+	roots := []string{parentWorktree}
+	if snapshot := strings.TrimSpace(inputSnapshotFilesRoot(parentLogsRoot)); snapshot != "" {
+		roots = append(roots, snapshot)
+	}
+	_, err := e.materializeInputsWithPolicy(ctx, inputMaterializationBranchScope, "", roots, e.WorktreeDir, "", inputRunManifestPath(e.LogsRoot), true)
+	return err
+}
+
+func (e *Engine) materializeResumeStartupInputs(ctx context.Context) error {
+	if !e.inputMaterializationEnabled() {
+		return nil
+	}
+	roots := []string{e.WorktreeDir}
+	if snapshot := strings.TrimSpace(inputSnapshotFilesRoot(e.LogsRoot)); snapshot != "" {
+		roots = append(roots, snapshot)
+	}
+	_, err := e.materializeInputsWithPolicy(ctx, inputMaterializationResumeScope, "", roots, e.WorktreeDir, "", inputRunManifestPath(e.LogsRoot), true)
+	return err
+}
+
+func (e *Engine) ensureInputMaterializationStateLoaded() {
+	if e == nil {
+		return
+	}
+	if e.InputInferenceCache == nil {
+		e.InputInferenceCache = loadInputInferenceCache(inputInferenceCachePath(e.LogsRoot))
+	}
+	if e.InputSourceTargetMap == nil {
+		e.InputSourceTargetMap = map[string]string{}
+		if m, err := loadInputManifest(inputRunManifestPath(e.LogsRoot)); err == nil && m != nil {
+			e.InputSourceTargetMap = sourceTargetMapFromManifest(m)
+		}
+	}
+}
+
+func (e *Engine) persistInputInferenceCache() {
+	if e == nil || e.InputInferenceCache == nil {
+		return
+	}
+	cachePath := inputInferenceCachePath(e.LogsRoot)
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		return
+	}
+	_ = writeJSON(cachePath, e.InputInferenceCache)
+}
+
+func (e *Engine) materializeInputsWithPolicy(
+	ctx context.Context,
+	scope inputMaterializationScope,
+	nodeID string,
+	sourceRoots []string,
+	targetRoot string,
+	snapshotRoot string,
+	manifestPath string,
+	failOnIncludeMissing bool,
+) (*InputManifest, error) {
+	if !e.inputMaterializationEnabled() {
+		return nil, nil
+	}
+	e.ensureInputMaterializationStateLoaded()
+
+	e.emitInputMaterializationStarted(scope, nodeID, sourceRoots, targetRoot)
+	manifest, err := materializeInputClosure(ctx, InputMaterializationOptions{
+		SourceRoots:             sourceRoots,
+		Include:                 append([]string{}, e.InputMaterializationPolicy.Include...),
+		DefaultInclude:          append([]string{}, e.InputMaterializationPolicy.DefaultInclude...),
+		FollowReferences:        e.InputMaterializationPolicy.FollowReferences,
+		TargetRoot:              targetRoot,
+		SnapshotRoot:            snapshotRoot,
+		ExistingSourceTargetMap: copyStringStringMap(e.InputSourceTargetMap),
+		Scanner:                 deterministicInputReferenceScanner{},
+		InferWithLLM:            e.InputMaterializationPolicy.InferWithLLM,
+		Inferer:                 e.InputReferenceInferer,
+		InferProvider:           e.InputMaterializationPolicy.InferProvider,
+		InferModel:              e.InputMaterializationPolicy.InferModel,
+		InferenceCache:          e.InputInferenceCache,
+	})
+	if err != nil {
+		if includeErr, ok := err.(*inputIncludeMissingError); ok {
+			e.emitInputMaterializationError(scope, nodeID, "input_include_missing", includeErr.Patterns, includeErr.Error())
+			if failOnIncludeMissing {
+				return nil, includeErr
+			}
+			e.emitInputMaterializationWarning(scope, nodeID, includeErr.Error())
+			return nil, nil
+		}
+		e.emitInputMaterializationError(scope, nodeID, "input_materialization_error", nil, err.Error())
+		return nil, err
+	}
+
+	if manifest == nil {
+		e.emitInputMaterializationCompleted(scope, nodeID, 0, 0)
+		return nil, nil
+	}
+	if strings.TrimSpace(manifestPath) != "" {
+		if err := os.MkdirAll(filepath.Dir(manifestPath), 0o755); err != nil {
+			e.emitInputMaterializationError(scope, nodeID, "input_materialization_error", nil, err.Error())
+			return nil, err
+		}
+		if err := writeJSON(manifestPath, manifest); err != nil {
+			e.emitInputMaterializationError(scope, nodeID, "input_materialization_error", nil, err.Error())
+			return nil, err
+		}
+	}
+
+	e.InputSourceTargetMap = sourceTargetMapFromManifest(manifest)
+	e.persistInputInferenceCache()
+	for _, warning := range manifest.Warnings {
+		e.emitInputMaterializationWarning(scope, nodeID, warning)
+	}
+	e.emitInputMaterializationProgress(scope, nodeID, len(manifest.ResolvedFiles), len(manifest.DiscoveredReferences))
+	e.emitInputMaterializationCompleted(scope, nodeID, len(manifest.ResolvedFiles), len(manifest.UnresolvedInferredReferences))
+	return manifest, nil
+}
+
+type inputMaterializationScope string
+
+const (
+	inputMaterializationRunScope    inputMaterializationScope = "run_startup"
+	inputMaterializationStageScope  inputMaterializationScope = "stage"
+	inputMaterializationBranchScope inputMaterializationScope = "branch"
+	inputMaterializationResumeScope inputMaterializationScope = "resume"
+)
+
+func (e *Engine) emitInputMaterializationStarted(scope inputMaterializationScope, nodeID string, sourceRoots []string, targetRoot string) {
+	if e == nil {
+		return
+	}
+	event := map[string]any{
+		"event":        "input_materialization_started",
+		"scope":        string(scope),
+		"source_roots": append([]string{}, sourceRoots...),
+		"target_root":  strings.TrimSpace(targetRoot),
+	}
+	if strings.TrimSpace(nodeID) != "" {
+		event["node_id"] = strings.TrimSpace(nodeID)
+	}
+	e.appendProgress(event)
+}
+
+func (e *Engine) emitInputMaterializationProgress(scope inputMaterializationScope, nodeID string, resolved int, discovered int) {
+	if e == nil {
+		return
+	}
+	event := map[string]any{
+		"event":               "input_materialization_progress",
+		"scope":               string(scope),
+		"resolved_file_count": resolved,
+		"discovered_refs":     discovered,
+	}
+	if strings.TrimSpace(nodeID) != "" {
+		event["node_id"] = strings.TrimSpace(nodeID)
+	}
+	e.appendProgress(event)
+}
+
+func (e *Engine) emitInputMaterializationCompleted(scope inputMaterializationScope, nodeID string, resolved int, unresolvedInferred int) {
+	if e == nil {
+		return
+	}
+	event := map[string]any{
+		"event":                   "input_materialization_completed",
+		"scope":                   string(scope),
+		"resolved_file_count":     resolved,
+		"unresolved_inferred_ref": unresolvedInferred,
+	}
+	if strings.TrimSpace(nodeID) != "" {
+		event["node_id"] = strings.TrimSpace(nodeID)
+	}
+	e.appendProgress(event)
+}
+
+func (e *Engine) emitInputMaterializationWarning(scope inputMaterializationScope, nodeID string, warning string) {
+	if e == nil || strings.TrimSpace(warning) == "" {
+		return
+	}
+	event := map[string]any{
+		"event":   "input_materialization_warning",
+		"scope":   string(scope),
+		"warning": strings.TrimSpace(warning),
+	}
+	if strings.TrimSpace(nodeID) != "" {
+		event["node_id"] = strings.TrimSpace(nodeID)
+	}
+	e.appendProgress(event)
+}
+
+func (e *Engine) emitInputMaterializationError(scope inputMaterializationScope, nodeID string, reason string, unmatched []string, message string) {
+	if e == nil {
+		return
+	}
+	event := map[string]any{
+		"event":          "input_materialization_error",
+		"scope":          string(scope),
+		"failure_reason": strings.TrimSpace(reason),
+		"message":        strings.TrimSpace(message),
+	}
+	if len(unmatched) > 0 {
+		event["unmatched_include_patterns"] = append([]string{}, unmatched...)
+	}
+	if strings.TrimSpace(nodeID) != "" {
+		event["node_id"] = strings.TrimSpace(nodeID)
+	}
+	e.appendProgress(event)
+}
+
+func sourceTargetMapFromManifest(manifest *InputManifest) map[string]string {
+	out := map[string]string{}
+	if manifest == nil {
+		return out
+	}
+	for _, entry := range manifest.SourceTargetMap {
+		source := strings.TrimSpace(entry.Source)
+		target := strings.TrimSpace(entry.Target)
+		if source == "" || target == "" {
+			continue
+		}
+		out[source] = target
+	}
+	return out
+}
+
+func loadInputManifest(path string) (*InputManifest, error) {
+	b, err := os.ReadFile(strings.TrimSpace(path))
+	if err != nil {
+		return nil, err
+	}
+	var manifest InputManifest
+	if err := json.Unmarshal(b, &manifest); err != nil {
+		return nil, err
+	}
+	return &manifest, nil
+}
+
+func loadInputInferenceCache(path string) map[string][]InferredReference {
+	cache := map[string][]InferredReference{}
+	b, err := os.ReadFile(strings.TrimSpace(path))
+	if err != nil {
+		return cache
+	}
+	if err := json.Unmarshal(b, &cache); err != nil {
+		return map[string][]InferredReference{}
+	}
+	return cache
+}
+
+func inputFailureOutcomeFromMaterializationError(err error) runtime.Outcome {
+	if includeErr, ok := err.(*inputIncludeMissingError); ok {
+		return runtime.Outcome{
+			Status:        runtime.StatusFail,
+			FailureReason: "input_include_missing",
+			Notes:         strings.Join(includeErr.Patterns, ", "),
+		}
+	}
+	return runtime.Outcome{
+		Status:        runtime.StatusFail,
+		FailureReason: strings.TrimSpace(err.Error()),
+	}
 }
