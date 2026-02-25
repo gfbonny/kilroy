@@ -164,6 +164,12 @@ type Engine struct {
 	ModelCatalogSource string
 	ModelCatalogPath   string
 
+	// Input materialization policy + inference runtime.
+	InputMaterializationPolicy InputMaterializationPolicy
+	InputReferenceInferer      InputReferenceInferer
+	InputInferenceCache        map[string][]InferredReference
+	InputSourceTargetMap       map[string]string
+
 	warningsMu sync.Mutex
 	Warnings   []string
 

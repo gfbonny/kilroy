@@ -25,7 +25,7 @@ type InputManifest struct {
 	ResolvedFiles                []string                    `json:"resolved_files"`
 	SourceTargetMap              []InputSourceTargetMapEntry `json:"source_target_map"`
 	DiscoveredReferences         []DiscoveredInputReference  `json:"discovered_references"`
-	UnresolvedInferredReferences []string                    `json:"unresolved_inferred_references,omitempty"`
+	UnresolvedInferredReferences []InferredReference         `json:"unresolved_inferred_references,omitempty"`
 	Warnings                     []string                    `json:"warnings,omitempty"`
 	GeneratedAt                  string                      `json:"generated_at"`
 }
@@ -39,6 +39,44 @@ type InputMaterializationOptions struct {
 	SnapshotRoot            string
 	ExistingSourceTargetMap map[string]string
 	Scanner                 InputReferenceScanner
+	InferWithLLM            bool
+	Inferer                 InputReferenceInferer
+	InferProvider           string
+	InferModel              string
+	InferenceCache          map[string][]InferredReference
+}
+
+type InputMaterializationPolicy struct {
+	Enabled          bool
+	Include          []string
+	DefaultInclude   []string
+	FollowReferences bool
+	InferWithLLM     bool
+	InferProvider    string
+	InferModel       string
+}
+
+func inputMaterializationPolicyFromConfig(cfg *RunConfigFile) InputMaterializationPolicy {
+	if cfg == nil {
+		return InputMaterializationPolicy{}
+	}
+	m := cfg.Inputs.Materialize
+	policy := InputMaterializationPolicy{
+		Include:        append([]string{}, m.Include...),
+		DefaultInclude: append([]string{}, m.DefaultInclude...),
+		InferProvider:  strings.TrimSpace(m.LLMProvider),
+		InferModel:     strings.TrimSpace(m.LLMModel),
+	}
+	if m.Enabled != nil {
+		policy.Enabled = *m.Enabled
+	}
+	if m.FollowReferences != nil {
+		policy.FollowReferences = *m.FollowReferences
+	}
+	if m.InferWithLLM != nil {
+		policy.InferWithLLM = *m.InferWithLLM
+	}
+	return policy
 }
 
 type inputIncludeMissingError struct {
@@ -97,6 +135,7 @@ func materializeInputClosure(ctx context.Context, opts InputMaterializationOptio
 
 	discovered := make([]DiscoveredInputReference, 0, 16)
 	warnings := make([]string, 0, 4)
+	unresolvedInferred := make([]InferredReference, 0, 4)
 
 	for len(queue) > 0 {
 		if err := ctx.Err(); err != nil {
@@ -121,12 +160,34 @@ func materializeInputClosure(ctx context.Context, opts InputMaterializationOptio
 			continue
 		}
 		refs := opts.Scanner.Scan(current, content)
-		discovered = append(discovered, refs...)
-		for _, ref := range refs {
+		candidates := append([]DiscoveredInputReference{}, refs...)
+		inferred, inferWarnings := inferReferencesForDocument(ctx, opts, current, content)
+		if len(inferWarnings) > 0 {
+			warnings = append(warnings, inferWarnings...)
+		}
+		for _, inferredRef := range inferred {
+			candidates = append(candidates, DiscoveredInputReference{
+				SourceFile: current,
+				Matched:    inferredRef.Pattern,
+				Pattern:    inferredRef.Pattern,
+				Kind:       classifyReferenceKind(inferredRef.Pattern),
+				Confidence: "inferred",
+			})
+		}
+		candidates = dedupeDiscoveredReferences(candidates)
+		discovered = append(discovered, candidates...)
+		for _, ref := range candidates {
 			matches, matchErr := resolveInputReferenceCandidate(ref, current, roots, opts.ExistingSourceTargetMap)
 			if matchErr != nil {
 				warnings = append(warnings, matchErr.Error())
 				continue
+			}
+			if len(matches) == 0 && ref.Confidence == "inferred" {
+				unresolvedInferred = append(unresolvedInferred, InferredReference{
+					Pattern:    ref.Pattern,
+					Rationale:  "",
+					Confidence: "inferred",
+				})
 			}
 			push(matches...)
 		}
@@ -159,7 +220,7 @@ func materializeInputClosure(ctx context.Context, opts InputMaterializationOptio
 		ResolvedFiles:                sortedStringSet(resolvedTargets),
 		SourceTargetMap:              sortedSourceTargetMap(sourceToTarget),
 		DiscoveredReferences:         sortDiscoveredReferences(discovered),
-		UnresolvedInferredReferences: nil,
+		UnresolvedInferredReferences: normalizeInferredReferences(unresolvedInferred),
 		Warnings:                     dedupeAndSortStrings(warnings),
 		GeneratedAt:                  time.Now().UTC().Format(time.RFC3339Nano),
 	}
@@ -366,6 +427,63 @@ func copyInputFile(source string, target string) error {
 		return err
 	}
 	return nil
+}
+
+func inferReferencesForDocument(ctx context.Context, opts InputMaterializationOptions, sourceFile string, content []byte) ([]InferredReference, []string) {
+	if !opts.InferWithLLM || opts.Inferer == nil {
+		return nil, nil
+	}
+	if strings.TrimSpace(opts.InferProvider) == "" || strings.TrimSpace(opts.InferModel) == "" {
+		return nil, []string{"input inference skipped: missing provider/model override"}
+	}
+	if len(content) == 0 {
+		return nil, nil
+	}
+
+	hash := sha256.Sum256(content)
+	cacheKey := hex.EncodeToString(hash[:])
+	if opts.InferenceCache != nil {
+		if cached, ok := opts.InferenceCache[cacheKey]; ok {
+			return normalizeInferredReferences(cached), nil
+		}
+	}
+
+	refs, err := opts.Inferer.Infer(ctx, []InputDocForInference{{
+		Path:    sourceFile,
+		Content: string(content),
+	}}, InputInferenceOptions{
+		Provider: strings.TrimSpace(opts.InferProvider),
+		Model:    strings.TrimSpace(opts.InferModel),
+	})
+	if err != nil {
+		return nil, []string{fmt.Sprintf("input inference failed for %s: %v", sourceFile, err)}
+	}
+	refs = normalizeInferredReferences(refs)
+	if opts.InferenceCache != nil {
+		opts.InferenceCache[cacheKey] = refs
+	}
+	return refs, nil
+}
+
+func dedupeDiscoveredReferences(in []DiscoveredInputReference) []DiscoveredInputReference {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]DiscoveredInputReference, 0, len(in))
+	seen := map[string]bool{}
+	for _, ref := range in {
+		pattern := strings.TrimSpace(ref.Pattern)
+		if pattern == "" {
+			continue
+		}
+		key := strings.ToLower(pattern) + "|" + ref.SourceFile + "|" + string(ref.Kind) + "|" + strings.TrimSpace(ref.Confidence)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, ref)
+	}
+	return sortDiscoveredReferences(out)
 }
 
 func normalizeInputRoots(roots []string) ([]string, error) {

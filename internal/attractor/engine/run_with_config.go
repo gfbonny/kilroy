@@ -55,6 +55,18 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	if err != nil {
 		return nil, err
 	}
+	var (
+		inputInferer            InputReferenceInferer
+		inputInfererInitWarning string
+	)
+	if cfg.Inputs.Materialize.InferWithLLM != nil && *cfg.Inputs.Materialize.InferWithLLM {
+		inferer, infererErr := newInputReferenceInfererFromRuntimes(runtimes)
+		if infererErr != nil {
+			inputInfererInitWarning = fmt.Sprintf("input reference inferer init failed (scanner-only fallback): %v", infererErr)
+		} else {
+			inputInferer = inferer
+		}
+	}
 	for p := range usedProviders {
 		rt, ok := runtimes[p]
 		if !ok || (rt.Backend != BackendAPI && rt.Backend != BackendCLI) {
@@ -239,9 +251,16 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	eng.ModelCatalogSHA = catalog.SHA256
 	eng.ModelCatalogSource = resolved.Source
 	eng.ModelCatalogPath = resolved.SnapshotPath
+	eng.InputMaterializationPolicy = inputMaterializationPolicyFromConfig(cfg)
+	eng.InputReferenceInferer = inputInferer
+	eng.InputInferenceCache = map[string][]InferredReference{}
 	if strings.TrimSpace(resolved.Warning) != "" {
 		eng.Warn(resolved.Warning)
 		eng.Context.AppendLog(resolved.Warning)
+	}
+	if strings.TrimSpace(inputInfererInitWarning) != "" {
+		eng.Warn(inputInfererInitWarning)
+		eng.Context.AppendLog(inputInfererInitWarning)
 	}
 	if startup != nil {
 		for _, w := range startup.Warnings {
