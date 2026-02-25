@@ -119,7 +119,7 @@ func (e *Engine) cxdbStageFinished(ctx context.Context, node *model.Node, out ru
 		"events.ndjson",
 		"events.json",
 		"stdout.log",
-		"stderr.log",
+		toolStderrFileName,
 		"panic.txt",
 		"output.json",
 		"output_schema.json",
@@ -128,8 +128,8 @@ func (e *Engine) cxdbStageFinished(ctx context.Context, node *model.Node, out ru
 		"api_response.json",
 		"cli_invocation.json",
 		"cli_timing.json",
-		"tool_invocation.json",
-		"tool_timing.json",
+		toolInvocationFileName,
+		toolTimingFileName,
 	} {
 		if _, err := os.Stat(filepath.Join(stageDir, name)); err == nil {
 			_, _ = e.CXDB.PutArtifactFile(ctx, node.ID, name, filepath.Join(stageDir, name))

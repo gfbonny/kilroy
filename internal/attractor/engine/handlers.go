@@ -572,7 +572,7 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 		}
 	}
 
-	if err := writeJSON(filepath.Join(stageDir, "tool_invocation.json"), map[string]any{
+	if err := writeJSON(filepath.Join(stageDir, toolInvocationFileName), map[string]any{
 		"tool": "bash",
 		// Use a non-login, non-interactive shell to avoid sourcing user dotfiles.
 		"argv":        []string{"bash", "-c", cmdStr},
@@ -592,7 +592,7 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 	// Avoid hanging on interactive reads; tool_command doesn't provide a way to supply stdin.
 	cmd.Stdin = strings.NewReader("")
 	stdoutPath := filepath.Join(stageDir, "stdout.log")
-	stderrPath := filepath.Join(stageDir, "stderr.log")
+	stderrPath := filepath.Join(stageDir, toolStderrFileName)
 	stdoutFile, err := os.Create(stdoutPath)
 	if err != nil {
 		return runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()}, nil
@@ -614,7 +614,7 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 		exitCode = cmd.ProcessState.ExitCode()
 	}
 	if cctx.Err() == context.DeadlineExceeded {
-		if err := writeJSON(filepath.Join(stageDir, "tool_timing.json"), map[string]any{
+		if err := writeJSON(filepath.Join(stageDir, toolTimingFileName), map[string]any{
 			"duration_ms": dur.Milliseconds(),
 			"exit_code":   exitCode,
 			"timed_out":   true,
@@ -628,7 +628,7 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 		}, nil
 	}
 
-	if err := writeJSON(filepath.Join(stageDir, "tool_timing.json"), map[string]any{
+	if err := writeJSON(filepath.Join(stageDir, toolTimingFileName), map[string]any{
 		"duration_ms": dur.Milliseconds(),
 		"exit_code":   exitCode,
 		"timed_out":   false,
