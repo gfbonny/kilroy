@@ -103,8 +103,8 @@ func (i *llmInputReferenceInferer) Infer(ctx context.Context, docs []InputDocFor
 
 func buildInputInferencePrompt(docs []InputDocForInference) string {
 	var b strings.Builder
-	b.WriteString("Given these documents, infer additional file path or glob references needed to satisfy requirements.\\n")
-	b.WriteString("Return conservative over-inclusive patterns when uncertain.\\n\\n")
+	b.WriteString("Given these documents, infer additional file path or glob references needed to satisfy requirements.\n")
+	b.WriteString("Return conservative over-inclusive patterns when uncertain.\n\n")
 	for idx, doc := range docs {
 		path := strings.TrimSpace(doc.Path)
 		if path == "" {
@@ -112,9 +112,9 @@ func buildInputInferencePrompt(docs []InputDocForInference) string {
 		}
 		b.WriteString("### Document: ")
 		b.WriteString(path)
-		b.WriteString("\\n")
+		b.WriteString("\n")
 		b.WriteString(doc.Content)
-		b.WriteString("\\n\\n")
+		b.WriteString("\n\n")
 	}
 	return b.String()
 }

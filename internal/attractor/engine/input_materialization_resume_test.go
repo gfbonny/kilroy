@@ -57,3 +57,31 @@ func TestInputMaterializationResume_RestoresInputsFromSnapshotWithoutSourceWorks
 	assertExists(t, filepath.Join(worktree, ".ai", "definition_of_done.md"))
 	assertExists(t, filepath.Join(worktree, "tests.md"))
 }
+
+func TestInputMaterializationRunStartup_IncludeMissingFailsFast(t *testing.T) {
+	sourceRepo := t.TempDir()
+	worktree := t.TempDir()
+	logsRoot := t.TempDir()
+
+	eng := &Engine{
+		Options:     RunOptions{RepoPath: sourceRepo, RunID: "startup-include-missing"},
+		WorktreeDir: worktree,
+		LogsRoot:    logsRoot,
+		InputMaterializationPolicy: InputMaterializationPolicy{
+			Enabled:          true,
+			Include:          []string{"missing/**/*.md"},
+			DefaultInclude:   nil,
+			FollowReferences: true,
+		},
+		InputInferenceCache:  map[string][]InferredReference{},
+		InputSourceTargetMap: map[string]string{},
+	}
+
+	err := eng.materializeRunStartupInputs(context.Background())
+	if err == nil {
+		t.Fatal("expected include-missing error")
+	}
+	if _, ok := err.(*inputIncludeMissingError); !ok {
+		t.Fatalf("expected *inputIncludeMissingError, got %T (%v)", err, err)
+	}
+}

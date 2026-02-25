@@ -664,7 +664,7 @@ func (e *Engine) materializeRunStartupInputs(ctx context.Context) error {
 	}
 	_, err := e.materializeInputsWithPolicy(ctx, inputMaterializationRunScope, "", []string{
 		e.Options.RepoPath,
-	}, e.WorktreeDir, inputSnapshotFilesRoot(e.LogsRoot), inputRunManifestPath(e.LogsRoot), false)
+	}, e.WorktreeDir, inputSnapshotFilesRoot(e.LogsRoot), inputRunManifestPath(e.LogsRoot), true)
 	return err
 }
 
@@ -673,6 +673,8 @@ func (e *Engine) materializeStageInputs(ctx context.Context, nodeID string) erro
 	if !e.inputMaterializationEnabled() {
 		return nil
 	}
+	// Stage materialization runs immediately before handler execution and updates
+	// the stage-local manifest path consumed by buildStageRuntimeEnv.
 	roots := []string{e.WorktreeDir}
 	snapshot := inputSnapshotFilesRoot(e.LogsRoot)
 	if strings.TrimSpace(snapshot) != "" {

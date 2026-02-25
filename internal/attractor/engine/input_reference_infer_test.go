@@ -225,3 +225,16 @@ func TestParseInferredReferencePayload_AcceptsWrappedOrArray(t *testing.T) {
 		t.Fatalf("array parse refs: %+v", refs)
 	}
 }
+
+func TestBuildInputInferencePrompt_UsesRealNewlines(t *testing.T) {
+	prompt := buildInputInferencePrompt([]InputDocForInference{{
+		Path:    "docs/definition_of_done.md",
+		Content: "line 1\nline 2",
+	}})
+	if strings.Contains(prompt, `\n`) {
+		t.Fatalf("prompt must contain real newlines, found escaped literal: %q", prompt)
+	}
+	if !strings.Contains(prompt, "\n### Document: docs/definition_of_done.md\n") {
+		t.Fatalf("prompt formatting missing expected newline separators: %q", prompt)
+	}
+}
