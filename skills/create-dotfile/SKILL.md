@@ -78,9 +78,9 @@ Model defaults source:
 - Require explicit success/fail/retry behavior. For fail/retry include `failure_reason` and `details` (and `failure_class` where applicable).
 - Keep `.ai/*` producer/consumer paths exact; no filename drift.
 - `shape=parallelogram` nodes must use `tool_command`.
-- For compiled artifact targets (WASM, native binary, shared library): the verification node MUST confirm the artifact is executable and exports expected entry points — not just that the file exists or that compilation exited 0. For WASM: use `wasm-objdump -x` or inspect `wasm-bindgen` output to confirm required exports. For native binaries: run with a smoke-test invocation. File existence alone is insufficient.
-- For game/interactive application ports: add a `verify_gameplay` node (`shape=parallelogram`) that runs a headless smoke test or symbol check confirming expected game logic exports are present.
-- A stub binary that compiles successfully will pass existence/exit-code checks; only symbol verification catches stub implementations.
+- For compiled or packaged deliverables (executables, libraries, modules, services, containers, bundles): the verification node MUST validate the expected runtime behavior or interface contract — not just file existence or a successful build exit code.
+- Add a domain-specific runtime validation node when needed (for example `verify_runtime`, `verify_api_contract`, `verify_cli_behavior`, `verify_ui_smoke`). Use checks that prove the deliverable actually works for the intended use case.
+- A stub artifact can compile and still be functionally empty; require contract-level verification (exports, endpoints, CLI behavior, or observable outputs) to catch this.
 
 6. Enforce routing guardrails.
 - Do not bypass actionable outcomes with unconditional pass-through edges.
