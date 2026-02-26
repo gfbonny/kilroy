@@ -25,10 +25,29 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	// and use it for provider requirement checks below.
 	reg := NewDefaultRegistry()
 
+	// Load catalog early (best-effort) so that model ID lint rules fire during
+	// PrepareWithOptions. The full ResolveModelCatalog snapshot still runs later
+	// for execution repeatability; this early load uses the pinned file directly.
+	var earlyCatalog *modeldb.Catalog
+	if pinnedPath := strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoPath); pinnedPath != "" {
+		if cat, catErr := modeldb.LoadCatalogFromOpenRouterJSON(pinnedPath); catErr == nil {
+			earlyCatalog = cat
+		}
+		// On error, earlyCatalog remains nil — model ID checks are skipped,
+		// all other lint rules still run (degraded mode).
+	} else {
+		// No pinned path configured — fall back to the embedded catalog so
+		// model ID lint rules fire even without an explicit modeldb config.
+		if cat, catErr := modeldb.LoadEmbeddedCatalog(); catErr == nil {
+			earlyCatalog = cat
+		}
+	}
+
 	// Prepare graph (parse + transforms + validate).
 	g, _, err := PrepareWithOptions(dotSource, PrepareOptions{
 		RepoPath:   cfg.Repo.Path,
 		KnownTypes: reg.KnownTypes(),
+		Catalog:    earlyCatalog,
 	})
 	if err != nil {
 		return nil, err

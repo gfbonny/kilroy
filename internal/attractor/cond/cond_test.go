@@ -62,6 +62,64 @@ func TestEvaluate_CustomOutcome(t *testing.T) {
 	}
 }
 
+// TestEvaluate_RegressionPinning pins the evaluator's output for a canonical
+// set of condition strings against a fixed synthetic outcome.  This test will
+// fail loudly if the evaluator's parsing or evaluation semantics change,
+// giving early warning that graphs which currently pass lint may silently
+// mis-route at runtime after an evaluator update.
+func TestEvaluate_RegressionPinning(t *testing.T) {
+	ctx := runtime.NewContext()
+	ctx.Set("my_flag", "active")
+
+	successOutcome := runtime.Outcome{Status: runtime.StatusSuccess}
+
+	cases := []struct {
+		cond      string
+		wantMatch bool
+		wantErr   bool
+	}{
+		// Empty condition always matches.
+		{"", true, false},
+		// Simple outcome equality — success.
+		{"outcome=success", true, false},
+		// Simple outcome equality — fail (does not match success outcome).
+		{"outcome=fail", false, false},
+		// Negated outcome — not fail → true against success outcome.
+		{"outcome!=fail", true, false},
+		// AND compound — both clauses true.
+		{"outcome=success && outcome!=fail", true, false},
+		// Custom outcome value (not a canonical status) — does not match success.
+		{"outcome=approved", false, false},
+		// Bare context key that exists and is truthy.
+		{"my_flag", true, false},
+		// Bare context key that is absent — evaluates to empty string → false.
+		{"missing_key", false, false},
+		// context.-prefixed lookup.
+		{"context.my_flag=active", true, false},
+		// preferred_label — absent in synthetic outcome → does not match.
+		{"preferred_label=Yes", false, false},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.cond, func(t *testing.T) {
+			got, err := Evaluate(tc.cond, successOutcome, ctx)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("Evaluate(%q): expected error, got nil (result=%v)", tc.cond, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Evaluate(%q): unexpected error: %v", tc.cond, err)
+			}
+			if got != tc.wantMatch {
+				t.Fatalf("Evaluate(%q): got %v, want %v", tc.cond, got, tc.wantMatch)
+			}
+		})
+	}
+}
+
 func TestEvaluate_OutcomeAliasesMatch(t *testing.T) {
 	// Edge conditions using aliases (e.g. outcome=skip) must match the
 	// canonical form produced by ParseStageStatus (e.g. "skipped").

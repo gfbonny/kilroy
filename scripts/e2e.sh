@@ -47,3 +47,14 @@ if [[ $fail -ne 0 ]]; then
 fi
 
 echo "All validations passed"
+
+# Optional: bounded fuzz runs for the two primary input surfaces.
+# These are not run by default (they require -fuzz flag); the seed corpus
+# is verified as part of `go test ./...` above via -run mode.
+#
+# To run extended fuzzing locally:
+#   go test -fuzz=FuzzParse       -fuzztime=30s ./internal/attractor/dot/
+#   go test -fuzz=FuzzConditionEval -fuzztime=30s ./internal/attractor/cond/
+
+# Optional quality regression check (requires kilroy binary and Claude API)
+# RUN_INGEST_QUALITY=1 ./scripts/test-ingest-quality.sh

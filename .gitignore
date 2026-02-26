@@ -13,3 +13,5 @@
 
 # GoReleaser build output
 /dist/
+firebase-debug.log
+.claude/worktrees/

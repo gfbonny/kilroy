@@ -25,9 +25,14 @@ func TestResume_NoMatchingFailEdge_FallsBackToRetryTarget(t *testing.T) {
 	runCmd(t, repo, "git", "add", "-A")
 	runCmd(t, repo, "git", "commit", "-m", "init")
 
-	// "review" fails (exit 1), has only condition="outcome=yes" edge → no matching fail edge.
-	// Graph-level retry_target points to "fix", which succeeds.
-	// Forward path falls back to retry_target; resume must do the same.
+	// "review" fails (exit 1). It has a conditional edge (outcome=yes) and an
+	// unconditional fallback edge to "fix". On failure the conditional edge does not
+	// match; the unconditional edge (step-4) routes to "fix", which succeeds.
+	// The graph also has retry_target="fix"; resume must route to "fix" the same way.
+	//
+	// NOTE: The all_conditional_edges lint rule (G3) now requires an unconditional
+	// fallback. The former condition="outcome=__never__" pattern is replaced with
+	// an unconditional review -> fix edge.
 	dot := []byte(`
 digraph G {
   graph [goal="test", retry_target="fix"]
@@ -43,7 +48,7 @@ digraph G {
   ]
   start -> review
   review -> exit [condition="outcome=yes"]
-  review -> fix  [condition="outcome=__never__"]
+  review -> fix
   fix -> exit
 }
 `)

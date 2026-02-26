@@ -1,6 +1,8 @@
 package modeldb
 
 import (
+	_ "embed"
+
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +12,69 @@ import (
 
 	"github.com/danshapiro/kilroy/internal/modelmeta"
 )
+
+//go:embed pinned/openrouter_models.json
+var embeddedCatalogJSON []byte
+
+// LoadEmbeddedCatalog returns a Catalog loaded from the pinned OpenRouter model
+// snapshot that is compiled into the binary. The catalog may be stale relative
+// to the live OpenRouter API, but it is always available and requires no I/O.
+func LoadEmbeddedCatalog() (*Catalog, error) {
+	return loadCatalogFromBytes(embeddedCatalogJSON, "<embedded>")
+}
+
+func loadCatalogFromBytes(b []byte, source string) (*Catalog, error) {
+	sum := sha256.Sum256(b)
+	sha := hex.EncodeToString(sum[:])
+
+	var payload openRouterPayload
+	if err := json.Unmarshal(b, &payload); err != nil {
+		return nil, err
+	}
+
+	covered := map[string]bool{}
+	models := make(map[string]ModelEntry, len(payload.Data))
+	for _, m := range payload.Data {
+		id := strings.TrimSpace(m.ID)
+		if id == "" {
+			continue
+		}
+		provider := modelmeta.ProviderFromModelID(id)
+		if provider != "" {
+			covered[provider] = true
+		}
+		ctxWindow := m.ContextLength
+		if ctxWindow == 0 {
+			ctxWindow = m.TopProvider.ContextLength
+		}
+		var maxOut *int
+		if m.TopProvider.MaxCompletionTokens > 0 {
+			v := m.TopProvider.MaxCompletionTokens
+			maxOut = &v
+		}
+		models[id] = ModelEntry{
+			Provider:           provider,
+			Mode:               "chat",
+			ContextWindow:      ctxWindow,
+			MaxOutputTokens:    maxOut,
+			SupportsTools:      modelmeta.ContainsFold(m.SupportedParameters, "tools"),
+			SupportsReasoning:  modelmeta.ContainsFold(m.SupportedParameters, "reasoning") || modelmeta.ContainsFold(m.SupportedParameters, "include_reasoning"),
+			SupportsVision:     modelmeta.ContainsFold(m.Architecture.InputModalities, "image") || modelmeta.ContainsFold(m.Architecture.OutputModalities, "image"),
+			InputCostPerToken:  modelmeta.ParseFloatStringPtr(m.Pricing.Prompt),
+			OutputCostPerToken: modelmeta.ParseFloatStringPtr(m.Pricing.Completion),
+		}
+	}
+
+	if len(models) == 0 {
+		return nil, fmt.Errorf("openrouter model catalog is empty: %s", source)
+	}
+	return &Catalog{
+		Path:             source,
+		SHA256:           sha,
+		Models:           models,
+		CoveredProviders: covered,
+	}, nil
+}
 
 type openRouterPayload struct {
 	Data []openRouterModel `json:"data"`
@@ -40,55 +105,12 @@ func LoadCatalogFromOpenRouterJSON(path string) (*Catalog, error) {
 	if err != nil {
 		return nil, err
 	}
-	sum := sha256.Sum256(b)
-	sha := hex.EncodeToString(sum[:])
-
-	var payload openRouterPayload
-	if err := json.Unmarshal(b, &payload); err != nil {
+	cat, err := loadCatalogFromBytes(b, path)
+	if err != nil {
 		return nil, err
 	}
-
-	covered := map[string]bool{}
-	models := make(map[string]ModelEntry, len(payload.Data))
-	for _, m := range payload.Data {
-		id := strings.TrimSpace(m.ID)
-		if id == "" {
-			continue
-		}
-		provider := modelmeta.ProviderFromModelID(id)
-		if provider != "" {
-			covered[provider] = true
-		}
-		ctxWindow := m.ContextLength
-		if ctxWindow == 0 {
-			ctxWindow = m.TopProvider.ContextLength
-		}
-		var maxOut *int
-		if m.TopProvider.MaxCompletionTokens > 0 {
-			v := m.TopProvider.MaxCompletionTokens
-			maxOut = &v
-		}
-
-		models[id] = ModelEntry{
-			Provider:           provider,
-			Mode:               "chat",
-			ContextWindow:      ctxWindow,
-			MaxOutputTokens:    maxOut,
-			SupportsTools:      modelmeta.ContainsFold(m.SupportedParameters, "tools"),
-			SupportsReasoning:  modelmeta.ContainsFold(m.SupportedParameters, "reasoning") || modelmeta.ContainsFold(m.SupportedParameters, "include_reasoning"),
-			SupportsVision:     modelmeta.ContainsFold(m.Architecture.InputModalities, "image") || modelmeta.ContainsFold(m.Architecture.OutputModalities, "image"),
-			InputCostPerToken:  modelmeta.ParseFloatStringPtr(m.Pricing.Prompt),
-			OutputCostPerToken: modelmeta.ParseFloatStringPtr(m.Pricing.Completion),
-		}
-	}
-
-	if len(models) == 0 {
-		return nil, fmt.Errorf("openrouter model catalog is empty: %s", path)
-	}
-	return &Catalog{
-		Path:             path,
-		SHA256:           sha,
-		Models:           models,
-		CoveredProviders: covered,
-	}, nil
+	// Override the Path field to the actual file path (loadCatalogFromBytes
+	// receives a generic source string, so we set the real path here).
+	cat.Path = path
+	return cat, nil
 }

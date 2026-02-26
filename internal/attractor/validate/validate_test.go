@@ -6,6 +6,7 @@ import (
 
 	"github.com/danshapiro/kilroy/internal/attractor/dot"
 	"github.com/danshapiro/kilroy/internal/attractor/model"
+	"github.com/danshapiro/kilroy/internal/attractor/modeldb"
 )
 
 func TestValidate_StartAndExitNodeRules(t *testing.T) {
@@ -644,6 +645,89 @@ digraph G {
 	assertHasRule(t, diags, "template_postmortem_replan_entry", SeverityWarning)
 }
 
+// TestLintConditionSyntax_ValidConditions verifies that well-formed condition
+// expressions do not produce condition_syntax diagnostics — confirming that the
+// evaluator error-capture path (G2 fix) does not create false positives.
+func TestLintConditionSyntax_ValidConditions(t *testing.T) {
+	validConds := []string{
+		"outcome=success",
+		"outcome=fail",
+		"outcome!=success",
+		"outcome=success && outcome!=fail",
+		"outcome=approved",
+		"context.failure_class=transient_infra",
+		"context.failure_class!=transient_infra",
+		"preferred_label=Yes",
+		"my_key=some_value",
+	}
+
+	for _, cond := range validConds {
+		cond := cond
+		t.Run(cond, func(t *testing.T) {
+			dotSrc := `
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  start -> a
+  a -> exit [condition="` + cond + `"]
+}
+`
+			g, err := dot.Parse([]byte(dotSrc))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			diags := lintConditionSyntax(g)
+			for _, d := range diags {
+				t.Errorf("unexpected condition_syntax diagnostic for %q: %s %s", cond, d.Severity, d.Message)
+			}
+		})
+	}
+}
+
+// TestLintConditionSyntax_EvaluatorErrorCaptured verifies that the G2 fix is
+// in place: the function signature of lintConditionSyntax now captures
+// (rather than discards) the evaluator's error return.  We test this
+// indirectly by confirming that the existing invalid-operator condition
+// (outcome>success) still produces a condition_syntax ERROR, and that a valid
+// condition (outcome=success) does not — ensuring we have not regressed the
+// existing detection path while adding the new capture.
+func TestLintConditionSyntax_EvaluatorCapture_NoRegressionOnKnownInvalid(t *testing.T) {
+	// Invalid condition: uses ">" which validateConditionSyntax rejects.
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  start -> a
+  a -> exit [condition="outcome>success"]
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := lintConditionSyntax(g)
+	assertHasRule(t, diags, "condition_syntax", SeverityError)
+
+	// Valid condition: must produce no condition_syntax diagnostic.
+	g2, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  start -> a
+  a -> exit [condition="outcome=success"]
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags2 := lintConditionSyntax(g2)
+	for _, d := range diags2 {
+		t.Errorf("unexpected condition_syntax diagnostic for valid condition: %+v", d)
+	}
+}
+
 func assertHasRule(t *testing.T, diags []Diagnostic, rule string, sev Severity) {
 	t.Helper()
 	for _, d := range diags {
@@ -858,4 +942,515 @@ digraph G {
 		}
 	}
 	t.Fatal("expected exit_no_outgoing diagnostic for exit2")
+}
+
+// --- Tests for status_contract_in_prompt lint rule (G1) ---
+
+// (a) shape=box, non-empty prompt, missing KILROY_STAGE_STATUS_PATH → WARNING fires.
+func TestValidate_StatusContractInPrompt_MissingContract_Warning(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  impl  [shape=box, llm_provider=anthropic, llm_model=claude-sonnet-4-6,
+         prompt="Implement the feature and write the output to disk."]
+  start -> impl -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	found := false
+	for _, d := range diags {
+		if d.Rule == "status_contract_in_prompt" && d.Severity == SeverityWarning && d.NodeID == "impl" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected status_contract_in_prompt WARNING for node impl; got %+v", diags)
+	}
+}
+
+// (b) shape=box, prompt contains $KILROY_STAGE_STATUS_PATH → no warning.
+func TestValidate_StatusContractInPrompt_PrimaryPath_NoWarning(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  impl  [shape=box, llm_provider=anthropic, llm_model=claude-sonnet-4-6,
+         prompt="Implement and write {\"outcome\":\"success\"} to $KILROY_STAGE_STATUS_PATH."]
+  start -> impl -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "status_contract_in_prompt")
+}
+
+// (c) shape=box, prompt contains $KILROY_STAGE_STATUS_FALLBACK_PATH but NOT primary → no warning.
+func TestValidate_StatusContractInPrompt_FallbackPath_NoWarning(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  impl  [shape=box, llm_provider=anthropic, llm_model=claude-sonnet-4-6,
+         prompt="Write outcome to $KILROY_STAGE_STATUS_FALLBACK_PATH if primary is unavailable."]
+  start -> impl -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "status_contract_in_prompt")
+}
+
+// (d) shape=box, empty prompt → no warning from status_contract_in_prompt (existing rule handles it).
+func TestValidate_StatusContractInPrompt_EmptyPrompt_NoWarning(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  impl  [shape=box, llm_provider=anthropic, llm_model=claude-sonnet-4-6]
+  start -> impl -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "status_contract_in_prompt")
+	// The existing empty-prompt rule should still fire.
+	assertHasRule(t, diags, "prompt_on_llm_nodes", SeverityWarning)
+}
+
+// (e) non-box node (shape=diamond) with prompt missing contract → no warning from this rule.
+func TestValidate_StatusContractInPrompt_NonBoxNode_NoWarning(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start  [shape=Mdiamond]
+  exit   [shape=Msquare]
+  router [shape=diamond, prompt="This prompt has no status path reference."]
+  impl   [shape=box, llm_provider=anthropic, llm_model=claude-sonnet-4-6,
+          prompt="Write outcome to $KILROY_STAGE_STATUS_PATH."]
+  start -> impl -> router
+  router -> exit [condition="outcome=success"]
+  router -> impl [condition="outcome=fail"]
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	// The status_contract_in_prompt rule must NOT fire for the diamond node.
+	for _, d := range diags {
+		if d.Rule == "status_contract_in_prompt" && d.NodeID == "router" {
+			t.Fatalf("unexpected status_contract_in_prompt warning for diamond node router: %+v", d)
+		}
+	}
+}
+// --- Tests for orphan_custom_outcome_hint lint rule (G5) ---
+
+// (a) Node with condition="outcome=approved" edge (custom) + no unconditional fallback -> WARNING fires.
+func TestValidate_OrphanCustomOutcomeHint_CustomOutcomeNoFallback_Warns(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  review [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="review"]
+  implement [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="impl"]
+  start -> review
+  review -> exit [condition="outcome=approved"]
+  review -> implement [condition="outcome=retry"]
+  implement -> exit [condition="outcome=success"]
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	found := false
+	for _, d := range diags {
+		if d.Rule == "orphan_custom_outcome_hint" && d.Severity == SeverityWarning && d.NodeID == "review" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected orphan_custom_outcome_hint WARNING for node 'review'; got %+v", diags)
+	}
+}
+
+// (b) Node with condition="outcome=approved" edge + unconditional fallback -> no warning.
+func TestValidate_OrphanCustomOutcomeHint_CustomOutcomeWithFallback_NoWarn(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  review [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="review"]
+  implement [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="impl"]
+  start -> review
+  review -> exit [condition="outcome=approved"]
+  review -> implement
+  implement -> exit [condition="outcome=success"]
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "orphan_custom_outcome_hint")
+}
+
+// (c) Node with only condition="status=success" (reserved status key, no custom outcome) -> no warning.
+func TestValidate_OrphanCustomOutcomeHint_ReservedOutcomeOnly_NoWarn(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  postmortem [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="pm"]
+  start -> a
+  a -> exit [condition="outcome=success"]
+  a -> postmortem [condition="outcome=fail"]
+  postmortem -> exit [condition="outcome=success"]
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "orphan_custom_outcome_hint")
+}
+
+// (d) Node with no conditional edges at all -> no warning.
+func TestValidate_OrphanCustomOutcomeHint_NoConditionalEdges_NoWarn(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="y"]
+  start -> a -> b -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "orphan_custom_outcome_hint")
+}
+// --- Tests for status_fallback_in_prompt lint rule (G11) ---
+
+// TestValidate_StatusFallbackInPrompt_WarnsWhenPrimaryPresentButFallbackAbsent verifies
+// that the rule fires when a box node's prompt has KILROY_STAGE_STATUS_PATH but not
+// KILROY_STAGE_STATUS_FALLBACK_PATH (the rogue-08 audit scenario: 16/16 nodes affected).
+func TestValidate_StatusFallbackInPrompt_WarnsWhenPrimaryPresentButFallbackAbsent(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [
+    shape=box,
+    llm_provider=openai,
+    llm_model=gpt-5.2,
+    prompt="Write your result to $KILROY_STAGE_STATUS_PATH when done."
+  ]
+  start -> a -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	found := false
+	for _, d := range diags {
+		if d.Rule == "status_fallback_in_prompt" && d.Severity == SeverityWarning && d.NodeID == "a" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected status_fallback_in_prompt WARNING for node a; got %+v", diags)
+	}
+}
+
+// TestValidate_StatusFallbackInPrompt_NoWarnWhenBothPathsPresent verifies that the rule
+// does not fire when both the primary and fallback paths are present in the prompt.
+func TestValidate_StatusFallbackInPrompt_NoWarnWhenBothPathsPresent(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [
+    shape=box,
+    llm_provider=openai,
+    llm_model=gpt-5.2,
+    prompt="Write your result to $KILROY_STAGE_STATUS_PATH; fallback is $KILROY_STAGE_STATUS_FALLBACK_PATH."
+  ]
+  start -> a -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "status_fallback_in_prompt")
+}
+
+// TestValidate_StatusFallbackInPrompt_NoWarnWhenNeitherPathPresent verifies that the rule
+// does NOT fire when neither path is in the prompt (G1 handles that case).
+func TestValidate_StatusFallbackInPrompt_NoWarnWhenNeitherPathPresent(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [
+    shape=box,
+    llm_provider=openai,
+    llm_model=gpt-5.2,
+    prompt="Do some work and report your findings."
+  ]
+  start -> a -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "status_fallback_in_prompt")
+}
+
+// TestValidate_StatusFallbackInPrompt_NoWarnWhenAutoStatusTrue verifies that the rule
+// is suppressed when auto_status=true, since the engine manages status automatically.
+func TestValidate_StatusFallbackInPrompt_NoWarnWhenAutoStatusTrue(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [
+    shape=box,
+    llm_provider=openai,
+    llm_model=gpt-5.2,
+    auto_status=true,
+    prompt="Write your result to $KILROY_STAGE_STATUS_PATH when done."
+  ]
+  start -> a -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "status_fallback_in_prompt")
+}
+// --- Tests for G12: stylesheet model ID catalog validation ---
+
+// buildTestCatalog creates a minimal in-memory catalog for testing.
+func buildTestCatalog() *modeldb.Catalog {
+	return &modeldb.Catalog{
+		Models: map[string]modeldb.ModelEntry{
+			"anthropic/claude-opus-4.6": {Provider: "anthropic"},
+			"anthropic/claude-sonnet-4.5": {Provider: "anthropic"},
+			"openai/gpt-5.2":              {Provider: "openai"},
+		},
+		CoveredProviders: map[string]bool{
+			"anthropic": true,
+			"openai":    true,
+		},
+	}
+}
+
+// minimalGraph returns a valid minimal graph with a model_stylesheet attribute set.
+func minimalGraphWithStylesheet(stylesheet string) []byte {
+	return []byte(`digraph G {
+  graph [model_stylesheet="` + stylesheet + `"]
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  start -> a -> exit
+}`)
+}
+
+// TestValidate_G12_UnknownModelID_EmitsWarning checks that a completely unknown
+// model ID in the stylesheet produces a stylesheet_unknown_model WARNING.
+func TestValidate_G12_UnknownModelID_EmitsWarning(t *testing.T) {
+	g, err := dot.Parse(minimalGraphWithStylesheet(`* { llm_provider: anthropic; llm_model: claude-opus-999-nonexistent; }`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	catalog := buildTestCatalog()
+	diags := ValidateWithOptions(g, ValidateOptions{Catalog: catalog})
+	assertHasRule(t, diags, "stylesheet_unknown_model", SeverityWarning)
+}
+
+// TestValidate_G12_DashedAnthropicModelID_EmitsNonCanonicalWarning checks that
+// claude-opus-4-6 (dashed version number) produces a stylesheet_noncanonical_model_id
+// WARNING because the catalog canonical form is claude-opus-4.6 (dotted).
+func TestValidate_G12_DashedAnthropicModelID_EmitsNonCanonicalWarning(t *testing.T) {
+	g, err := dot.Parse(minimalGraphWithStylesheet(`* { llm_provider: anthropic; llm_model: claude-opus-4-6; }`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	catalog := buildTestCatalog()
+	diags := ValidateWithOptions(g, ValidateOptions{Catalog: catalog})
+	assertHasRule(t, diags, "stylesheet_noncanonical_model_id", SeverityWarning)
+	assertNoRule(t, diags, "stylesheet_unknown_model")
+}
+
+// TestValidate_G12_CanonicalModelID_NoWarning checks that a valid canonical model
+// ID in the stylesheet produces no stylesheet_unknown_model or
+// stylesheet_noncanonical_model_id warnings.
+func TestValidate_G12_CanonicalModelID_NoWarning(t *testing.T) {
+	g, err := dot.Parse(minimalGraphWithStylesheet(`* { llm_provider: anthropic; llm_model: claude-opus-4.6; }`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	catalog := buildTestCatalog()
+	diags := ValidateWithOptions(g, ValidateOptions{Catalog: catalog})
+	assertNoRule(t, diags, "stylesheet_unknown_model")
+	assertNoRule(t, diags, "stylesheet_noncanonical_model_id")
+}
+
+// TestValidate_G12_NoStylesheet_NoWarning checks that when no model_stylesheet is
+// present the catalog check produces no diagnostics.
+func TestValidate_G12_NoStylesheet_NoWarning(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  start -> a -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	catalog := buildTestCatalog()
+	diags := ValidateWithOptions(g, ValidateOptions{Catalog: catalog})
+	assertNoRule(t, diags, "stylesheet_unknown_model")
+	assertNoRule(t, diags, "stylesheet_noncanonical_model_id")
+}
+
+// TestValidate_G12_NilCatalog_NoWarning checks that when no catalog is provided
+// the model ID checks are silently skipped.
+func TestValidate_G12_NilCatalog_NoWarning(t *testing.T) {
+	g, err := dot.Parse(minimalGraphWithStylesheet(`* { llm_provider: anthropic; llm_model: claude-totally-bogus; }`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := ValidateWithOptions(g, ValidateOptions{Catalog: nil})
+	assertNoRule(t, diags, "stylesheet_unknown_model")
+	assertNoRule(t, diags, "stylesheet_noncanonical_model_id")
+}
+
+// TestValidate_G12_UnknownProvider_NoWarning checks that when the catalog does not
+// cover the provider, no unknown-model warning is emitted (the catalog has no opinion).
+func TestValidate_G12_UnknownProvider_NoWarning(t *testing.T) {
+	g, err := dot.Parse(minimalGraphWithStylesheet(`* { llm_provider: cerebras; llm_model: llama-4-scout; }`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	catalog := buildTestCatalog() // cerebras not covered
+	diags := ValidateWithOptions(g, ValidateOptions{Catalog: catalog})
+	assertNoRule(t, diags, "stylesheet_unknown_model")
+	assertNoRule(t, diags, "stylesheet_noncanonical_model_id")
+}
+// TestPromptFile_ConflictLintRule_FiresWhenBothSet verifies that when a node
+// has both prompt_file and prompt/llm_prompt set and expandPromptFiles has NOT
+// run (RepoPath is empty, so prompt_file remains unresolved), the
+// prompt_file_conflict lint rule fires with severity ERROR.
+//
+// This exercises the standalone-validate path: lintPromptFileConflict checks
+// for the ambiguous combination and reports it so the user knows.
+func TestPromptFile_ConflictLintRule_FiresWhenBothSet(t *testing.T) {
+	// Construct a minimal graph by hand so we can inject both attributes without
+	// going through the DOT parser attribute-dedup semantics.
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="inline text", prompt_file="prompts/some.md"]
+  start -> a -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	diags := Validate(g)
+
+	// prompt_file_conflict must fire as ERROR because both prompt and
+	// prompt_file are set on node "a".
+	assertHasRule(t, diags, "prompt_file_conflict", SeverityError)
+
+	// The diagnostic must point at node "a".
+	found := false
+	for _, d := range diags {
+		if d.Rule == "prompt_file_conflict" && d.NodeID == "a" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected prompt_file_conflict diagnostic for node 'a'; got %+v", diags)
+	}
+}
+
+// TestPromptFile_ConflictLintRule_DoesNotFireWhenOnlyPromptFile verifies that
+// a node with only prompt_file (and no prompt/llm_prompt) does not trigger
+// the prompt_file_conflict lint rule, since there is no ambiguity.
+func TestPromptFile_ConflictLintRule_DoesNotFireWhenOnlyPromptFile(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt_file="prompts/some.md"]
+  start -> a -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	diags := Validate(g)
+
+	// No conflict: only prompt_file is set, prompt is absent.
+	assertNoRule(t, diags, "prompt_file_conflict")
+}
+
+// TestPromptFile_LlmPromptConflict_FiresWithLlmPromptAttr verifies that the
+// prompt_file_conflict rule also fires when prompt_file conflicts with the
+// legacy llm_prompt attribute (not just the primary prompt attribute).
+func TestPromptFile_LlmPromptConflict_FiresWithLlmPromptAttr(t *testing.T) {
+	// Build the graph directly via model to set llm_prompt without DOT
+	// attribute normalization potentially merging it.
+	g := model.NewGraph("G")
+	start := model.NewNode("start")
+	start.Attrs["shape"] = "Mdiamond"
+	exit := model.NewNode("exit")
+	exit.Attrs["shape"] = "Msquare"
+	a := model.NewNode("a")
+	a.Attrs["shape"] = "box"
+	a.Attrs["llm_provider"] = "openai"
+	a.Attrs["llm_model"] = "gpt-5.2"
+	a.Attrs["llm_prompt"] = "legacy inline text"
+	a.Attrs["prompt_file"] = "prompts/some.md"
+
+	_ = g.AddNode(start)
+	_ = g.AddNode(exit)
+	_ = g.AddNode(a)
+	g.Edges = append(g.Edges, &model.Edge{From: "start", To: "a"})
+	g.Edges = append(g.Edges, &model.Edge{From: "a", To: "exit"})
+
+	diags := Validate(g)
+
+	// prompt_file_conflict must fire because llm_prompt + prompt_file are both set.
+	assertHasRule(t, diags, "prompt_file_conflict", SeverityError)
+	for _, d := range diags {
+		if d.Rule == "prompt_file_conflict" && d.NodeID == "a" {
+			return
+		}
+	}
+	t.Fatalf("expected prompt_file_conflict for node 'a'; got %+v", diags)
 }

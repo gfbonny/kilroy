@@ -54,6 +54,7 @@ digraph G {
   exit [shape=Msquare]
   start -> cond
   cond -> exit [condition="outcome="]
+  cond -> exit
 }
 `)
 
@@ -183,3 +184,60 @@ digraph G {
 	}
 }
 
+// TestPromptFile_MissingFile_PrepareWithOptionsReturnsError exercises the full
+// prepare+validate pipeline (PrepareWithOptions) when a node's prompt_file
+// attribute references a file that does not exist. The expected behavior is
+// that expandPromptFiles returns an error (os.ReadFile failure) which is
+// wrapped and propagated out of PrepareWithOptions before validation runs.
+func TestPromptFile_MissingFile_PrepareWithOptionsReturnsError(t *testing.T) {
+	dir := t.TempDir() // empty — no prompt files written
+
+	dotSrc := []byte(`
+digraph G {
+  start [shape=Mdiamond]
+  build [shape=box, prompt_file="nonexistent.txt", llm_provider=openai, llm_model=gpt-5.2]
+  exit  [shape=Msquare]
+  start -> build -> exit
+}
+`)
+	_, _, err := PrepareWithOptions(dotSrc, PrepareOptions{RepoPath: dir})
+	if err == nil {
+		t.Fatal("expected error for missing prompt_file, got nil")
+	}
+	if !strings.Contains(err.Error(), "prompt_file expansion") {
+		t.Fatalf("expected 'prompt_file expansion' in error message, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "nonexistent.txt") {
+		t.Fatalf("expected file name in error message, got: %v", err)
+	}
+}
+
+// TestPromptFile_BothPromptAndPromptFile_PrepareWithOptionsReturnsError exercises
+// the full prepare+validate pipeline when a node has BOTH prompt and prompt_file
+// set and RepoPath is provided. expandPromptFiles detects the conflict and returns
+// an error before validation runs.
+func TestPromptFile_BothPromptAndPromptFile_PrepareWithOptionsReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "extra.md"), []byte("extra content"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	dotSrc := []byte(`
+digraph G {
+  start [shape=Mdiamond]
+  build [shape=box, prompt="inline text", prompt_file="extra.md", llm_provider=openai, llm_model=gpt-5.2]
+  exit  [shape=Msquare]
+  start -> build -> exit
+}
+`)
+	_, _, err := PrepareWithOptions(dotSrc, PrepareOptions{RepoPath: dir})
+	if err == nil {
+		t.Fatal("expected error for conflicting prompt + prompt_file, got nil")
+	}
+	if !strings.Contains(err.Error(), "prompt_file expansion") {
+		t.Fatalf("expected 'prompt_file expansion' in error message, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("expected 'mutually exclusive' in error message, got: %v", err)
+	}
+}

@@ -193,7 +193,9 @@ digraph G {
   cond [shape=diamond]
   start -> a
   a -> cond [condition="outcome=fail"]
+  a -> exit
   cond -> exit [condition="outcome=fail"]
+  cond -> exit
 }
 `)
 	eng := newReliabilityFixtureEngine(t, repo, logsRoot, "subgraph-failure-context-fixture", dot)

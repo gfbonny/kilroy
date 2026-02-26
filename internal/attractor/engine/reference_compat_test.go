@@ -29,6 +29,7 @@ func TestPrepare_ReferenceStyleDotfile(t *testing.T) {
 		Work -> Check
 		Check -> Exit [condition="outcome=success"]
 		Check -> Work [condition="outcome=fail", loop_restart=true]
+		Check -> Exit
 	}`)
 
 	g, diags, err := Prepare(dot)
