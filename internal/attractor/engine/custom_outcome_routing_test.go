@@ -57,7 +57,9 @@ echo '{"type":"done","text":"ok"}'
 
 	// Graph: check_dod is a box node that returns outcome=needs_dod.
 	// It has conditional edges: needs_dod -> dod_gen, has_dod -> plan.
-	// The engine should route to dod_gen without retrying check_dod.
+	// An unconditional fallback to plan is required by the all_conditional_edges
+	// lint rule (G3). The engine should route to dod_gen (condition match, step-1)
+	// without retrying check_dod.
 	dot := []byte(`
 digraph G {
   graph [goal="test custom outcome routing", default_max_retry=3]
@@ -71,6 +73,7 @@ digraph G {
   start -> check_dod
   check_dod -> dod_gen [condition="outcome=needs_dod"]
   check_dod -> plan [condition="outcome=has_dod"]
+  check_dod -> plan
   dod_gen -> exit
   plan -> exit
 }
@@ -120,12 +123,15 @@ digraph G {
 	}
 }
 
-// TestRun_BoxNodeCustomOutcome_NoMatchingEdge_FallsBackToAnyEdge verifies that
-// when a box node returns a custom outcome that does NOT match any outgoing edge
-// condition and no unconditional edge exists, the engine falls back to ALL edges
-// per spec §3.3 ("Fallback: any edge"). Both dod_gen and plan are eligible via
-// fallback fan-out, and the pipeline completes.
-func TestRun_BoxNodeCustomOutcome_NoMatchingEdge_FallsBackToAnyEdge(t *testing.T) {
+// TestRun_BoxNodeCustomOutcome_NoMatchingEdge_UnconditionalFallbackRoutes verifies that
+// when a box node returns a custom outcome that does NOT match any outgoing conditional
+// edge condition, the engine falls back to the unconditional fallback edge (step-4 per
+// spec §3.3). The pipeline completes successfully.
+//
+// NOTE: The all_conditional_edges lint rule (G3) requires at least one unconditional edge
+// on non-terminal nodes, making the previous all-conditional graph pattern invalid.
+// The unconditional fallback edge is now the spec-compliant way to handle unexpected outcomes.
+func TestRun_BoxNodeCustomOutcome_NoMatchingEdge_UnconditionalFallbackRoutes(t *testing.T) {
 	cleanupStrayEngineArtifacts(t)
 	t.Cleanup(func() { cleanupStrayEngineArtifacts(t) })
 
@@ -135,7 +141,7 @@ func TestRun_BoxNodeCustomOutcome_NoMatchingEdge_FallsBackToAnyEdge(t *testing.T
 	pinned := writePinnedCatalog(t)
 	cxdbSrv := newCXDBTestServer(t)
 
-	// Shim CLI that writes a custom outcome "unknown_value" -- no edge matches this.
+	// Shim CLI that writes a custom outcome "unknown_value" -- no conditional edge matches this.
 	cli := filepath.Join(t.TempDir(), "codex")
 	if err := os.WriteFile(cli, []byte(`#!/usr/bin/env bash
 set -euo pipefail
@@ -159,9 +165,8 @@ echo '{"type":"done","text":"ok"}'
 	cfg.ModelDB.OpenRouterModelInfoUpdatePolicy = "pinned"
 	cfg.Git.RunBranchPrefix = "attractor/run"
 
-	// The box node returns "unknown_value" but edges only match "needs_dod" and "has_dod".
-	// No unconditional edge exists. Spec §3.3 fallback: all edges are eligible,
-	// resulting in implicit fan-out to both dod_gen and plan.
+	// The box node returns "unknown_value": neither "needs_dod" nor "has_dod" matches.
+	// The unconditional fallback edge routes to plan (step-4). Pipeline completes.
 	dot := []byte(`
 digraph G {
   graph [goal="test unmatched custom outcome", default_max_retry=0]
@@ -175,6 +180,7 @@ digraph G {
   start -> check_dod
   check_dod -> dod_gen [condition="outcome=needs_dod"]
   check_dod -> plan [condition="outcome=has_dod"]
+  check_dod -> plan
   dod_gen -> exit
   plan -> exit
 }
@@ -187,9 +193,9 @@ digraph G {
 		t.Fatalf("RunWithConfig: %v", err)
 	}
 
-	// Fallback fan-out: pipeline completes via both dod_gen and plan -> exit.
+	// Unconditional fallback routes to plan -> exit successfully.
 	if res.FinalStatus != runtime.FinalSuccess {
-		t.Fatalf("final status: got %q want %q (fallback fan-out should succeed)", res.FinalStatus, runtime.FinalSuccess)
+		t.Fatalf("final status: got %q want %q (unconditional fallback should route to plan -> exit)", res.FinalStatus, runtime.FinalSuccess)
 	}
 }
 
@@ -231,6 +237,9 @@ echo '{"type":"done","text":"ok"}'
 	cfg.Git.RunBranchPrefix = "attractor/run"
 
 	// Multiple conditional edges match outcome=needs_dod -> implicit fan-out to dod_a and dod_b.
+	// An unconditional fallback to merge is required by the all_conditional_edges lint rule (G3).
+	// When outcome=needs_dod both conditional edges fire (step-1 fan-out) and the unconditional
+	// is not selected; the fallback only applies when no condition matches.
 	dot := []byte(`
 digraph G {
   graph [goal="test custom outcome fan-out", default_max_retry=3]
@@ -245,6 +254,7 @@ digraph G {
   start -> check_dod
   check_dod -> dod_a [condition="outcome=needs_dod"]
   check_dod -> dod_b [condition="outcome=needs_dod"]
+  check_dod -> merge
   dod_a -> merge
   dod_b -> merge
   merge -> exit
@@ -319,6 +329,9 @@ echo '{"type":"done","text":"ok"}'
 	cfg.Git.RunBranchPrefix = "attractor/run"
 
 	// Edge condition uses both outcome AND context.phase — must use live context.
+	// An unconditional fallback to target_b is required by the all_conditional_edges
+	// lint rule (G3). The condition match (phase=dod) fires via step-1, selecting
+	// target_a; the unconditional edge is not used in the matched-condition path.
 	dot := []byte(`
 digraph G {
   graph [goal="test context-dependent custom outcome", default_max_retry=3]
@@ -332,6 +345,7 @@ digraph G {
   start -> router
   router -> target_a [condition="outcome=route_me && context.phase=dod"]
   router -> target_b [condition="outcome=route_me && context.phase=plan"]
+  router -> target_b
   target_a -> exit
   target_b -> exit
 }

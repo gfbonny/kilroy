@@ -764,6 +764,7 @@ digraph G {
   start -> a
   a -> fix  [condition="outcome=fail"]
   a -> exit [condition="outcome=success"]
+  a -> fix
   fix -> exit
 }
 `)

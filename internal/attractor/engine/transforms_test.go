@@ -54,6 +54,7 @@ digraph G {
   exit [shape=Msquare]
   start -> cond
   cond -> exit [condition="outcome="]
+  cond -> exit
 }
 `)
 

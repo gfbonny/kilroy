@@ -50,6 +50,7 @@ digraph G {
   verify -> check
   check -> implement [condition="outcome=fail", label="retry"]
   check -> exit [condition="outcome=success"]
+  check -> exit
 }
 `)
 
@@ -169,6 +170,7 @@ digraph G {
   verify -> check
   check -> implement [condition="outcome=fail", label="retry"]
   check -> exit [condition="outcome=success"]
+  check -> exit
 }
 `)
 
@@ -205,6 +207,7 @@ digraph G {
   verify -> check
   check -> implement [condition="outcome=fail"]
   check -> exit [condition="outcome=success"]
+  check -> exit
 }
 `)
 
@@ -272,6 +275,7 @@ digraph G {
   verify -> check
   check -> implement [condition="outcome=fail", label="retry"]
   check -> exit [condition="outcome=success"]
+  check -> exit
 }
 `)
 
@@ -325,6 +329,7 @@ digraph G {
   start -> a
   a -> a [condition="outcome=fail"]
   a -> exit [condition="outcome=success"]
+  a -> exit
 }
 `)
 	eng := newReliabilityFixtureEngine(t, repo, logsRoot, "signature-hint-cycle-fixture", dot)

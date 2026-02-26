@@ -41,6 +41,7 @@ digraph G {
   a [shape=box, llm_provider="openai", llm_model="gpt-5.2", prompt="do work", max_retries="3"]
   start -> a
   a -> exit [condition="outcome=success"]
+  a -> exit
 }
 `)
 
@@ -86,6 +87,7 @@ digraph G {
   a -> check
   check -> exit [condition="outcome=success"]
   check -> a [condition="outcome=fail", loop_restart=true]
+  check -> exit
 }
 `)
 

@@ -19,10 +19,16 @@ func TestRun_NoMatchingFailEdge_FallsBackToRetryTarget(t *testing.T) {
 	runCmd(t, repo, "git", "add", "-A")
 	runCmd(t, repo, "git", "commit", "-m", "init")
 
-	// "review" fails, has only a condition="outcome=yes" edge to exit.
-	// No condition="outcome=fail" edge exists.
-	// Graph-level retry_target points to "fix", which succeeds.
-	// Engine should fall back to retry_target instead of dying.
+	// "review" fails. It has a conditional edge to exit (outcome=yes) and an
+	// unconditional fallback edge to "fix". The unconditional edge (step-4) routes
+	// review -> fix on failure. "fix" succeeds and routes unconditionally to exit.
+	// Graph-level retry_target="fix" is also present but the unconditional edge
+	// is taken first; the pipeline still reaches exit successfully.
+	//
+	// NOTE: The graph previously used condition="outcome=__never__" on the review->fix
+	// edge, which triggered the step-5 all-conditional fallback. That pattern is now
+	// rejected by the all_conditional_edges lint rule (promoted to ERROR in G3).
+	// The unconditional fallback edge is the correct pattern.
 	dot := []byte(`
 digraph G {
   graph [goal="test", retry_target="fix"]
@@ -38,7 +44,7 @@ digraph G {
   ]
   start -> review
   review -> exit [condition="outcome=yes"]
-  review -> fix  [condition="outcome=__never__"]
+  review -> fix
   fix -> exit
 }
 `)
@@ -53,12 +59,12 @@ digraph G {
 	}
 }
 
-// TestRun_NoMatchingFailEdge_NoRetryTarget_FallsBackToAnyEdge verifies that
-// when a node fails and no condition matches (only a "success" edge exists)
-// and there is no retry_target, the engine falls back to ALL edges per spec §3.3
-// ("Fallback: any edge"). The single edge (condition="outcome=yes") is selected
-// as fallback, routing the pipeline to exit.
-func TestRun_NoMatchingFailEdge_NoRetryTarget_FallsBackToAnyEdge(t *testing.T) {
+// TestRun_NoMatchingFailEdge_NoRetryTarget_UnconditionalFallbackRoutesToExit verifies that
+// when a node fails and has an unconditional fallback edge, the engine routes via that edge.
+// The all_conditional_edges lint rule (promoted to ERROR in G3) requires at least one
+// unconditional edge on non-terminal nodes, so the previous all-conditional graph pattern
+// is now rejected at validation time. This test uses the correct pattern.
+func TestRun_NoMatchingFailEdge_NoRetryTarget_UnconditionalFallbackRoutesToExit(t *testing.T) {
 	repo := t.TempDir()
 	runCmd(t, repo, "git", "init")
 	runCmd(t, repo, "git", "config", "user.name", "tester")
@@ -67,9 +73,9 @@ func TestRun_NoMatchingFailEdge_NoRetryTarget_FallsBackToAnyEdge(t *testing.T) {
 	runCmd(t, repo, "git", "add", "-A")
 	runCmd(t, repo, "git", "commit", "-m", "init")
 
-	// No retry_target, no matching edge. The only edge has condition="outcome=yes"
-	// but the node fails. Spec §3.3 fallback: the engine selects the only edge
-	// (condition="outcome=yes") as fallback, routing to exit.
+	// "review" fails. It has a conditional edge (outcome=yes) and an unconditional
+	// fallback edge to exit. On failure the conditional edge does not match; the
+	// unconditional edge (step-4) routes the pipeline to exit.
 	dot := []byte(`
 digraph G {
   graph [goal="test", default_max_retry=0]
@@ -81,6 +87,7 @@ digraph G {
   ]
   start -> review
   review -> exit [condition="outcome=yes"]
+  review -> exit
 }
 `)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -89,8 +96,8 @@ digraph G {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	// Fallback routing: pipeline reaches exit via the only available edge.
+	// Unconditional fallback routes to exit successfully.
 	if res.FinalStatus != runtime.FinalSuccess {
-		t.Fatalf("final status: got %q want %q (fallback should route to exit)", res.FinalStatus, runtime.FinalSuccess)
+		t.Fatalf("final status: got %q want %q (unconditional fallback should route to exit)", res.FinalStatus, runtime.FinalSuccess)
 	}
 }

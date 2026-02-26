@@ -1283,7 +1283,7 @@ func lintAllConditionalEdges(g *model.Graph) []Diagnostic {
 		if allConditional {
 			diags = append(diags, Diagnostic{
 				Rule:     "all_conditional_edges",
-				Severity: SeverityWarning,
+				Severity: SeverityError,
 				NodeID:   id,
 				Message:  fmt.Sprintf("node %q has %d outgoing edge(s) but all are conditional; add an unconditional fallback edge to avoid routing gaps", id, len(edges)),
 				Fix:      "Add an unconditional edge (no condition attribute) as a fallback route",

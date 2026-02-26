@@ -92,6 +92,7 @@ digraph G {
   start -> a
   a -> fix [condition="outcome=fail"]
   a -> exit [condition="outcome=success"]
+  a -> exit
   fix -> exit
 }
 `)
@@ -250,7 +251,9 @@ digraph G {
   b [shape=parallelogram, tool_command="echo after-cancel > after_cancel.txt"]
   start -> a
   a -> b [condition="outcome=fail"]
+  a -> exit
   b -> exit [condition="outcome=success"]
+  b -> exit
 }
 `)
 	eng := newReliabilityFixtureEngine(t, repo, logsRoot, "subgraph-cancel-fixture", dot)
@@ -307,6 +310,8 @@ digraph G {
   b -> a [condition="outcome=fail"]
   a -> exit [condition="outcome=success"]
   b -> exit [condition="outcome=success"]
+  a -> exit
+  b -> exit
 }
 `)
 	eng := newReliabilityFixtureEngine(t, repo, logsRoot, "subgraph-cycle-fixture", dot)
@@ -333,6 +338,8 @@ digraph G {
   b -> a [condition="outcome=fail"]
   a -> exit [condition="outcome=success"]
   b -> exit [condition="outcome=success"]
+  a -> exit
+  b -> exit
 }
 `)
 	eng := newReliabilityFixtureEngine(t, repo, logsRoot, "subgraph-canceled-cycle-fixture", dot)

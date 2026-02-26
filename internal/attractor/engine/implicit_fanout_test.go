@@ -262,6 +262,7 @@ digraph G {
   check -> branch_a [condition="outcome=success"]
   check -> branch_b [condition="outcome=success"]
   check -> fallback  [condition="outcome=fail"]
+  check -> fallback
   branch_a -> synth
   branch_b -> synth
   fallback -> synth
@@ -358,6 +359,7 @@ digraph G {
   start -> check
   check -> pass      [condition="outcome=success"]
   check -> fail_path [condition="outcome=fail"]
+  check -> pass
   pass -> exit
   fail_path -> exit
 }

@@ -1921,6 +1921,13 @@ func selectAllEligibleEdges(g *model.Graph, from string, out runtime.Outcome, ct
 	// Fallback: any edge (spec §3.3). All edges have conditions and none
 	// matched, and no unconditional edge exists. Return ALL edges so the
 	// caller can apply weight-then-lexical tiebreaking via bestEdge.
+	//
+	// Step-5 fallback instrumentation: emit a structured log entry so that
+	// misconfigured graphs (all-conditional, no match) are observable at
+	// runtime even when they pass validation (e.g. graphs predating the
+	// all_conditional_edges ERROR promotion).
+	fmt.Fprintf(os.Stderr, `{"event":"step5_all_conditional_fallback","node":%q,"edges_considered":%d,"outcome":%q}`+"\n",
+		from, len(edges), string(out.Status))
 	return edges, nil
 }
 
