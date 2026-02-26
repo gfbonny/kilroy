@@ -329,7 +329,7 @@ func TestToChatCompletionsBody_IncludesReasoningEffort(t *testing.T) {
 		Model:           "zai-glm-4.7",
 		Messages:        []llm.Message{llm.User("hi")},
 		ReasoningEffort: &effort,
-	}, "cerebras", chatCompletionsBodyOptions{})
+	}, "cerebras", "cerebras", chatCompletionsBodyOptions{})
 	if err != nil {
 		t.Fatalf("toChatCompletionsBody: %v", err)
 	}

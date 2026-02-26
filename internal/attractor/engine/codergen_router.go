@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,11 +23,9 @@ import (
 	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 	"github.com/danshapiro/kilroy/internal/llm"
 	"github.com/danshapiro/kilroy/internal/llmclient"
+	"github.com/danshapiro/kilroy/internal/modelmeta"
 )
 
-// anthropicVersionDotRe matches dots between digits in model version numbers
-// (e.g. "4.5", "3.7") without touching other dots.
-var anthropicVersionDotRe = regexp.MustCompile(`(\d)\.(\d)`)
 
 type CodergenRouter struct {
 	cfg     *RunConfigFile
@@ -1885,17 +1882,10 @@ func defaultCLIInvocation(provider string, modelID string, worktreeDir string) (
 	if spec == nil {
 		return "", nil
 	}
-	// Strip the "provider/" prefix from OpenRouter-format model IDs
-	// (e.g. "anthropic/claude-sonnet-4.5" → "claude-sonnet-4.5").
-	// CLI binaries expect bare model names.
-	if prefix := normalizeProviderKey(provider) + "/"; strings.HasPrefix(modelID, prefix) {
-		modelID = strings.TrimPrefix(modelID, prefix)
-	}
-	// Anthropic CLI expects dashes in version numbers (claude-sonnet-4-5),
-	// but the OpenRouter catalog uses dots (claude-sonnet-4.5).
-	if normalizeProviderKey(provider) == "anthropic" {
-		modelID = anthropicVersionDotRe.ReplaceAllString(modelID, "${1}-${2}")
-	}
+	// Convert from OpenRouter/catalog format to the native model ID expected
+	// by this provider's CLI binary: strip "provider/" prefix and (for
+	// anthropic) convert digit.digit version separators to digit-digit.
+	modelID = modelmeta.NativeModelID(normalizeProviderKey(provider), modelID)
 	exe, args = materializeCLIInvocation(*spec, modelID, worktreeDir, "")
 	return exe, args
 }
