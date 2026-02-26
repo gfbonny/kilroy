@@ -53,6 +53,10 @@ Model defaults source:
 4. Set model/provider resolution in `model_stylesheet`.
 - Ensure every `shape=box` node resolves provider + model via attrs or stylesheet.
 - Keep backend choice (`cli` vs `api`) out of DOT; backend belongs in run config.
+- `model_stylesheet` declarations **MUST** use semicolons to separate property-value pairs within each selector block. Omitting semicolons causes silent parsing failures where nodes resolve to no provider.
+  - Correct: `* { llm_model: gemini-2.0-flash; llm_provider: google; }`
+  - Wrong: `* { llm_model: gemini-2.0-flash llm_provider: google }` — space-separated declarations silently fail.
+- After writing `model_stylesheet`: verify each `{}` block uses only semicolon-terminated declarations; no two property names appear adjacent without a semicolon separator.
 
 ## Model Constraint Contract (Required)
 
