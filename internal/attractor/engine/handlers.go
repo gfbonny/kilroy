@@ -316,6 +316,23 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 			}
 		}
 	}
+	if exec != nil && exec.Context != nil {
+		dossierPath := strings.TrimSpace(exec.Context.GetString(failureDossierContextPathKey, ""))
+		if dossierPath != "" {
+			logsPath := strings.TrimSpace(exec.Context.GetString(failureDossierContextLogsPathKey, ""))
+			if logsPath == "" {
+				logsPath = dossierPath
+			}
+			preamble := strings.TrimSpace(mustRenderFailureDossierPromptPreamble(dossierPath, logsPath))
+			if preamble != "" {
+				if strings.TrimSpace(promptText) == "" {
+					promptText = preamble
+				} else {
+					promptText = preamble + "\n\n" + strings.TrimSpace(promptText)
+				}
+			}
+		}
+	}
 	if exec != nil && exec.Engine != nil && strings.TrimSpace(contract.PrimaryPath) != "" {
 		exec.Engine.appendProgress(map[string]any{
 			"event":                "status_contract",
@@ -555,7 +572,7 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 		}
 	}
 
-	if err := writeJSON(filepath.Join(stageDir, "tool_invocation.json"), map[string]any{
+	if err := writeJSON(filepath.Join(stageDir, toolInvocationFileName), map[string]any{
 		"tool": "bash",
 		// Use a non-login, non-interactive shell to avoid sourcing user dotfiles.
 		"argv":        []string{"bash", "-c", cmdStr},
@@ -575,7 +592,7 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 	// Avoid hanging on interactive reads; tool_command doesn't provide a way to supply stdin.
 	cmd.Stdin = strings.NewReader("")
 	stdoutPath := filepath.Join(stageDir, "stdout.log")
-	stderrPath := filepath.Join(stageDir, "stderr.log")
+	stderrPath := filepath.Join(stageDir, toolStderrFileName)
 	stdoutFile, err := os.Create(stdoutPath)
 	if err != nil {
 		return runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()}, nil
@@ -597,7 +614,7 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 		exitCode = cmd.ProcessState.ExitCode()
 	}
 	if cctx.Err() == context.DeadlineExceeded {
-		if err := writeJSON(filepath.Join(stageDir, "tool_timing.json"), map[string]any{
+		if err := writeJSON(filepath.Join(stageDir, toolTimingFileName), map[string]any{
 			"duration_ms": dur.Milliseconds(),
 			"exit_code":   exitCode,
 			"timed_out":   true,
@@ -611,7 +628,7 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 		}, nil
 	}
 
-	if err := writeJSON(filepath.Join(stageDir, "tool_timing.json"), map[string]any{
+	if err := writeJSON(filepath.Join(stageDir, toolTimingFileName), map[string]any{
 		"duration_ms": dur.Milliseconds(),
 		"exit_code":   exitCode,
 		"timed_out":   false,

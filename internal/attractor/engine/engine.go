@@ -586,6 +586,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		e.Context.Set("failure_reason", out.FailureReason)
 		failureClass := classifyFailureClass(out)
 		e.Context.Set("failure_class", failureClass)
+		e.updateFailureDossierContext(node, out, failureClass, nodeRetries)
 
 		// Deterministic failure cycle detection: track failure signatures
 		// across consecutive stages. On success, reset the tracker. On

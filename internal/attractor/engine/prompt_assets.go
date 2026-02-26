@@ -19,6 +19,8 @@ var (
 	stageStatusContractPromptPreambleTemplateRaw string
 	//go:embed prompts/input_materialization_preamble.tmpl
 	inputMaterializationPromptPreambleTemplateRaw string
+	//go:embed prompts/failure_dossier_preamble.tmpl
+	failureDossierPromptPreambleTemplateRaw string
 )
 
 var (
@@ -30,6 +32,9 @@ var (
 	)
 	inputMaterializationPromptPreambleTmpl = template.Must(
 		template.New("input_materialization_preamble").Parse(inputMaterializationPromptPreambleTemplateRaw),
+	)
+	failureDossierPromptPreambleTmpl = template.Must(
+		template.New("failure_dossier_preamble").Parse(failureDossierPromptPreambleTemplateRaw),
 	)
 )
 
@@ -71,6 +76,22 @@ func mustRenderInputMaterializationPromptPreamble(manifestPath string) string {
 	text := strings.TrimRight(buf.String(), "\r\n")
 	if strings.TrimSpace(text) == "" {
 		panic("render input materialization prompt preamble: empty output")
+	}
+	return text + "\n"
+}
+
+func mustRenderFailureDossierPromptPreamble(worktreePath, logsPath string) string {
+	var buf bytes.Buffer
+	err := failureDossierPromptPreambleTmpl.Execute(&buf, map[string]string{
+		"WorktreePath": strings.TrimSpace(worktreePath),
+		"LogsPath":     strings.TrimSpace(logsPath),
+	})
+	if err != nil {
+		panic(fmt.Sprintf("render failure dossier prompt preamble: %v", err))
+	}
+	text := strings.TrimRight(buf.String(), "\r\n")
+	if strings.TrimSpace(text) == "" {
+		panic("render failure dossier prompt preamble: empty output")
 	}
 	return text + "\n"
 }

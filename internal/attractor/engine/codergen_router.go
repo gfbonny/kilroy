@@ -934,7 +934,7 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 		stageEnv[k] = v
 	}
 	providerKey := normalizeProviderKey(provider)
-	stderrPath := filepath.Join(stageDir, "stderr.log")
+	stderrPath := filepath.Join(stageDir, toolStderrFileName)
 	readStderr := func() string {
 		b, err := os.ReadFile(stderrPath)
 		if err != nil {
