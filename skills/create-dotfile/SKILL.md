@@ -97,6 +97,14 @@ Model defaults source:
 8. Validate and repair before emit.
 - Verify no unresolved placeholders (`DEFAULT_MODEL`, etc.).
 - Run syntax + semantic validation loops, applying minimal fixes until clean.
+- A PostToolUse hook (`skills/create-dotfile/hooks/validate-dot.sh`) runs automatically
+  after every Write, Edit, or MultiEdit to a `.dot` file. It calls
+  `kilroy attractor validate --graph` and, if issues are found, signals Claude Code
+  via exit 2 + stderr so the feedback is injected into your context. If feedback
+  appears, repair the reported issues immediately and re-write the file. No manual
+  validate invocation is needed during ingest sessions.
+- The hook requires `kilroy` in PATH. The `KILROY_CLAUDE_PATH` environment variable
+  can override the binary location (full path or directory containing `kilroy`).
 
 ## Non-Negotiable Guardrails
 
