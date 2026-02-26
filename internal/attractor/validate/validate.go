@@ -58,6 +58,7 @@ func Validate(g *model.Graph, extraRules ...LintRule) []Diagnostic {
 	diags = append(diags, lintGoalGatePromptStatusHint(g)...)
 	diags = append(diags, lintFidelityValid(g)...)
 	diags = append(diags, lintPromptOnCodergenNodes(g)...)
+	diags = append(diags, lintStatusContractInPrompt(g)...)
 	diags = append(diags, lintPromptOnConditionalNodes(g)...)
 	diags = append(diags, lintPromptFileConflict(g)...)
 	diags = append(diags, lintToolCommandRequired(g)...)
@@ -639,6 +640,43 @@ func lintPromptOnCodergenNodes(g *model.Graph) []Diagnostic {
 				NodeID:   id,
 			})
 		}
+	}
+	return diags
+}
+
+// lintStatusContractInPrompt warns when a codergen (shape=box) node has a
+// non-empty prompt that does not reference KILROY_STAGE_STATUS_PATH or
+// KILROY_STAGE_STATUS_FALLBACK_PATH.  Without the contract the node cannot
+// write status.json and the engine silently falls back to exit-code-only
+// interpretation, losing all custom outcome routing (Gap F).
+//
+// The rule is silent when the prompt is empty — the existing
+// prompt_on_llm_nodes rule already handles that case.
+func lintStatusContractInPrompt(g *model.Graph) []Diagnostic {
+	var diags []Diagnostic
+	for id, n := range g.Nodes {
+		if n == nil {
+			continue
+		}
+		if n.Shape() != "box" {
+			continue
+		}
+		prompt := n.Prompt()
+		if strings.TrimSpace(prompt) == "" {
+			// Empty prompt — defer to the existing prompt_on_llm_nodes rule.
+			continue
+		}
+		if strings.Contains(prompt, "KILROY_STAGE_STATUS_PATH") ||
+			strings.Contains(prompt, "KILROY_STAGE_STATUS_FALLBACK_PATH") {
+			continue
+		}
+		diags = append(diags, Diagnostic{
+			Rule:     "status_contract_in_prompt",
+			Severity: SeverityWarning,
+			Message:  "codergen node prompt does not reference KILROY_STAGE_STATUS_PATH or KILROY_STAGE_STATUS_FALLBACK_PATH; node cannot write status.json and custom outcome routing will be lost",
+			NodeID:   id,
+			Fix:      "add instructions to write $KILROY_STAGE_STATUS_PATH with the appropriate outcome",
+		})
 	}
 	return diags
 }

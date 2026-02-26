@@ -859,3 +859,112 @@ digraph G {
 	}
 	t.Fatal("expected exit_no_outgoing diagnostic for exit2")
 }
+
+// --- Tests for status_contract_in_prompt lint rule (G1) ---
+
+// (a) shape=box, non-empty prompt, missing KILROY_STAGE_STATUS_PATH → WARNING fires.
+func TestValidate_StatusContractInPrompt_MissingContract_Warning(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  impl  [shape=box, llm_provider=anthropic, llm_model=claude-sonnet-4-6,
+         prompt="Implement the feature and write the output to disk."]
+  start -> impl -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	found := false
+	for _, d := range diags {
+		if d.Rule == "status_contract_in_prompt" && d.Severity == SeverityWarning && d.NodeID == "impl" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected status_contract_in_prompt WARNING for node impl; got %+v", diags)
+	}
+}
+
+// (b) shape=box, prompt contains $KILROY_STAGE_STATUS_PATH → no warning.
+func TestValidate_StatusContractInPrompt_PrimaryPath_NoWarning(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  impl  [shape=box, llm_provider=anthropic, llm_model=claude-sonnet-4-6,
+         prompt="Implement and write {\"outcome\":\"success\"} to $KILROY_STAGE_STATUS_PATH."]
+  start -> impl -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "status_contract_in_prompt")
+}
+
+// (c) shape=box, prompt contains $KILROY_STAGE_STATUS_FALLBACK_PATH but NOT primary → no warning.
+func TestValidate_StatusContractInPrompt_FallbackPath_NoWarning(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  impl  [shape=box, llm_provider=anthropic, llm_model=claude-sonnet-4-6,
+         prompt="Write outcome to $KILROY_STAGE_STATUS_FALLBACK_PATH if primary is unavailable."]
+  start -> impl -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "status_contract_in_prompt")
+}
+
+// (d) shape=box, empty prompt → no warning from status_contract_in_prompt (existing rule handles it).
+func TestValidate_StatusContractInPrompt_EmptyPrompt_NoWarning(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  impl  [shape=box, llm_provider=anthropic, llm_model=claude-sonnet-4-6]
+  start -> impl -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "status_contract_in_prompt")
+	// The existing empty-prompt rule should still fire.
+	assertHasRule(t, diags, "prompt_on_llm_nodes", SeverityWarning)
+}
+
+// (e) non-box node (shape=diamond) with prompt missing contract → no warning from this rule.
+func TestValidate_StatusContractInPrompt_NonBoxNode_NoWarning(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start  [shape=Mdiamond]
+  exit   [shape=Msquare]
+  router [shape=diamond, prompt="This prompt has no status path reference."]
+  impl   [shape=box, llm_provider=anthropic, llm_model=claude-sonnet-4-6,
+          prompt="Write outcome to $KILROY_STAGE_STATUS_PATH."]
+  start -> impl -> router
+  router -> exit [condition="outcome=success"]
+  router -> impl [condition="outcome=fail"]
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	// The status_contract_in_prompt rule must NOT fire for the diamond node.
+	for _, d := range diags {
+		if d.Rule == "status_contract_in_prompt" && d.NodeID == "router" {
+			t.Fatalf("unexpected status_contract_in_prompt warning for diamond node router: %+v", d)
+		}
+	}
+}
