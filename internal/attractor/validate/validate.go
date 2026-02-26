@@ -68,6 +68,7 @@ func Validate(g *model.Graph, extraRules ...LintRule) []Diagnostic {
 	diags = append(diags, lintEscalationModelsSyntax(g)...)
 	diags = append(diags, lintAllConditionalEdges(g)...)
 	diags = append(diags, lintTemplatePostmortemRecoveryRouting(g)...)
+	diags = append(diags, lintOrphanCustomOutcomeHint(g)...)
 
 	// Run custom lint rules (spec §7.3: extra_rules appended after built-in rules).
 	for _, rule := range extraRules {
@@ -1269,4 +1270,94 @@ func lintTemplatePostmortemRecoveryRouting(g *model.Graph) []Diagnostic {
 	}
 
 	return diags
+}
+
+// lintOrphanCustomOutcomeHint warns when a node has custom outcome routing
+// (condition="outcome=<non-reserved-value>") but no unconditional fallback edge.
+// A typo'd custom outcome string will have no valid route, silently routing
+// through to unintended edges or falling through entirely. The unconditional
+// fallback provides a safety net for unexpected outcome values.
+func lintOrphanCustomOutcomeHint(g *model.Graph) []Diagnostic {
+	if g == nil {
+		return nil
+	}
+
+	// Build per-node outgoing edge lists.
+	outgoing := make(map[string][]*model.Edge)
+	for _, e := range g.Edges {
+		if e != nil {
+			outgoing[e.From] = append(outgoing[e.From], e)
+		}
+	}
+
+	var diags []Diagnostic
+	for id := range g.Nodes {
+		edges := outgoing[id]
+		if len(edges) == 0 {
+			continue
+		}
+
+		hasCustomOutcomeEdge := false
+		hasUnconditionalEdge := false
+
+		for _, e := range edges {
+			cond := strings.TrimSpace(e.Condition())
+			if cond == "" {
+				hasUnconditionalEdge = true
+				continue
+			}
+			if edgeHasCustomOutcomeCondition(cond) {
+				hasCustomOutcomeEdge = true
+			}
+		}
+
+		if hasCustomOutcomeEdge && !hasUnconditionalEdge {
+			diags = append(diags, Diagnostic{
+				Rule:     "orphan_custom_outcome_hint",
+				Severity: SeverityWarning,
+				NodeID:   id,
+				Message:  "node has custom outcome routing but no unconditional fallback — a typo'd outcome string will have no valid route",
+				Fix:      "add an unconditional fallback edge to handle unexpected outcome values",
+			})
+		}
+	}
+	return diags
+}
+
+// edgeHasCustomOutcomeCondition returns true if the condition expression contains
+// at least one outcome=<value> clause where <value> is NOT a reserved outcome
+// (success, partial_success, retry, fail, skipped and their aliases).
+func edgeHasCustomOutcomeCondition(condExpr string) bool {
+	for _, clause := range strings.Split(condExpr, "&&") {
+		clause = strings.TrimSpace(clause)
+		if clause == "" {
+			continue
+		}
+		// Only look at equality comparisons (not !=).
+		if strings.Contains(clause, "!=") {
+			continue
+		}
+		if !strings.Contains(clause, "=") {
+			continue
+		}
+		parts := strings.SplitN(clause, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		if key != "outcome" {
+			continue
+		}
+		val := strings.Trim(strings.TrimSpace(parts[1]), "\"'")
+		// Check if this is a reserved (canonical) outcome value.
+		status, err := runtime.ParseStageStatus(val)
+		if err != nil {
+			// Unparseable value — treat as custom.
+			return true
+		}
+		if !status.IsCanonical() {
+			return true
+		}
+	}
+	return false
 }
