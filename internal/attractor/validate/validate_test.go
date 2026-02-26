@@ -859,3 +859,107 @@ digraph G {
 	}
 	t.Fatal("expected exit_no_outgoing diagnostic for exit2")
 }
+
+// --- Tests for status_fallback_in_prompt lint rule (G11) ---
+
+// TestValidate_StatusFallbackInPrompt_WarnsWhenPrimaryPresentButFallbackAbsent verifies
+// that the rule fires when a box node's prompt has KILROY_STAGE_STATUS_PATH but not
+// KILROY_STAGE_STATUS_FALLBACK_PATH (the rogue-08 audit scenario: 16/16 nodes affected).
+func TestValidate_StatusFallbackInPrompt_WarnsWhenPrimaryPresentButFallbackAbsent(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [
+    shape=box,
+    llm_provider=openai,
+    llm_model=gpt-5.2,
+    prompt="Write your result to $KILROY_STAGE_STATUS_PATH when done."
+  ]
+  start -> a -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	found := false
+	for _, d := range diags {
+		if d.Rule == "status_fallback_in_prompt" && d.Severity == SeverityWarning && d.NodeID == "a" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected status_fallback_in_prompt WARNING for node a; got %+v", diags)
+	}
+}
+
+// TestValidate_StatusFallbackInPrompt_NoWarnWhenBothPathsPresent verifies that the rule
+// does not fire when both the primary and fallback paths are present in the prompt.
+func TestValidate_StatusFallbackInPrompt_NoWarnWhenBothPathsPresent(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [
+    shape=box,
+    llm_provider=openai,
+    llm_model=gpt-5.2,
+    prompt="Write your result to $KILROY_STAGE_STATUS_PATH; fallback is $KILROY_STAGE_STATUS_FALLBACK_PATH."
+  ]
+  start -> a -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "status_fallback_in_prompt")
+}
+
+// TestValidate_StatusFallbackInPrompt_NoWarnWhenNeitherPathPresent verifies that the rule
+// does NOT fire when neither path is in the prompt (G1 handles that case).
+func TestValidate_StatusFallbackInPrompt_NoWarnWhenNeitherPathPresent(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [
+    shape=box,
+    llm_provider=openai,
+    llm_model=gpt-5.2,
+    prompt="Do some work and report your findings."
+  ]
+  start -> a -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "status_fallback_in_prompt")
+}
+
+// TestValidate_StatusFallbackInPrompt_NoWarnWhenAutoStatusTrue verifies that the rule
+// is suppressed when auto_status=true, since the engine manages status automatically.
+func TestValidate_StatusFallbackInPrompt_NoWarnWhenAutoStatusTrue(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [
+    shape=box,
+    llm_provider=openai,
+    llm_model=gpt-5.2,
+    auto_status=true,
+    prompt="Write your result to $KILROY_STAGE_STATUS_PATH when done."
+  ]
+  start -> a -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "status_fallback_in_prompt")
+}
