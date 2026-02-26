@@ -4,30 +4,33 @@ graph: demo/rogue/rogue.dot
 task: "Port Rogue 5.4.4 from C to Rust/WASM"
 
 repo:
-  path: /Users/jonathan/src/glowforge/gf-software-factory/.kilroy/repos/kilroy
+  path: /home/user/code/kilroy
 
 cxdb:
   binary_addr: 127.0.0.1:9009
   http_base_url: http://127.0.0.1:9010
   autostart:
     enabled: true
-    command: ["/Users/jonathan/src/glowforge/gf-software-factory/.kilroy/repos/kilroy/scripts/start-cxdb.sh"]
+    command: ["/home/user/code/kilroy/scripts/start-cxdb.sh"]
     wait_timeout_ms: 20000
     poll_interval_ms: 250
     ui:
       enabled: true
-      command: ["/Users/jonathan/src/glowforge/gf-software-factory/.kilroy/repos/kilroy/scripts/start-cxdb-ui.sh"]
+      command: ["/home/user/code/kilroy/scripts/start-cxdb-ui.sh"]
       url: "http://127.0.0.1:9020"
 
 llm:
   cli_profile: real
   providers:
-    google:
+    minimax:
       backend: api
-      failover: []
+    zai:
+      backend: api
+    kimi:
+      backend: api
 
 modeldb:
-  openrouter_model_info_path: /Users/jonathan/src/glowforge/gf-software-factory/.kilroy/repos/kilroy/internal/attractor/modeldb/pinned/openrouter_models.json
+  openrouter_model_info_path: /home/user/code/kilroy/internal/attractor/modeldb/pinned/openrouter_models.json
   openrouter_model_info_update_policy: on_run_start
   openrouter_model_info_url: https://openrouter.ai/api/v1/models
   openrouter_model_info_fetch_timeout_ms: 5000
@@ -45,10 +48,8 @@ artifact_policy:
     overrides:
       rust:
         CARGO_HOME: "{managed_roots.tool_cache_root}/cargo-home"
+        RUSTUP_HOME: "{managed_roots.tool_cache_root}/rustup-home"
         CARGO_TARGET_DIR: "{managed_roots.tool_cache_root}/cargo-target"
-        RUSTUP_HOME: "/Users/jonathan/.rustup"
-        RUSTC: "/Users/jonathan/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustc"
-        RUSTDOC: "/Users/jonathan/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustdoc"
   checkpoint:
     exclude_globs:
       - "**/.cargo-target*/**"
@@ -64,4 +65,9 @@ runtime_policy:
 
 preflight:
   prompt_probes:
-    enabled: false
+    enabled: true
+    transports: [complete]
+    timeout_ms: 15000
+    retries: 1
+    base_delay_ms: 500
+    max_delay_ms: 5000
