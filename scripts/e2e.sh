@@ -47,3 +47,6 @@ if [[ $fail -ne 0 ]]; then
 fi
 
 echo "All validations passed"
+
+# Optional quality regression check (requires kilroy binary and Claude API)
+# RUN_INGEST_QUALITY=1 ./scripts/test-ingest-quality.sh
