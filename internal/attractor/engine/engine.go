@@ -17,6 +17,7 @@ import (
 	"github.com/danshapiro/kilroy/internal/attractor/dot"
 	"github.com/danshapiro/kilroy/internal/attractor/gitutil"
 	"github.com/danshapiro/kilroy/internal/attractor/model"
+	"github.com/danshapiro/kilroy/internal/attractor/modeldb"
 	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 	"github.com/danshapiro/kilroy/internal/attractor/style"
 	"github.com/danshapiro/kilroy/internal/attractor/validate"
@@ -247,6 +248,10 @@ type PrepareOptions struct {
 	// the TypeKnownRule lint rule is added to validation so that nodes with
 	// explicit type= attributes not in this set produce a warning.
 	KnownTypes []string
+	// Catalog is an optional modeldb catalog. When non-nil, model ID catalog
+	// checks (stylesheet_unknown_model, stylesheet_noncanonical_model_id) are
+	// enabled. When nil, those checks are silently skipped.
+	Catalog *modeldb.Catalog
 }
 
 // Prepare parses/transforms/validates a graph.
@@ -305,7 +310,7 @@ func PrepareWithOptions(dotSource []byte, opts PrepareOptions) (*model.Graph, []
 	if len(opts.KnownTypes) > 0 {
 		extraRules = append(extraRules, validate.NewTypeKnownRule(opts.KnownTypes))
 	}
-	diags := validate.Validate(g, extraRules...)
+	diags := validate.ValidateWithOptions(g, validate.ValidateOptions{Catalog: opts.Catalog}, extraRules...)
 	var errs []string
 	for _, d := range diags {
 		if d.Severity == validate.SeverityError {

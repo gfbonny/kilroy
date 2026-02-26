@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/danshapiro/kilroy/internal/attractor/engine"
+	"github.com/danshapiro/kilroy/internal/attractor/modeldb"
 	"github.com/danshapiro/kilroy/internal/providerspec"
 	"github.com/danshapiro/kilroy/internal/version"
 )
@@ -424,7 +425,15 @@ func attractorValidate(args []string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	_, diags, err := engine.Prepare(dotSource)
+	// Load the embedded model catalog so that stylesheet model ID lint rules
+	// fire. On failure, fall back to nil catalog (degraded mode: model ID
+	// checks are skipped; all other rules still run).
+	cat, catErr := modeldb.LoadEmbeddedCatalog()
+	if catErr != nil {
+		fmt.Fprintf(os.Stderr, "WARNING: model catalog unavailable, model ID checks skipped: %v\n", catErr)
+		cat = nil
+	}
+	_, diags, err := engine.PrepareWithOptions(dotSource, engine.PrepareOptions{Catalog: cat})
 	if err != nil {
 		for _, d := range diags {
 			fmt.Fprintf(os.Stderr, "%s: %s (%s)\n", d.Severity, d.Message, d.Rule)
