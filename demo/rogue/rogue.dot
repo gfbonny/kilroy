@@ -793,7 +793,7 @@ Write to $KILROY_STAGE_STATUS_PATH (or fall back to $KILROY_STAGE_STATUS_FALLBAC
 
         verify_build [
             shape=parallelogram,
-            tool_command="cd demo/rogue/rogue-wasm && /Users/jonathan/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo build --target wasm32-unknown-unknown --release && /Users/jonathan/.cargo/bin/wasm-pack build --target web --out-dir www/pkg"
+            tool_command="scripts/wasm-build.sh demo/rogue/rogue-wasm"
         ]
         check_build [shape=diamond, label="Build OK?"]
 
