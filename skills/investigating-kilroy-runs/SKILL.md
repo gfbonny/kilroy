@@ -20,13 +20,30 @@ RUN_ROOT="$RUNS/$RUN_ID"
 echo "$RUN_ID"
 ```
 
-## CXDB: Launch, UI, and Query
-
-To get CXDB connection details, extract the fields from run metadata first:
+For a quick check of the newest run without manually resolving `RUN_ROOT`, use:
 
 ```bash
-CXDB_URL="$(jq -r '.cxdb.http_base_url' "$RUN_ROOT/manifest.json")"
-CONTEXT_ID="$(jq -r '.cxdb.context_id' "$RUN_ROOT/manifest.json")"
+./kilroy attractor status --latest --json
+```
+
+## CXDB: Launch, UI, and Query
+
+To get CXDB connection details, start with `manifest.json`, then fall back to `run_config.json` and live artifacts when fields are missing:
+
+```bash
+CXDB_URL="$(jq -r '.cxdb.http_base_url // empty' "$RUN_ROOT/manifest.json")"
+CONTEXT_ID="$(jq -r '.cxdb.context_id // empty' "$RUN_ROOT/manifest.json")"
+
+if [ -z "$CXDB_URL" ] && [ -f "$RUN_ROOT/run_config.json" ]; then
+  CXDB_URL="$(jq -r '.cxdb.http_base_url // empty' "$RUN_ROOT/run_config.json")"
+fi
+if [ -z "$CONTEXT_ID" ] && [ -f "$RUN_ROOT/live.json" ]; then
+  CONTEXT_ID="$(jq -r '.context_id // empty' "$RUN_ROOT/live.json")"
+fi
+if [ -z "$CONTEXT_ID" ] && [ -f "$RUN_ROOT/checkpoint.json" ]; then
+  CONTEXT_ID="$(jq -r '.context_id // empty' "$RUN_ROOT/checkpoint.json")"
+fi
+
 echo "cxdb_url=$CXDB_URL context_id=$CONTEXT_ID"
 ```
 
@@ -34,10 +51,12 @@ To make sure CXDB is available and to print the UI endpoint, run:
 
 ```bash
 ./scripts/start-cxdb.sh
-./scripts/start-cxdb-ui.sh
+UI_LINE="$(./scripts/start-cxdb-ui.sh)"
+echo "$UI_LINE"   # prints: cxdb_ui=http://...
+CXDB_UI="${UI_LINE#cxdb_ui=}"
 ```
 
-To open the CXDB UI in a browser when needed, run:
+Use the endpoint printed by `start-cxdb-ui.sh` (`cxdb_ui=...`) as the source of truth. To open the UI in a browser when needed, run:
 
 ```bash
 KILROY_CXDB_OPEN_UI=1 ./scripts/start-cxdb-ui.sh
@@ -65,6 +84,8 @@ curl -fsS "$CXDB_URL/v1/contexts/$CONTEXT_ID/turns?view=typed&limit=20"
 
 To build a reliable picture of run state:
 
+Always inspect `graph.dot` first so status is interpreted in graph context.
+
 1. `manifest.json`: run identity, graph name, repo, worktree, `started_at`.
 2. `live.json`: most recent event.
 3. `checkpoint.json`: last completed node and failure context.
@@ -72,6 +93,7 @@ To build a reliable picture of run state:
 5. `progress.ndjson`: full event timeline.
 
 ```bash
+sed -n '1,200p' "$RUN_ROOT/graph.dot"
 sed -n '1,200p' "$RUN_ROOT/manifest.json"
 sed -n '1,200p' "$RUN_ROOT/live.json"
 [ -f "$RUN_ROOT/checkpoint.json" ] && sed -n '1,200p' "$RUN_ROOT/checkpoint.json"
@@ -100,7 +122,7 @@ tail -n 1 "$RUN_ROOT/progress.ndjson"
 To avoid filtering for non-existent event keys, discover the active event schema before building event-specific queries:
 
 ```bash
-jq -r '.event // empty' "$RUN_ROOT/progress.ndjson" | sort | uniq -c | sort -nr
+jq -r '.event? // empty' "$RUN_ROOT/progress.ndjson" | sort | uniq -c | sort -nr
 ```
 
 To inspect fields for a specific event type, run:
@@ -128,7 +150,7 @@ jq -rc 'select(.event!="branch_heartbeat") | {ts,event,node_id,status,branch_key
 
 ```bash
 # broad but low immediate diagnostic value
-jq -r '.event' "$RUN_ROOT/progress.ndjson" | sort | uniq -c | sort -nr
+jq -r '.event? // empty' "$RUN_ROOT/progress.ndjson" | sort | uniq -c | sort -nr
 
 # better for current state
 jq -rc 'select(.event!="branch_heartbeat") | {ts,event,node_id,status,branch_key,branch_event,branch_status,branch_failure_reason}' \

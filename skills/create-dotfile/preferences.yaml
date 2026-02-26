@@ -2,7 +2,7 @@
 # Pipeline Model Preferences
 # ==========================================================================
 #
-# This file controls model defaults for the english-to-dotfile
+# This file controls model defaults for the create-dotfile
 # skill when generating .dot pipeline files.
 #
 # The skill reads this file at the start of model selection.

@@ -106,6 +106,9 @@ All work happens on a release branch in a worktree — main is untouched until t
 
 ```bash
 # From the main repo
+git fetch origin
+git checkout main
+git pull --ff-only origin main
 git worktree add .worktrees/release-vX.Y.Z -b release/vX.Y.Z main
 cd .worktrees/release-vX.Y.Z
 go mod download

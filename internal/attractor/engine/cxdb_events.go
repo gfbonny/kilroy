@@ -39,6 +39,9 @@ func (e *Engine) cxdbRunStarted(ctx context.Context, baseSHA string) error {
 	if _, err := os.Stat(filepath.Join(e.LogsRoot, "run_config.json")); err == nil {
 		_, _ = e.CXDB.PutArtifactFile(ctx, "", "run_config.json", filepath.Join(e.LogsRoot, "run_config.json"))
 	}
+	if _, err := os.Stat(inputRunManifestPath(e.LogsRoot)); err == nil {
+		_, _ = e.CXDB.PutArtifactFile(ctx, "", inputManifestFileName, inputRunManifestPath(e.LogsRoot))
+	}
 	openrouterCatalogPath := filepath.Join(e.LogsRoot, "modeldb", "openrouter_models.json")
 	if _, err := os.Stat(openrouterCatalogPath); err == nil {
 		_, _ = e.CXDB.PutArtifactFile(ctx, "", "modeldb/openrouter_models.json", openrouterCatalogPath)
@@ -107,13 +110,16 @@ func (e *Engine) cxdbStageFinished(ctx context.Context, node *model.Node, out ru
 	if _, err := os.Stat(filepath.Join(stageDir, "parallel_results.json")); err == nil {
 		_, _ = e.CXDB.PutArtifactFile(ctx, node.ID, "parallel_results.json", filepath.Join(stageDir, "parallel_results.json"))
 	}
+	if _, err := os.Stat(filepath.Join(stageDir, inputManifestFileName)); err == nil {
+		_, _ = e.CXDB.PutArtifactFile(ctx, node.ID, inputManifestFileName, filepath.Join(stageDir, inputManifestFileName))
+	}
 	// Backend-native traces and agent loop logs (best-effort).
 	for _, name := range []string{
 		"stage.tgz",
 		"events.ndjson",
 		"events.json",
 		"stdout.log",
-		"stderr.log",
+		toolStderrFileName,
 		"panic.txt",
 		"output.json",
 		"output_schema.json",
@@ -122,8 +128,8 @@ func (e *Engine) cxdbStageFinished(ctx context.Context, node *model.Node, out ru
 		"api_response.json",
 		"cli_invocation.json",
 		"cli_timing.json",
-		"tool_invocation.json",
-		"tool_timing.json",
+		toolInvocationFileName,
+		toolTimingFileName,
 	} {
 		if _, err := os.Stat(filepath.Join(stageDir, name)); err == nil {
 			_, _ = e.CXDB.PutArtifactFile(ctx, node.ID, name, filepath.Join(stageDir, name))

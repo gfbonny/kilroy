@@ -1,6 +1,6 @@
 # Ingestor v1 Specification
 
-**The Ingestor** converts English requirements into validated `.dot` pipeline files for Kilroy's Attractor engine. It bridges the gap between human intent and machine-executable pipelines by invoking Claude Code with the `english-to-dotfile` skill.
+**The Ingestor** converts English requirements into validated `.dot` pipeline files for Kilroy's Attractor engine. It bridges the gap between human intent and machine-executable pipelines by invoking Claude Code with the `create-dotfile` skill.
 
 ---
 
@@ -20,7 +20,7 @@ Multiple positional words are joined with spaces.
 
 ### 1.2 Skill File
 
-A markdown file (default: `skills/english-to-dotfile/SKILL.md`) containing instructions that teach the LLM how to produce valid `.dot` pipeline files. The skill is appended to Claude Code's system prompt via `--append-system-prompt`, preserving Claude Code's built-in tool instructions.
+A markdown file (default: `skills/create-dotfile/SKILL.md`) containing instructions that teach the LLM how to produce valid `.dot` pipeline files. The skill is appended to Claude Code's system prompt via `--append-system-prompt`, preserving Claude Code's built-in tool instructions.
 
 ### 1.3 Repository Context
 
@@ -182,7 +182,7 @@ Flags:
 
 ### 5.1 Skill Auto-Detection
 
-When `--skill` is not specified, the ingestor first looks for `skills/english-to-dotfile/SKILL.md` relative to the repository root. If not found, it falls back to binary-relative install paths (for example `<kilroy-prefix>/share/kilroy/skills/english-to-dotfile/SKILL.md`) and module-cache paths derived from build metadata for `go install` binaries. If no default skill file is found, ingest fails fast.
+When `--skill` is not specified, the ingestor first looks for `skills/create-dotfile/SKILL.md` relative to the repository root. If not found, it falls back to binary-relative install paths (for example `<kilroy-prefix>/share/kilroy/skills/create-dotfile/SKILL.md`) and module-cache paths derived from build metadata for `go install` binaries. If no default skill file is found, ingest fails fast.
 
 ### 5.2 Examples
 
@@ -235,7 +235,7 @@ kilroy attractor ingest --skill /path/to/custom-skill.md "Build a chat app"
 ### 8.2 Internal
 
 - **`internal/attractor/engine`**: `Prepare()` for `.dot` validation.
-- **`skills/english-to-dotfile/SKILL.md`**: The skill document that teaches the LLM to generate valid pipelines.
+- **`skills/create-dotfile/SKILL.md`**: The skill document that teaches the LLM to generate valid pipelines.
 
 ---
 

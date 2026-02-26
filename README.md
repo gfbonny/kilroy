@@ -24,19 +24,6 @@ brew install kilroy
 go install github.com/danshapiro/kilroy/cmd/kilroy@latest
 ```
 
-### Binary Download
-
-Download the latest release from [GitHub Releases](https://github.com/danshapiro/kilroy/releases).
-
-| Platform       | Archive                          |
-|----------------|----------------------------------|
-| macOS (Apple)  | `kilroy_*_darwin_arm64.tar.gz`   |
-| macOS (Intel)  | `kilroy_*_darwin_amd64.tar.gz`   |
-| Linux (x86_64) | `kilroy_*_linux_amd64.tar.gz`    |
-| Linux (ARM64)  | `kilroy_*_linux_arm64.tar.gz`    |
-| Windows        | `kilroy_*_windows_amd64.zip`     |
-| Windows (ARM)  | `kilroy_*_windows_arm64.zip`     |
-
 ### Build from Source
 
 ```bash
@@ -75,7 +62,7 @@ This implementation is based on the Attractor specification by StrongDM at `http
 | Provider support | Conceptual provider abstraction | Provider plug-in runtime with built-ins: OpenAI, Anthropic, Google, Kimi, ZAI, Minimax |
 | Backend selection | Spec allows flexible backend choices | Backend is mandatory per provider (`api`/`cli`), no implicit defaults |
 | Checkpointing + persistence | Attractor/CXDB contracts | Required git branch/worktree/commit-per-node and concrete artifact layout |
-| Ingestion | Ingestor behavior described in spec docs | `attractor ingest` implementation: Claude CLI + `english-to-dotfile` skill |
+| Ingestion | Ingestor behavior described in spec docs | `attractor ingest` implementation: Claude CLI + `create-dotfile` skill |
 
 ## Prerequisites
 
@@ -102,7 +89,7 @@ go build -o kilroy ./cmd/kilroy
 
 Notes:
 
-- Ingest auto-detects `skills/english-to-dotfile/SKILL.md` from `--repo` (default: cwd), then falls back to paths relative to the `kilroy` binary (including Homebrew-style `../share/kilroy/skills/...`) and Go module-cache install roots from build metadata (`go install`).
+- Ingest auto-detects `skills/create-dotfile/SKILL.md` from `--repo` (default: cwd), then falls back to paths relative to the `kilroy` binary (including Homebrew-style `../share/kilroy/skills/...`) and Go module-cache install roots from build metadata (`go install`).
 - Use `--skill <path>` if your skill file is elsewhere.
 
 ### 3) Validate the pipeline
@@ -406,7 +393,7 @@ The server defaults to localhost-only binding and includes CSRF protection. Ther
 ## Skills Included In This Repo
 
 - `skills/using-kilroy/SKILL.md`: operational workflow for ingest/validate/run/resume.
-- `skills/english-to-dotfile/SKILL.md`: requirements-to-DOT generation instructions.
+- `skills/create-dotfile/SKILL.md`: requirements-to-DOT generation instructions.
 
 ## References
 

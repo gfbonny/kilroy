@@ -126,7 +126,7 @@ done
 		t.Fatal(err)
 	}
 	stdoutPath := filepath.Join(t.TempDir(), "stdout.log")
-	stderrPath := filepath.Join(t.TempDir(), "stderr.log")
+	stderrPath := filepath.Join(t.TempDir(), toolStderrFileName)
 	stdoutFile, err := os.Create(stdoutPath)
 	if err != nil {
 		t.Fatal(err)
@@ -208,7 +208,7 @@ sleep 5
 	}
 
 	stdoutPath := filepath.Join(t.TempDir(), "stdout.log")
-	stderrPath := filepath.Join(t.TempDir(), "stderr.log")
+	stderrPath := filepath.Join(t.TempDir(), toolStderrFileName)
 	stdoutFile, err := os.Create(stdoutPath)
 	if err != nil {
 		t.Fatal(err)

@@ -33,6 +33,12 @@ These three specs are the true north for system design. If you are making a chan
 - `scripts/`: operational helpers (`e2e.sh`, `e2e-guardrail-matrix.sh`, `start-cxdb.sh`, `run_benchmarks.sh`).
 - `demo/`, `docs/`, `skills/`: sample graphs, architecture/spec references, and ingestion skills.
 
+## Skill Symlink Layout
+- Canonical skill content lives under `skills/<name>/`.
+- `.claude/skills/<name>` must be a symlink to `../../skills/<name>`.
+- `.agents/skills/<name>` must be a symlink to `../../.claude/skills/<name>`.
+- When adding/removing/renaming repo skills, update both symlink directories in the same change.
+
 ## Build, Test, and Development Commands
 - `go build -o ./kilroy ./cmd/kilroy`: build the local CLI binary.
 - `go test ./...`: run the full Go test suite.

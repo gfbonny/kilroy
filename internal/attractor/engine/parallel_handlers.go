@@ -180,7 +180,7 @@ func dispatchParallelBranches(
 
 	// Kilroy git model: create the checkpoint commit FIRST so branch work is a descendant.
 	msg := fmt.Sprintf("attractor(%s): %s (%s)", exec.Engine.Options.RunID, sourceNodeID, runtime.StatusSuccess)
-	baseSHA, err := exec.Engine.commitAllowEmptyCheckpoint(msg)
+	baseSHA, err := gitutil.CommitAllowEmpty(exec.WorktreeDir, msg)
 	if err != nil {
 		return nil, "", err
 	}
@@ -384,20 +384,23 @@ func (h *ParallelHandler) runBranch(ctx context.Context, exec *Execution, parall
 	emitBranchProgress("branch_setup_ready", nil)
 
 	branchEng := &Engine{
-		Graph:              exec.Graph,
-		Options:            exec.Engine.Options,
-		DotSource:          exec.Engine.DotSource,
-		RunConfig:          exec.Engine.RunConfig,
-		RunBranch:          branchName,
-		WorktreeDir:        worktreeDir,
-		LogsRoot:           branchRoot,
-		Context:            exec.Context.Clone(),
-		Registry:           exec.Engine.Registry,
-		CodergenBackend:    exec.Engine.CodergenBackend,
-		Interviewer:        exec.Engine.Interviewer,
-		ModelCatalogSHA:    exec.Engine.ModelCatalogSHA,
-		ModelCatalogSource: exec.Engine.ModelCatalogSource,
-		ModelCatalogPath:   exec.Engine.ModelCatalogPath,
+		Graph:                      exec.Graph,
+		Options:                    exec.Engine.Options,
+		DotSource:                  exec.Engine.DotSource,
+		RunBranch:                  branchName,
+		WorktreeDir:                worktreeDir,
+		LogsRoot:                   branchRoot,
+		Context:                    exec.Context.Clone(),
+		Registry:                   exec.Engine.Registry,
+		CodergenBackend:            exec.Engine.CodergenBackend,
+		Interviewer:                exec.Engine.Interviewer,
+		ModelCatalogSHA:            exec.Engine.ModelCatalogSHA,
+		ModelCatalogSource:         exec.Engine.ModelCatalogSource,
+		ModelCatalogPath:           exec.Engine.ModelCatalogPath,
+		InputMaterializationPolicy: exec.Engine.InputMaterializationPolicy,
+		InputReferenceInferer:      exec.Engine.InputReferenceInferer,
+		InputInferenceCache:        copyInferredReferenceCache(exec.Engine.InputInferenceCache),
+		InputSourceTargetMap:       copyStringStringMap(exec.Engine.InputSourceTargetMap),
 	}
 	if exec.Engine.CXDB != nil {
 		if fork, err := exec.Engine.CXDB.ForkFromHead(ctx); err == nil {
@@ -432,6 +435,23 @@ func (h *ParallelHandler) runBranch(ctx context.Context, exec *Execution, parall
 			extra["branch_to_node"] = toNode
 		}
 		emitBranchProgress(eventName, extra)
+	}
+	if err := branchEng.materializeBranchStartupInputs(ctx, exec.WorktreeDir, exec.Engine.LogsRoot); err != nil {
+		return parallelBranchResult{
+			BranchKey:   key,
+			BranchName:  branchName,
+			StartNodeID: edge.To,
+			StopNodeID:  joinID,
+			LogsRoot:    branchRoot,
+			WorktreeDir: worktreeDir,
+			Error:       err.Error(),
+			Outcome:     runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()},
+		}
+	}
+	if branchEng.CXDB != nil {
+		if _, err := os.Stat(inputRunManifestPath(branchRoot)); err == nil {
+			_, _ = branchEng.CXDB.PutArtifactFile(ctx, "", inputManifestFileName, inputRunManifestPath(branchRoot))
+		}
 	}
 	emitBranchProgress("branch_subgraph_start", nil)
 	// Spec §9.6: emit ParallelBranchStarted CXDB event.
@@ -893,6 +913,23 @@ func sanitizeRefComponent(s string) string {
 	out := strings.Trim(b.String(), "-")
 	if out == "" {
 		return ""
+	}
+	return out
+}
+
+func copyInferredReferenceCache(in map[string][]InferredReference) map[string][]InferredReference {
+	if len(in) == 0 {
+		return map[string][]InferredReference{}
+	}
+	out := make(map[string][]InferredReference, len(in))
+	for key, refs := range in {
+		if len(refs) == 0 {
+			out[key] = nil
+			continue
+		}
+		cp := make([]InferredReference, len(refs))
+		copy(cp, refs)
+		out[key] = cp
 	}
 	return out
 }

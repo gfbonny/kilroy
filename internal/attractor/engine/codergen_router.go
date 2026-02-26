@@ -217,7 +217,7 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 		for k, v := range buildStageRuntimeEnv(execCtx, node.ID) {
 			stageEnv[k] = v
 		}
-		overrides := buildAgentLoopOverrides(execCtx.WorktreeDir, stageEnv)
+		overrides := buildAgentLoopOverrides(artifactPolicyFromExecution(execCtx), stageEnv)
 		env := agent.NewLocalExecutionEnvironmentWithPolicy(execCtx.WorktreeDir, overrides, []string{"CLAUDECODE"})
 		text, used, err := r.withFailoverText(ctx, execCtx, node, client, provider, modelID, func(prov string, mid string) (string, error) {
 			var profile agent.ProviderProfile
@@ -280,6 +280,9 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 				enc := json.NewEncoder(eventsFile)
 				encodeFailed := false
 				for ev := range sess.Events() {
+					// Session events are concrete stage activity, even if the
+					// heartbeat ticker has not fired yet.
+					recordStageActivity(execCtx, ev.Timestamp)
 					if !encodeFailed {
 						if err := enc.Encode(ev); err != nil {
 							encodeFailed = true
@@ -308,7 +311,7 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 			apiStart := time.Now()
 			go func() {
 				defer close(heartbeatDone)
-				interval := codergenHeartbeatInterval()
+				interval := codergenHeartbeatIntervalForExecution(execCtx)
 				if interval <= 0 {
 					return
 				}
@@ -931,7 +934,7 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 		stageEnv[k] = v
 	}
 	providerKey := normalizeProviderKey(provider)
-	stderrPath := filepath.Join(stageDir, "stderr.log")
+	stderrPath := filepath.Join(stageDir, toolStderrFileName)
 	readStderr := func() string {
 		b, err := os.ReadFile(stderrPath)
 		if err != nil {
@@ -972,7 +975,7 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 	codexSemantics := usesCodexCLISemantics(providerKey, exe)
 
 	// Build the base env once — used by codex initial + retries and non-codex paths.
-	baseEnv := buildBaseNodeEnv(execCtx.WorktreeDir)
+	baseEnv := buildBaseNodeEnv(artifactPolicyFromExecution(execCtx))
 
 	var isolatedEnv []string
 	var isolatedMeta map[string]any
@@ -982,7 +985,7 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 		if err != nil {
 			return "", classifiedFailure(err, ""), nil
 		}
-		// CARGO_TARGET_DIR is already set by buildBaseNodeEnv — no need for
+		// CARGO_TARGET_DIR is set by resolved artifact policy env when configured — no need for
 		// the duplicate check that was here before.
 	}
 
@@ -1139,7 +1142,7 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 		heartbeatDone := make(chan struct{})
 		go func() {
 			defer close(heartbeatDone)
-			interval := codergenHeartbeatInterval()
+			interval := codergenHeartbeatIntervalForExecution(execCtx)
 			if interval <= 0 {
 				return
 			}
@@ -1611,14 +1614,54 @@ func scrubConflictingProviderEnvKeys(base []string, providerKey string) []string
 	return out
 }
 
-func codergenHeartbeatInterval() time.Duration {
+const (
+	codergenHeartbeatDefaultInterval = 60 * time.Second
+	codergenHeartbeatMinInterval     = 50 * time.Millisecond
+)
+
+func codergenHeartbeatIntervalForExecution(exec *Execution) time.Duration {
+	stallTimeout := time.Duration(0)
+	if exec != nil && exec.Engine != nil {
+		stallTimeout = exec.Engine.Options.StallTimeout
+	}
+	return codergenHeartbeatIntervalWithStallTimeout(stallTimeout)
+}
+
+func codergenHeartbeatIntervalWithStallTimeout(stallTimeout time.Duration) time.Duration {
+	if override := parseCodergenHeartbeatEnv(); override > 0 {
+		return override
+	}
+	if stallTimeout <= 0 {
+		return codergenHeartbeatDefaultInterval
+	}
+	interval := stallTimeout / 3
+	if interval < codergenHeartbeatMinInterval {
+		interval = codergenHeartbeatMinInterval
+	}
+	if interval > codergenHeartbeatDefaultInterval {
+		interval = codergenHeartbeatDefaultInterval
+	}
+	return interval
+}
+
+func recordStageActivity(exec *Execution, at time.Time) {
+	if exec == nil || exec.Engine == nil {
+		return
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	exec.Engine.setLastProgressTime(at)
+}
+
+func parseCodergenHeartbeatEnv() time.Duration {
 	v := strings.TrimSpace(os.Getenv("KILROY_CODERGEN_HEARTBEAT_INTERVAL"))
 	if v == "" {
-		return 60 * time.Second
+		return 0
 	}
 	d, err := time.ParseDuration(v)
 	if err != nil {
-		return 60 * time.Second
+		return 0
 	}
 	return d
 }

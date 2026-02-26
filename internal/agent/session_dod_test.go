@@ -1162,8 +1162,8 @@ func TestSession_ShellTool_UsesDefaultTimeoutAndAllowsOverride(t *testing.T) {
 	}
 	sess.Close()
 
-	if got := env.LastTimeoutMS(); got != 10_000 {
-		t.Fatalf("default shell timeout: got %d want %d", got, 10_000)
+	if got := env.LastTimeoutMS(); got != 600_000 {
+		t.Fatalf("default shell timeout: got %d want %d", got, 600_000)
 	}
 
 	// Override per-call timeout_ms.
@@ -1295,7 +1295,7 @@ func TestSession_ShellTool_TimeoutAppendsMessageToToolResult(t *testing.T) {
 	}
 	for _, want := range []string{
 		"timed_out=true",
-		"Command timed out after 10000ms",
+		"Command timed out after 600000ms",
 		"You can retry with a longer timeout",
 	} {
 		if !strings.Contains(toolResult, want) {

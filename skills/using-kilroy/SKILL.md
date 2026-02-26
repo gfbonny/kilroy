@@ -17,14 +17,15 @@ Kilroy is a local-first Attractor runner:
 Use these exact command forms:
 
 ```text
-kilroy attractor run --graph <file.dot> --config <run.yaml> [--run-id <id>] [--logs-root <dir>]
+kilroy attractor run [--detach] [--allow-test-shim] [--confirm-stale-build] [--no-cxdb] [--force-model <provider=model>] --graph <file.dot> --config <run.yaml> [--run-id <id>] [--logs-root <dir>]
 kilroy attractor resume --logs-root <dir>
 kilroy attractor resume --cxdb <http_base_url> --context-id <id>
 kilroy attractor resume --run-branch <attractor/run/...> [--repo <path>]
-kilroy attractor status --logs-root <dir> [--json]
+kilroy attractor status [--logs-root <dir> | --latest] [--json] [--follow|-f] [--cxdb] [--raw] [--watch] [--interval <sec>]
 kilroy attractor stop --logs-root <dir> [--grace-ms <ms>] [--force]
 kilroy attractor validate --graph <file.dot>
-kilroy attractor ingest [--output <file.dot>] [--model <model>] [--skill <skill.md>] [--repo <path>] [--no-validate] <requirements>
+kilroy attractor ingest [--output <file.dot>] [--model <model>] [--skill <skill.md>] [--repo <path>] [--max-turns <n>] [--no-validate] <requirements>
+kilroy attractor serve [--addr <host:port>]
 ```
 
 ## Workflow
@@ -80,8 +81,9 @@ tail -f <logs_root>/progress.ndjson
 - Uses Claude CLI (`KILROY_CLAUDE_PATH` override, default executable `claude`).
 - Default model: `claude-sonnet-4-5`.
 - Default repo: current working directory.
-- Default skill path auto-detection: `<repo>/skills/english-to-dotfile/SKILL.md`, then binary-relative fallbacks (for example `<kilroy-prefix>/share/kilroy/skills/english-to-dotfile/SKILL.md`) and Go module-cache roots from binary build metadata.
+- Default skill path auto-detection: `<repo>/skills/create-dotfile/SKILL.md`, then binary-relative fallbacks (for example `<kilroy-prefix>/share/kilroy/skills/create-dotfile/SKILL.md`) and Go module-cache roots from binary build metadata.
 - If no skill file exists, ingest fails fast.
+- `--max-turns` defaults to 15 when omitted.
 - Validation runs by default; use `--no-validate` to skip.
 
 ## Validate Semantics
@@ -148,8 +150,9 @@ git:
 
 Notes:
 
-- Provider keys accept `openai`, `anthropic`, `google` (`gemini` alias maps to `google`).
+- Provider keys accept `openai`, `anthropic`, `google` (`gemini` alias maps to `google`), `kimi`, `zai`, `cerebras`, and `minimax`.
 - If a graph node uses provider `P`, `llm.providers.P.backend` must be set (`api` or `cli`).
+- `backend: cli` is currently supported for `openai`, `anthropic`, and `google` (including the `gemini` alias).
 - In v1 behavior, runs require a clean repo and checkpoint each node.
 - Prefer first-class run config policy knobs over env tuning:
   - `runtime_policy` for stage timeout, stall watchdog, and retry cap.
@@ -160,8 +163,8 @@ Notes:
 CLI backend mappings:
 
 - `openai` -> `codex exec --json --sandbox workspace-write -m <model> -C <worktree>`
-- `anthropic` -> `claude -p --output-format stream-json --model <model>`
-- `google` -> `gemini -p --output-format stream-json --yolo --model <model>`
+- `anthropic` -> `claude -p --dangerously-skip-permissions --output-format stream-json --verbose --model <model> "<prompt>"`
+- `google` -> `gemini -p --output-format stream-json --yolo --model <model> "<prompt>"`
 
 CLI executable overrides:
 
@@ -174,6 +177,12 @@ API backend credentials:
 - OpenAI: `OPENAI_API_KEY` (`OPENAI_BASE_URL` optional)
 - Anthropic: `ANTHROPIC_API_KEY` (`ANTHROPIC_BASE_URL` optional)
 - Google: `GEMINI_API_KEY` or `GOOGLE_API_KEY` (`GEMINI_BASE_URL` optional)
+- Kimi: `KIMI_API_KEY`
+- Z.ai: `ZAI_API_KEY`
+- Cerebras: `CEREBRAS_API_KEY`
+- MiniMax: `MINIMAX_API_KEY`
+
+API protocol/base URL/path overrides are configured in `llm.providers.<provider>.api` in run config.
 
 ## Run Output and Exit Codes
 
@@ -269,6 +278,18 @@ If preflight or launch fails, **diagnose and present options** — never silentl
 
 This guard applies from the moment you begin building or executing a `kilroy attractor run` command until the user explicitly asks for changes. It does NOT apply during graph authoring/editing phases before a run is requested.
 
+## Launch Intent Priority
+
+When the user clearly instructs you to start/launch/run Kilroy, begin the run immediately. Do not ask extra "are you sure?" confirmation questions that delay execution.
+
+Rationale: users often issue launch commands right before stepping away, and waiting for an unnecessary confirmation can waste hours.
+
+Execution rule:
+
+- If the requested run config is a production profile (for example `llm.cli_profile: real`) and the user clearly asked to start the run, start the production run.
+- Prefer detached launch for long-running jobs unless the user explicitly requests foreground execution.
+- Only stop to ask questions when required launch inputs are genuinely missing or contradictory (for example no graph path and no run config path).
+
 ## Preflight Failure Playbook
 
 When preflight checks fail, follow this sequence:
@@ -314,4 +335,4 @@ When Kilroy runs inside a Claude Code session, the `CLAUDECODE` env var is set. 
 - Attractor spec: `docs/strongdm/attractor/attractor-spec.md`
 - Ingestor spec: `docs/strongdm/attractor/ingestor-spec.md`
 - Test coverage map: `docs/strongdm/attractor/test-coverage-map.md`
-- English-to-dotfile skill: `skills/english-to-dotfile/SKILL.md`
+- Create-dotfile skill: `skills/create-dotfile/SKILL.md`

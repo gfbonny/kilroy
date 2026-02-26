@@ -61,7 +61,7 @@ func (c *SessionConfig) applyDefaults() {
 		c.MaxToolRoundsPerInput = 200
 	}
 	if c.DefaultCommandTimeoutMS <= 0 {
-		c.DefaultCommandTimeoutMS = 10_000
+		c.DefaultCommandTimeoutMS = 600_000
 	}
 	if c.MaxCommandTimeoutMS <= 0 {
 		c.MaxCommandTimeoutMS = 600_000

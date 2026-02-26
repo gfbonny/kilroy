@@ -1508,6 +1508,10 @@ Severity:
 | `prompt_on_conditional_node` | WARNING | Diamond (conditional) nodes should not have a `prompt` attribute — prompts are ignored by the conditional handler. Use shape=box if the prompt should execute. |
 | `loop_restart_failure_class_guard` | WARNING | A `loop_restart=true` edge on a failure path should be guarded by `context.failure_class=transient_infra` and paired with a non-restart deterministic fail edge. |
 | `escalation_models_syntax` | WARNING | `escalation_models` entries must use `provider:model` format (e.g., `"anthropic:claude-opus-4-6"`). |
+| `template_postmortem_replan_entry` | WARNING | For template-provenance graphs (`provenance_version` set), `outcome=needs_replan` should route from `postmortem` to planning entry (`plan_fanout`). |
+| `template_postmortem_broad_rollback` | WARNING | For template-provenance graphs (`provenance_version` set), avoid unconditional `postmortem -> check_toolchain`; prefer conditional domain routing with implement fallback. |
+
+Template-policy lints may be provenance-scoped. Rules keyed to `graph.provenance_version` guide generated default topologies without imposing universal architecture constraints on all DOT graphs.
 
 ### 7.3 Validation API
 
@@ -2225,6 +2229,16 @@ When `auto_status=true` on a node and no `status.json` was written by the handle
 ### Appendix C.1: Reliability Contracts (Normative)
 
 - `status.json` in the stage directory is authoritative. A **legacy status fallback** (for example, worktree-level `status.json`) may be copied into the stage directory only when canonical stage output is missing and the fallback payload is valid outcome JSON.
+- **Input materialization** is a first-class runtime reliability contract. When `inputs.materialize.enabled=true`, the engine must hydrate required input files into the active run worktree before stage execution.
+- Input materialization must compute **transitive reference closure** over discovered file/path/glob references when `inputs.materialize.follow_references=true`.
+- Input closure policy is intentionally unbounded: no fixed engine-imposed caps on recursion depth, file count, or include-list size. Termination is driven by context cancellation/timeouts and cycle detection.
+- `inputs.materialize.include` is **fail-on-unmatched**. Unmatched include patterns must produce deterministic `failure_reason=input_include_missing` with unmatched pattern listing in progress/checkpoint artifacts.
+- `inputs.materialize.default_include` is **best-effort**. Unmatched default include patterns must not fail the run.
+- Run startup must persist a canonical input snapshot under `logs_root/input_snapshot/` and a run-level manifest at `logs_root/inputs_manifest.json`.
+- **Run and branch worktree hydration** must preserve input closure availability. Parallel branch worktrees must be hydrated before branch stage execution and persist branch-local manifests at `<branch_logs_root>/inputs_manifest.json`.
+- Stage attempts must write stage-local input manifests at `logs_root/<node_id>/inputs_manifest.json` and expose `KILROY_INPUTS_MANIFEST_PATH` to stage runtimes.
+- Resume must provide hydration parity with fresh runs: after worktree recreation, required inputs are restored from persisted snapshot/manifest state (not mutable source workspace state).
+- LLM-assisted implicit reference inference (`inputs.materialize.infer_with_llm=true`) is additive. Inferer failures are non-fatal and must deterministically fall back to scanner-only closure with warnings.
 - Parallel branch activity must update parent watchdog timing through **fanout liveness** events so parent runs do not false-timeout while branch work is active.
 - Run-level cancellation takes precedence over branch-local retry policy. No additional stage attempts may start after cancellation is observed.
 - Deterministic cycle breaking uses `loop_restart_signature_limit` and applies only to deterministic failures. The **canceled failure class** must not trip deterministic cycle breakers.

@@ -471,6 +471,11 @@ digraph G {
 	if !strings.Contains(prompt, stageStatusPathEnvKey) {
 		t.Fatalf("prompt.md missing env key %s", stageStatusPathEnvKey)
 	}
+	// Guardrail: input materialization preamble can be prepended, but status
+	// contract language must remain present and authoritative.
+	if !strings.Contains(prompt, inputsManifestEnvKey) {
+		t.Fatalf("prompt.md missing input manifest env key %s", inputsManifestEnvKey)
+	}
 	wantPrimary := filepath.Join(res.WorktreeDir, "status.json")
 	if !strings.Contains(prompt, wantPrimary) {
 		t.Fatalf("prompt.md missing absolute worktree status path %q", wantPrimary)

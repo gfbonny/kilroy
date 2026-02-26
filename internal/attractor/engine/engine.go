@@ -134,6 +134,10 @@ type Engine struct {
 	// Optional: config used to start the run (metaspec run config schema). Snapshotted to logs_root for resume.
 	RunConfig *RunConfigFile
 
+	// Resolved once per run (or restored from checkpoint on resume) so
+	// artifact behavior is deterministic across retries and resumes.
+	ArtifactPolicy ResolvedArtifactPolicy
+
 	RunBranch string
 
 	WorktreeDir string
@@ -159,6 +163,13 @@ type Engine struct {
 	ModelCatalogSHA    string
 	ModelCatalogSource string
 	ModelCatalogPath   string
+
+	// Input materialization policy + inference runtime.
+	InputMaterializationPolicy InputMaterializationPolicy
+	InputReferenceInferer      InputReferenceInferer
+	InputInferenceCache        map[string][]InferredReference
+	InputSourceTargetMap       map[string]string
+	currentInputManifestPath   string
 
 	warningsMu sync.Mutex
 	Warnings   []string
@@ -378,6 +389,9 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 	if err := gitutil.AddWorktree(e.Options.RepoPath, e.WorktreeDir, e.RunBranch); err != nil {
 		return nil, err
 	}
+	if err := e.materializeRunStartupInputs(ctx); err != nil {
+		return nil, err
+	}
 
 	// Run metadata.
 	if err := e.writeManifest(baseSHA); err != nil {
@@ -572,6 +586,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		e.Context.Set("failure_reason", out.FailureReason)
 		failureClass := classifyFailureClass(out)
 		e.Context.Set("failure_class", failureClass)
+		e.updateFailureDossierContext(node, out, failureClass, nodeRetries)
 
 		// Deterministic failure cycle detection: track failure signatures
 		// across consecutive stages. On success, reset the tracker. On
@@ -950,6 +965,11 @@ func (e *Engine) executeNode(ctx context.Context, node *model.Node) (runtime.Out
 	// attempt left a status.json behind and the handler doesn't write a new one, we'd incorrectly
 	// treat the stale file as authoritative. Clear it before each attempt.
 	_ = os.Remove(filepath.Join(stageDir, "status.json"))
+	if err := e.materializeStageInputs(ctx, node.ID); err != nil {
+		out := inputFailureOutcomeFromMaterializationError(err)
+		_ = writeJSON(filepath.Join(stageDir, "status.json"), out)
+		return out, nil
+	}
 	var (
 		out runtime.Outcome
 		err error
@@ -1320,7 +1340,7 @@ func (e *Engine) checkpoint(nodeID string, out runtime.Outcome, completed []stri
 	}
 	if sha == "" {
 		var err error
-		sha, err = e.commitAllowEmptyCheckpoint(msg)
+		sha, err = gitutil.CommitAllowEmptyWithExcludes(e.WorktreeDir, msg, e.checkpointExcludeGlobs())
 		if err != nil {
 			return "", err
 		}
@@ -1358,6 +1378,10 @@ func (e *Engine) checkpoint(nodeID string, out runtime.Outcome, completed []stri
 			cp.Extra["last_thread_key"] = e.lastResolvedThreadKey
 		}
 	}
+	cp.Extra[artifactPolicyResolvedExtraKey] = artifactPolicyResolvedEnvelope{
+		Version: artifactPolicyResolvedVersion,
+		Policy:  normalizeResolvedArtifactPolicy(e.ArtifactPolicy),
+	}
 	if err := cp.Save(filepath.Join(e.LogsRoot, "checkpoint.json")); err != nil {
 		return "", err
 	}
@@ -1365,17 +1389,10 @@ func (e *Engine) checkpoint(nodeID string, out runtime.Outcome, completed []stri
 }
 
 func (e *Engine) checkpointExcludeGlobs() []string {
-	if e == nil || e.RunConfig == nil {
+	if e == nil {
 		return nil
 	}
-	return append([]string{}, e.RunConfig.Git.CheckpointExcludeGlobs...)
-}
-
-func (e *Engine) commitAllowEmptyCheckpoint(message string) (string, error) {
-	if e == nil {
-		return "", fmt.Errorf("engine is nil")
-	}
-	return gitutil.CommitAllowEmptyWithExcludes(e.WorktreeDir, message, e.checkpointExcludeGlobs())
+	return append([]string{}, e.ArtifactPolicy.Checkpoint.ExcludeGlobs...)
 }
 
 func (e *Engine) writeManifest(baseSHA string) error {

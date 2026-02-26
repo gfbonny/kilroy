@@ -119,7 +119,7 @@ Two bugs:
 **Analysis:**
 
 The spec's default of 50 is dangerously high. With exponential backoff (200ms initial, factor 2.0, cap 60s), 50 retries can take over 45 minutes per node. Every existing DOT file in the codebase sets `default_max_retry=3`:
-- `skills/english-to-dotfile/reference_template.dot`: 3
+- `skills/create-dotfile/reference_template.dot`: 3
 - `demo/rogue/rogue.dot`: 3
 - `demo/rogue/rogue-spark.dot`: 3
 - All 6 research DOT files: 3

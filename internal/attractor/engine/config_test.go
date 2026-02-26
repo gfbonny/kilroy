@@ -57,6 +57,123 @@ modeldb:
 	}
 }
 
+func TestLoadRunConfigFile_RejectsUnknownTopLevelKey(t *testing.T) {
+	dir := t.TempDir()
+	yml := filepath.Join(dir, "run.yaml")
+	if err := os.WriteFile(yml, []byte(`
+version: 1
+repo:
+  path: /tmp/repo
+cxdb:
+  binary_addr: 127.0.0.1:9009
+  http_base_url: http://127.0.0.1:9010
+llm:
+  providers:
+    openai:
+      backend: api
+modeldb:
+  openrouter_model_info_path: /tmp/catalog.json
+unknown_top_level: true
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadRunConfigFile(yml)
+	if err == nil {
+		t.Fatal("expected strict decode error for unknown top-level key")
+	}
+	if !strings.Contains(err.Error(), "unknown_top_level") {
+		t.Fatalf("expected error to mention unknown_top_level, got: %v", err)
+	}
+}
+
+func TestLoadRunConfigFile_RejectsUnknownNestedKey(t *testing.T) {
+	dir := t.TempDir()
+	yml := filepath.Join(dir, "run.yaml")
+	if err := os.WriteFile(yml, []byte(`
+version: 1
+repo:
+  path: /tmp/repo
+cxdb:
+  binary_addr: 127.0.0.1:9009
+  http_base_url: http://127.0.0.1:9010
+llm:
+  providers:
+    openai:
+      backend: api
+      backnd: cli
+modeldb:
+  openrouter_model_info_path: /tmp/catalog.json
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadRunConfigFile(yml)
+	if err == nil {
+		t.Fatal("expected strict decode error for unknown nested key")
+	}
+	if !strings.Contains(err.Error(), "backnd") {
+		t.Fatalf("expected error to mention backnd, got: %v", err)
+	}
+}
+
+func TestLoadRunConfigFile_RejectsUnknownJSONTopLevelKey(t *testing.T) {
+	dir := t.TempDir()
+	js := filepath.Join(dir, "run.json")
+	if err := os.WriteFile(js, []byte(`{
+  "version": 1,
+  "repo": {"path": "/tmp/repo"},
+  "cxdb": {"binary_addr": "127.0.0.1:9009", "http_base_url": "http://127.0.0.1:9010"},
+  "llm": {"providers": {"openai": {"backend": "api"}}},
+  "modeldb": {"openrouter_model_info_path": "/tmp/catalog.json"},
+  "unknown_top_level": true
+}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadRunConfigFile(js)
+	if err == nil {
+		t.Fatal("expected strict decode error for unknown top-level JSON key")
+	}
+	if !strings.Contains(err.Error(), "unknown field") || !strings.Contains(err.Error(), "unknown_top_level") {
+		t.Fatalf("expected json unknown field error, got: %v", err)
+	}
+}
+
+func TestLoadRunConfigFile_AllowsGraphAndTaskMetadata(t *testing.T) {
+	dir := t.TempDir()
+	yml := filepath.Join(dir, "run.yaml")
+	if err := os.WriteFile(yml, []byte(`
+version: 1
+graph: demo/rogue/rogue.dot
+task: implement feature x
+repo:
+  path: /tmp/repo
+cxdb:
+  binary_addr: 127.0.0.1:9009
+  http_base_url: http://127.0.0.1:9010
+llm:
+  providers:
+    openai:
+      backend: api
+modeldb:
+  openrouter_model_info_path: /tmp/catalog.json
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadRunConfigFile(yml)
+	if err != nil {
+		t.Fatalf("expected graph/task metadata to be accepted, got: %v", err)
+	}
+	if got, want := cfg.Graph, "demo/rogue/rogue.dot"; got != want {
+		t.Fatalf("graph=%q want %q", got, want)
+	}
+	if got, want := cfg.Task, "implement feature x"; got != want {
+		t.Fatalf("task=%q want %q", got, want)
+	}
+}
+
 func TestLoadRunConfigFile_ModelDBOpenRouterKeys(t *testing.T) {
 	dir := t.TempDir()
 	yml := filepath.Join(dir, "run.yaml")
@@ -244,6 +361,118 @@ func loadRunConfigFromBytesForTest(t *testing.T, yml []byte) (*RunConfigFile, er
 		t.Fatalf("write run.yaml: %v", err)
 	}
 	return LoadRunConfigFile(p)
+}
+
+func TestLoadRunConfigFile_InputMaterializationConfig(t *testing.T) {
+	yml := []byte(`
+version: 1
+repo:
+  path: /tmp/repo
+cxdb:
+  binary_addr: 127.0.0.1:9009
+  http_base_url: http://127.0.0.1:9010
+llm:
+  providers:
+    openai:
+      backend: api
+modeldb:
+  openrouter_model_info_path: /tmp/catalog.json
+inputs:
+  materialize:
+    enabled: true
+    include:
+      - .ai/**
+      - C:/Users/me/**/*.md
+    default_include:
+      - docs/**/*.md
+    follow_references: true
+    infer_with_llm: true
+    llm_provider: openai
+    llm_model: gpt-5
+`)
+	cfg, err := loadRunConfigFromBytesForTest(t, yml)
+	if err != nil {
+		t.Fatalf("LoadRunConfigFile: %v", err)
+	}
+	m := cfg.Inputs.Materialize
+	if m.Enabled == nil || !*m.Enabled {
+		t.Fatal("inputs.materialize.enabled: expected true")
+	}
+	if got, want := strings.Join(m.Include, ","), ".ai/**,C:/Users/me/**/*.md"; got != want {
+		t.Fatalf("inputs.materialize.include: got %q want %q", got, want)
+	}
+	if got, want := strings.Join(m.DefaultInclude, ","), "docs/**/*.md"; got != want {
+		t.Fatalf("inputs.materialize.default_include: got %q want %q", got, want)
+	}
+	if m.FollowReferences == nil || !*m.FollowReferences {
+		t.Fatal("inputs.materialize.follow_references: expected true")
+	}
+	if m.InferWithLLM == nil || !*m.InferWithLLM {
+		t.Fatal("inputs.materialize.infer_with_llm: expected true")
+	}
+	if got, want := m.LLMProvider, "openai"; got != want {
+		t.Fatalf("inputs.materialize.llm_provider: got %q want %q", got, want)
+	}
+	if got, want := m.LLMModel, "gpt-5"; got != want {
+		t.Fatalf("inputs.materialize.llm_model: got %q want %q", got, want)
+	}
+}
+
+func TestLoadRunConfigFile_InputMaterializationDefaultsAndValidation(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		yml := []byte(`
+version: 1
+repo:
+  path: /tmp/repo
+cxdb:
+  binary_addr: 127.0.0.1:9009
+  http_base_url: http://127.0.0.1:9010
+llm:
+  providers:
+    openai:
+      backend: api
+modeldb:
+  openrouter_model_info_path: /tmp/catalog.json
+`)
+		cfg, err := loadRunConfigFromBytesForTest(t, yml)
+		if err != nil {
+			t.Fatalf("LoadRunConfigFile: %v", err)
+		}
+		m := cfg.Inputs.Materialize
+		if m.Enabled == nil || !*m.Enabled {
+			t.Fatal("inputs.materialize.enabled default: expected true")
+		}
+		if m.InferWithLLM == nil || *m.InferWithLLM {
+			t.Fatal("inputs.materialize.infer_with_llm default: expected false")
+		}
+		if got, want := strings.Join(m.DefaultInclude, ","), ".ai/*.md"; got != want {
+			t.Fatalf("inputs.materialize.default_include default: got %q want %q", got, want)
+		}
+	})
+
+	t.Run("infer_requires_model_and_provider", func(t *testing.T) {
+		yml := []byte(`
+version: 1
+repo:
+  path: /tmp/repo
+cxdb:
+  binary_addr: 127.0.0.1:9009
+  http_base_url: http://127.0.0.1:9010
+llm:
+  providers:
+    openai:
+      backend: api
+modeldb:
+  openrouter_model_info_path: /tmp/catalog.json
+inputs:
+  materialize:
+    infer_with_llm: true
+`)
+		_, err := loadRunConfigFromBytesForTest(t, yml)
+		if err == nil || !strings.Contains(err.Error(), "inputs.materialize.llm_provider") {
+			t.Fatalf("expected llm_provider validation error, got: %v", err)
+		}
+	})
 }
 
 func TestLoadRunConfig_CustomAPIProviderRequiresProtocol(t *testing.T) {

@@ -1,8 +1,10 @@
 package engine
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,8 +58,26 @@ type PreflightConfig struct {
 	PromptProbes PromptProbeConfig `json:"prompt_probes,omitempty" yaml:"prompt_probes,omitempty"`
 }
 
+type InputMaterializationConfig struct {
+	Enabled          *bool    `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	Include          []string `json:"include,omitempty" yaml:"include,omitempty"`
+	DefaultInclude   []string `json:"default_include,omitempty" yaml:"default_include,omitempty"`
+	FollowReferences *bool    `json:"follow_references,omitempty" yaml:"follow_references,omitempty"`
+	InferWithLLM     *bool    `json:"infer_with_llm,omitempty" yaml:"infer_with_llm,omitempty"`
+	LLMModel         string   `json:"llm_model,omitempty" yaml:"llm_model,omitempty"`
+	LLMProvider      string   `json:"llm_provider,omitempty" yaml:"llm_provider,omitempty"`
+}
+
+type InputConfig struct {
+	Materialize InputMaterializationConfig `json:"materialize,omitempty" yaml:"materialize,omitempty"`
+}
+
 type RunConfigFile struct {
 	Version int `json:"version" yaml:"version"`
+	// Graph and Task are optional operator metadata fields used by wrappers/UI.
+	// The engine does not consume them directly during run execution.
+	Graph string `json:"graph,omitempty" yaml:"graph,omitempty"`
+	Task  string `json:"task,omitempty" yaml:"task,omitempty"`
 
 	Repo struct {
 		Path string `json:"path" yaml:"path"`
@@ -99,6 +119,8 @@ type RunConfigFile struct {
 		CheckpointExcludeGlobs []string `json:"checkpoint_exclude_globs,omitempty" yaml:"checkpoint_exclude_globs,omitempty"`
 	} `json:"git" yaml:"git"`
 
+	ArtifactPolicy ArtifactPolicyConfig `json:"artifact_policy,omitempty" yaml:"artifact_policy,omitempty"`
+
 	Setup struct {
 		Commands  []string `json:"commands,omitempty" yaml:"commands,omitempty"`
 		TimeoutMS int      `json:"timeout_ms,omitempty" yaml:"timeout_ms,omitempty"`
@@ -106,6 +128,7 @@ type RunConfigFile struct {
 
 	RuntimePolicy RuntimePolicyConfig `json:"runtime_policy,omitempty" yaml:"runtime_policy,omitempty"`
 	Preflight     PreflightConfig     `json:"preflight,omitempty" yaml:"preflight,omitempty"`
+	Inputs        InputConfig         `json:"inputs,omitempty" yaml:"inputs,omitempty"`
 }
 
 func LoadRunConfigFile(path string) (*RunConfigFile, error) {
@@ -117,11 +140,11 @@ func LoadRunConfigFile(path string) (*RunConfigFile, error) {
 	ext := strings.ToLower(filepath.Ext(path))
 	switch ext {
 	case ".json":
-		if err := json.Unmarshal(b, &cfg); err != nil {
+		if err := decodeJSONStrict(b, &cfg); err != nil {
 			return nil, err
 		}
 	default:
-		if err := yaml.Unmarshal(b, &cfg); err != nil {
+		if err := decodeYAMLStrict(b, &cfg); err != nil {
 			return nil, err
 		}
 	}
@@ -130,6 +153,45 @@ func LoadRunConfigFile(path string) (*RunConfigFile, error) {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+func decodeJSONStrict(b []byte, cfg *RunConfigFile) error {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(cfg); err != nil {
+		return err
+	}
+	var trailing any
+	if err := dec.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("json: multiple top-level values are not allowed")
+		}
+		return err
+	}
+	return nil
+}
+
+func decodeYAMLStrict(b []byte, cfg *RunConfigFile) error {
+	dec := yaml.NewDecoder(bytes.NewReader(b))
+	dec.KnownFields(true)
+	if err := dec.Decode(cfg); err != nil {
+		return err
+	}
+	for {
+		var trailing any
+		if err := dec.Decode(&trailing); err != io.EOF {
+			if err != nil {
+				return err
+			}
+			// Allow empty trailing documents (for example a dangling "---").
+			if trailing == nil {
+				continue
+			}
+			return fmt.Errorf("yaml: multiple documents are not allowed")
+		}
+		break
+	}
+	return nil
 }
 
 func applyConfigDefaults(cfg *RunConfigFile) {
@@ -152,14 +214,7 @@ func applyConfigDefaults(cfg *RunConfigFile) {
 		cfg.Git.RequireClean = &t
 	}
 	cfg.Git.CheckpointExcludeGlobs = trimNonEmpty(cfg.Git.CheckpointExcludeGlobs)
-	if len(cfg.Git.CheckpointExcludeGlobs) == 0 {
-		cfg.Git.CheckpointExcludeGlobs = []string{
-			"**/.cargo-target*/**",
-			"**/.cargo_target*/**",
-			"**/.wasm-pack/**",
-			"**/.tmpbuild/**",
-		}
-	}
+	applyArtifactPolicyDefaults(cfg)
 	if cfg.LLM.Providers == nil {
 		cfg.LLM.Providers = map[string]ProviderConfig{}
 	}
@@ -212,6 +267,25 @@ func applyConfigDefaults(cfg *RunConfigFile) {
 	}
 
 	cfg.Preflight.PromptProbes.Transports = trimNonEmpty(cfg.Preflight.PromptProbes.Transports)
+	cfg.Inputs.Materialize.Include = trimNonEmpty(cfg.Inputs.Materialize.Include)
+	cfg.Inputs.Materialize.DefaultInclude = trimNonEmpty(cfg.Inputs.Materialize.DefaultInclude)
+	cfg.Inputs.Materialize.LLMProvider = strings.TrimSpace(cfg.Inputs.Materialize.LLMProvider)
+	cfg.Inputs.Materialize.LLMModel = strings.TrimSpace(cfg.Inputs.Materialize.LLMModel)
+	if cfg.Inputs.Materialize.Enabled == nil {
+		v := true
+		cfg.Inputs.Materialize.Enabled = &v
+	}
+	if cfg.Inputs.Materialize.FollowReferences == nil {
+		v := true
+		cfg.Inputs.Materialize.FollowReferences = &v
+	}
+	if cfg.Inputs.Materialize.InferWithLLM == nil {
+		v := false
+		cfg.Inputs.Materialize.InferWithLLM = &v
+	}
+	if len(cfg.Inputs.Materialize.DefaultInclude) == 0 {
+		cfg.Inputs.Materialize.DefaultInclude = []string{".ai/*.md"}
+	}
 }
 
 func validateConfig(cfg *RunConfigFile) error {
@@ -318,6 +392,17 @@ func validateConfig(cfg *RunConfigFile) error {
 			return err
 		}
 		cfg.Preflight.PromptProbes.Transports = normalized
+	}
+	if err := validateArtifactPolicyConfig(cfg); err != nil {
+		return err
+	}
+	if cfg.Inputs.Materialize.InferWithLLM != nil && *cfg.Inputs.Materialize.InferWithLLM {
+		if strings.TrimSpace(cfg.Inputs.Materialize.LLMProvider) == "" {
+			return fmt.Errorf("inputs.materialize.llm_provider is required when inputs.materialize.infer_with_llm=true")
+		}
+		if strings.TrimSpace(cfg.Inputs.Materialize.LLMModel) == "" {
+			return fmt.Errorf("inputs.materialize.llm_model is required when inputs.materialize.infer_with_llm=true")
+		}
 	}
 	return nil
 }

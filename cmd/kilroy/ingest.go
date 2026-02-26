@@ -161,7 +161,7 @@ func defaultIngestSkillCandidates(repoPath string) []string {
 		out = append(out, abs)
 	}
 	skillPathUnder := func(base string) string {
-		return filepath.Join(base, "skills", "english-to-dotfile", "SKILL.md")
+		return filepath.Join(base, "skills", "create-dotfile", "SKILL.md")
 	}
 
 	if strings.TrimSpace(repoPath) != "" {

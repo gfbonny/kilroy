@@ -112,6 +112,7 @@ func runSubgraphUntil(ctx context.Context, eng *Engine, startNodeID, stopNodeID 
 		eng.Context.Set("failure_reason", out.FailureReason)
 		failureClass := classifyFailureClass(out)
 		eng.Context.Set("failure_class", failureClass)
+		eng.updateFailureDossierContext(node, out, failureClass, nodeRetries)
 
 		// Structural failures in parallel branches are irresolvable — the
 		// branch write scope is fixed by the pipeline definition and cannot

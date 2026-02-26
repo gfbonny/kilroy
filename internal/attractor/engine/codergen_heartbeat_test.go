@@ -101,6 +101,23 @@ digraph G {
 	t.Logf("found %d heartbeat events", heartbeats)
 }
 
+func TestCodergenHeartbeatInterval_StallTimeoutScaling(t *testing.T) {
+	t.Setenv("KILROY_CODERGEN_HEARTBEAT_INTERVAL", "")
+	if interval := codergenHeartbeatIntervalWithStallTimeout(900 * time.Millisecond); interval != 300*time.Millisecond {
+		t.Fatalf("unexpected interval scaling: got %v want 300ms", interval)
+	}
+	if interval := codergenHeartbeatIntervalWithStallTimeout(100 * time.Millisecond); interval != codergenHeartbeatMinInterval {
+		t.Fatalf("expected min clamp: got %v want %v", interval, codergenHeartbeatMinInterval)
+	}
+	if interval := codergenHeartbeatIntervalWithStallTimeout(30 * time.Minute); interval != codergenHeartbeatDefaultInterval {
+		t.Fatalf("expected upper clamp: got %v want %v", interval, codergenHeartbeatDefaultInterval)
+	}
+	t.Setenv("KILROY_CODERGEN_HEARTBEAT_INTERVAL", "37ms")
+	if interval := codergenHeartbeatIntervalWithStallTimeout(900 * time.Millisecond); interval != 37*time.Millisecond {
+		t.Fatalf("expected env override: got %v want 37ms", interval)
+	}
+}
+
 func TestRunWithConfig_APIBackend_HeartbeatEmitsDuringAgentLoop(t *testing.T) {
 	repo := initTestRepo(t)
 	logsRoot := t.TempDir()
@@ -207,6 +224,127 @@ digraph G {
 		t.Fatal("expected at least 1 stage_heartbeat event during API agent_loop execution")
 	}
 	t.Logf("found %d API heartbeat events", heartbeats)
+}
+
+func TestRunWithConfig_APIBackend_SessionEventsPreventFalseStallWithoutHeartbeat(t *testing.T) {
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+
+	pinned := writePinnedCatalog(t)
+	cxdbSrv := newCXDBTestServer(t)
+
+	requestCount := 0
+	var reqMu sync.Mutex
+	openaiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/responses" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		reqMu.Lock()
+		requestCount++
+		n := requestCount
+		reqMu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		switch n {
+		case 1:
+			_, _ = w.Write([]byte(`{
+  "id": "resp_1",
+  "model": "gpt-5.2",
+  "output": [{"type":"function_call","id":"call_1","name":"shell","arguments":"{\"command\":\"sleep 0.3\"}"}],
+  "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
+}`))
+		case 2:
+			_, _ = w.Write([]byte(`{
+  "id": "resp_2",
+  "model": "gpt-5.2",
+  "output": [{"type":"function_call","id":"call_2","name":"shell","arguments":"{\"command\":\"sleep 0.3\"}"}],
+  "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
+}`))
+		case 3:
+			_, _ = w.Write([]byte(`{
+  "id": "resp_3",
+  "model": "gpt-5.2",
+  "output": [{"type":"function_call","id":"call_3","name":"shell","arguments":"{\"command\":\"sleep 0.3\"}"}],
+  "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
+}`))
+		default:
+			_, _ = w.Write([]byte(`{
+  "id": "resp_4",
+  "model": "gpt-5.2",
+  "output": [{"type":"message","content":[{"type":"output_text","text":"done"}]}],
+  "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
+}`))
+		}
+	}))
+	t.Cleanup(openaiSrv.Close)
+
+	t.Setenv("OPENAI_API_KEY", "k")
+	t.Setenv("OPENAI_BASE_URL", openaiSrv.URL)
+	// Intentionally larger than stall timeout so heartbeat events cannot mask
+	// watchdog behavior in this test.
+	t.Setenv("KILROY_CODERGEN_HEARTBEAT_INTERVAL", "10s")
+
+	stallTimeout := 700
+	stallCheck := 50
+	disableProbe := false
+	cfg := &RunConfigFile{Version: 1}
+	cfg.Repo.Path = repo
+	cfg.CXDB.BinaryAddr = cxdbSrv.BinaryAddr()
+	cfg.CXDB.HTTPBaseURL = cxdbSrv.URL()
+	cfg.LLM.Providers = map[string]ProviderConfig{
+		"openai": {Backend: BackendAPI, Failover: []string{}},
+	}
+	cfg.ModelDB.OpenRouterModelInfoPath = pinned
+	cfg.ModelDB.OpenRouterModelInfoUpdatePolicy = "pinned"
+	cfg.Git.RunBranchPrefix = "attractor/run"
+	cfg.RuntimePolicy.StallTimeoutMS = &stallTimeout
+	cfg.RuntimePolicy.StallCheckIntervalMS = &stallCheck
+	cfg.Preflight.PromptProbes.Enabled = &disableProbe
+
+	dot := []byte(`
+digraph G {
+  graph [goal="session events should prevent false stall timeout"]
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, auto_status=true, prompt="run a few commands"]
+  start -> a -> exit
+}
+`)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	res, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "api-session-activity-test", LogsRoot: logsRoot})
+	if err != nil {
+		t.Fatalf("RunWithConfig: %v", err)
+	}
+
+	progressPath := filepath.Join(res.LogsRoot, "progress.ndjson")
+	data, err := os.ReadFile(progressPath)
+	if err != nil {
+		t.Fatalf("read progress.ndjson: %v", err)
+	}
+
+	var stageSucceeded bool
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var ev map[string]any
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			continue
+		}
+		if ev["event"] == "stall_watchdog_timeout" {
+			t.Fatalf("unexpected stall watchdog timeout during active session: %+v", ev)
+		}
+		if ev["event"] == "stage_attempt_end" && ev["node_id"] == "a" && ev["status"] == "success" {
+			stageSucceeded = true
+		}
+	}
+	if !stageSucceeded {
+		t.Fatal("expected stage a to complete successfully")
+	}
 }
 
 // TestRunWithConfig_APIBackend_StallWatchdogFiresDespiteHeartbeatGoroutine verifies

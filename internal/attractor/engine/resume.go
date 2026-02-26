@@ -124,9 +124,13 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 	}
 	var cfg *RunConfigFile
 	if _, err := os.Stat(cfgPath); err == nil {
-		if loaded, err := LoadRunConfigFile(cfgPath); err == nil {
-			cfg = loaded
+		loaded, loadErr := LoadRunConfigFile(cfgPath)
+		if loadErr != nil {
+			return nil, fmt.Errorf("resume: load run config %s: %w", cfgPath, loadErr)
 		}
+		cfg = loaded
+	} else if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("resume: stat run config %s: %w", cfgPath, err)
 	}
 
 	// If we have a run config, resume with the real codergen router and CXDB sink.
@@ -134,6 +138,8 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 	var sink *CXDBSink
 	var catalog *modeldb.Catalog
 	var startup *CXDBStartupInfo
+	var inputInferer InputReferenceInferer
+	var inputInfererInitWarning string
 	if cfg != nil {
 		// Resume MUST use the run's snapshotted catalog.
 		snapshotPath := firstExistingPath(
@@ -151,6 +157,18 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 		backend, err = newResumeCodergenBackend(cfg, catalog)
 		if err != nil {
 			return nil, err
+		}
+		if cfg.Inputs.Materialize.InferWithLLM != nil && *cfg.Inputs.Materialize.InferWithLLM {
+			runtimes, rtErr := resolveProviderRuntimes(cfg)
+			if rtErr != nil {
+				return nil, rtErr
+			}
+			inferer, inferErr := newInputReferenceInfererFromRuntimes(runtimes)
+			if inferErr != nil {
+				inputInfererInitWarning = fmt.Sprintf("input reference inferer init failed on resume (scanner-only fallback): %v", inferErr)
+			} else {
+				inputInferer = inferer
+			}
 		}
 
 		// Re-attach to the existing CXDB context head (metaspec required).
@@ -209,8 +227,15 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 	if strings.TrimSpace(prefix) == "" {
 		return nil, fmt.Errorf("resume: unable to derive run_branch_prefix from manifest/config")
 	}
+	resolvedArtifactPolicy, err := restoreArtifactPolicyForResume(cp, cfg, ResolveArtifactPolicyInput{
+		LogsRoot: logsRoot,
+	})
+	if err != nil {
+		return nil, err
+	}
 	eng = newBaseEngine(g, dotSource, opts)
 	eng.RunConfig = cfg
+	eng.ArtifactPolicy = resolvedArtifactPolicy
 	eng.CodergenBackend = backend
 	eng.CXDB = sink
 	eng.ModelCatalogSHA = func() string {
@@ -226,10 +251,19 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 		}
 		return catalog.Path
 	}()
+	eng.InputMaterializationPolicy = inputMaterializationPolicyFromConfig(cfg)
+	eng.InputReferenceInferer = inputInferer
+	eng.InputInferenceCache = loadInputInferenceCache(inputInferenceCachePath(logsRoot))
+	if m, mErr := loadInputManifest(inputRunManifestPath(logsRoot)); mErr == nil && m != nil {
+		eng.InputSourceTargetMap = sourceTargetMapFromManifest(m)
+	}
 	if startup != nil {
 		for _, w := range startup.Warnings {
 			eng.Warn(w)
 		}
+	}
+	if strings.TrimSpace(inputInfererInitWarning) != "" {
+		eng.Warn(inputInfererInitWarning)
 	}
 	eng.Context.ReplaceSnapshot(cp.ContextValues, cp.Logs)
 	eng.baseLogsRoot, eng.restartCount = restoreRestartState(logsRoot, cp)
@@ -275,6 +309,9 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 	// loses untracked artifacts produced by the original setup.
 	if err := eng.executeSetupCommands(ctx); err != nil {
 		return nil, fmt.Errorf("resume setup commands failed: %w", err)
+	}
+	if err := eng.materializeResumeStartupInputs(ctx); err != nil {
+		return nil, fmt.Errorf("resume input materialization failed: %w", err)
 	}
 
 	// Determine next node to execute by re-evaluating routing from the last completed node.
