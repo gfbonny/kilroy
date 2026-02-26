@@ -1285,17 +1285,17 @@ func TestValidate_G12_UnknownModelID_EmitsWarning(t *testing.T) {
 	assertHasRule(t, diags, "stylesheet_unknown_model", SeverityWarning)
 }
 
-// TestValidate_G12_DashedAnthropicModelID_EmitsNonCanonicalWarning checks that
+// TestValidate_G12_DashedAnthropicModelID_EmitsNonCanonicalError checks that
 // claude-opus-4-6 (dashed version number) produces a stylesheet_noncanonical_model_id
-// WARNING because the catalog canonical form is claude-opus-4.6 (dotted).
-func TestValidate_G12_DashedAnthropicModelID_EmitsNonCanonicalWarning(t *testing.T) {
+// ERROR because the catalog canonical form is claude-opus-4.6 (dotted).
+func TestValidate_G12_DashedAnthropicModelID_EmitsNonCanonicalError(t *testing.T) {
 	g, err := dot.Parse(minimalGraphWithStylesheet(`* { llm_provider: anthropic; llm_model: claude-opus-4-6; }`))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	catalog := buildTestCatalog()
 	diags := ValidateWithOptions(g, ValidateOptions{Catalog: catalog})
-	assertHasRule(t, diags, "stylesheet_noncanonical_model_id", SeverityWarning)
+	assertHasRule(t, diags, "stylesheet_noncanonical_model_id", SeverityError)
 	assertNoRule(t, diags, "stylesheet_unknown_model")
 }
 

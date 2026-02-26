@@ -70,6 +70,7 @@ func ValidateWithOptions(g *model.Graph, opts ValidateOptions, extraRules ...Lin
 	diags = append(diags, lintStylesheetModelIDs(g, opts.Catalog)...)
 	diags = append(diags, lintRetryTargetsExist(g)...)
 	diags = append(diags, lintGoalGateHasRetry(g)...)
+	diags = append(diags, lintGoalGateMissingNodeRetryTarget(g)...)
 	diags = append(diags, lintGoalGateExitStatusContract(g)...)
 	diags = append(diags, lintGoalGatePromptStatusHint(g)...)
 	diags = append(diags, lintFidelityValid(g)...)
@@ -86,6 +87,7 @@ func ValidateWithOptions(g *model.Graph, opts ValidateOptions, extraRules ...Lin
 	diags = append(diags, lintStatusFallbackInPrompt(g)...)
 	diags = append(diags, lintTemplatePostmortemRecoveryRouting(g)...)
 	diags = append(diags, lintOrphanCustomOutcomeHint(g)...)
+	diags = append(diags, lintReservedKeywordNodeID(g)...)
 
 	// Run custom lint rules (spec §7.3: extra_rules appended after built-in rules).
 	for _, rule := range extraRules {
@@ -452,9 +454,9 @@ func lintStylesheetSyntax(g *model.Graph) []Diagnostic {
 // Diagnostics emitted:
 //   - stylesheet_unknown_model (WARNING): model ID is not found in the catalog for
 //     the declared provider.
-//   - stylesheet_noncanonical_model_id (WARNING): model ID is found only after
+//   - stylesheet_noncanonical_model_id (ERROR): model ID is found only after
 //     normalizing dashes to dots in version numbers (Anthropic native format).
-//     The canonical catalog form (with dots) should be used instead.
+//     The canonical catalog form (with dots) must be used instead.
 func lintStylesheetModelIDs(g *model.Graph, catalog *modeldb.Catalog) []Diagnostic {
 	if catalog == nil {
 		return nil
@@ -502,8 +504,9 @@ func lintStylesheetModelIDs(g *model.Graph, catalog *modeldb.Catalog) []Diagnost
 		case modeldb.ModelFoundNonCanonical:
 			diags = append(diags, Diagnostic{
 				Rule:     "stylesheet_noncanonical_model_id",
-				Severity: SeverityWarning,
-				Message:  fmt.Sprintf("model_stylesheet: model %q uses non-canonical format (use dot-separated version numbers, e.g. replace dashes with dots in the version suffix)", modelID),
+				Severity: SeverityError,
+				Message:  fmt.Sprintf("model_stylesheet: model %q uses non-canonical format; version suffixes must use dots not dashes (e.g. claude-opus-4.6 not claude-opus-4-6)", modelID),
+				Fix:      "replace dashes in the version number suffix with dots: claude-opus-4-6 → claude-opus-4.6",
 			})
 		case modeldb.ModelFoundCanonical, modeldb.ModelProviderUnknown:
 			// No warning: canonical match or catalog has no data for this provider.
@@ -552,6 +555,36 @@ func lintGoalGateHasRetry(g *model.Graph) []Diagnostic {
 					NodeID:   id,
 				})
 			}
+		}
+	}
+	return diags
+}
+
+// lintGoalGateMissingNodeRetryTarget warns when a goal_gate=true node does not
+// declare its own retry_target or fallback_retry_target. Relying on the
+// graph-level retry_target is insufficient: the graph-level attribute is
+// intended for transient node failures, not goal-gate rejection re-execution.
+// Each goal_gate node should explicitly declare where to route on rejection
+// (typically "postmortem").
+func lintGoalGateMissingNodeRetryTarget(g *model.Graph) []Diagnostic {
+	var diags []Diagnostic
+	for id, n := range g.Nodes {
+		if n == nil {
+			continue
+		}
+		if !strings.EqualFold(n.Attr("goal_gate", "false"), "true") {
+			continue
+		}
+		nodeRetry := strings.TrimSpace(n.Attr("retry_target", ""))
+		nodeFallback := strings.TrimSpace(n.Attr("fallback_retry_target", ""))
+		if nodeRetry == "" && nodeFallback == "" {
+			diags = append(diags, Diagnostic{
+				Rule:     "goal_gate_missing_node_retry_target",
+				Severity: SeverityWarning,
+				Message:  "goal_gate node has no node-level retry_target or fallback_retry_target; graph-level retry_target is for transient failures, not goal-gate rejection",
+				NodeID:   id,
+				Fix:      "add retry_target=\"postmortem\" (or the appropriate recovery node) to this node's attributes",
+			})
 		}
 	}
 	return diags
@@ -1473,6 +1506,38 @@ func lintStatusFallbackInPrompt(g *model.Graph) []Diagnostic {
 				Message:  "codergen node prompt references $KILROY_STAGE_STATUS_PATH but omits $KILROY_STAGE_STATUS_FALLBACK_PATH; if the primary write fails the engine has no recovery signal",
 				NodeID:   id,
 				Fix:      "add $KILROY_STAGE_STATUS_FALLBACK_PATH alongside $KILROY_STAGE_STATUS_PATH in the node prompt",
+			})
+		}
+	}
+	return diags
+}
+
+// dotReservedKeywords is the set of DOT/Graphviz keywords that must not be
+// used as node IDs. Using any of these causes silent routing failures because
+// the DOT parser interprets them as language keywords rather than node names.
+var dotReservedKeywords = map[string]bool{
+	"graph":    true,
+	"digraph":  true,
+	"subgraph": true,
+	"node":     true,
+	"edge":     true,
+	"strict":   true,
+	"if":       true,
+}
+
+// lintReservedKeywordNodeID warns when any node ID is a DOT/Graphviz reserved
+// keyword. A node named "if" (for example) will never be reachable via normal
+// DOT routing and always represents LLM confusion.
+func lintReservedKeywordNodeID(g *model.Graph) []Diagnostic {
+	var diags []Diagnostic
+	for id := range g.Nodes {
+		if dotReservedKeywords[strings.ToLower(id)] {
+			diags = append(diags, Diagnostic{
+				Rule:     "reserved_keyword_node_id",
+				Severity: SeverityWarning,
+				Message:  fmt.Sprintf("node ID %q is a DOT/Graphviz reserved keyword and will cause routing failures", id),
+				NodeID:   id,
+				Fix:      fmt.Sprintf("rename node %q to a non-reserved identifier (e.g. %q)", id, id+"_node"),
 			})
 		}
 	}

@@ -35,8 +35,10 @@ case "$FILE_PATH" in
 esac
 
 # Locate the kilroy binary.
-# Honour KILROY_CLAUDE_PATH as a PATH hint (same env var the ingestor uses for
-# the claude binary, repurposed here to override the kilroy binary location).
+# Resolution order:
+#   1. KILROY_CLAUDE_PATH env var (full path or directory)
+#   2. CLAUDE_PROJECT_DIR/kilroy (binary built in project root)
+#   3. kilroy in PATH
 KILROY_BIN="kilroy"
 if [[ -n "${KILROY_CLAUDE_PATH:-}" ]]; then
     if [[ -x "$KILROY_CLAUDE_PATH" ]]; then
@@ -46,6 +48,9 @@ if [[ -n "${KILROY_CLAUDE_PATH:-}" ]]; then
         # A directory was provided; look for kilroy inside it.
         KILROY_BIN="$KILROY_CLAUDE_PATH/kilroy"
     fi
+elif [[ -x "${CLAUDE_PROJECT_DIR:-}/kilroy" ]]; then
+    # Binary built in the project root (common during development).
+    KILROY_BIN="${CLAUDE_PROJECT_DIR}/kilroy"
 fi
 
 # Verify kilroy is available.

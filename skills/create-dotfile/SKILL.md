@@ -46,7 +46,7 @@ Model defaults source:
 
 ### Implementation Decomposition
 
-- If the task involves implementing or porting a codebase estimated to exceed ~1,000 lines of new code, decompose the `implement` node into per-module fan-out nodes (e.g. `implement_core`, `implement_rendering`, `implement_input`) with a `merge_implementation` synthesis node. Each module node targets a bounded deliverable (~200–500 lines). A single `implement` node for large codebases produces stub implementations that pass structural checks but deliver no functional behavior.
+- If the task involves implementing or porting a codebase estimated to exceed ~1,000 lines of new code, decompose the `implement` node into per-module fan-out nodes (e.g. `implement_core`, `implement_api`, `implement_data_layer`) with a `merge_implementation` synthesis node. Each module node targets a bounded deliverable (~200–500 lines). A single `implement` node for large codebases produces stub implementations that pass structural checks but deliver no functional behavior.
 - Use parallel fan-out (multiple `implement_X` → `merge_implementation`) or sequential chain as appropriate. Each `implement_X` node writes to `.ai/module_X_impl.md` and commits the code. `merge_implementation` synthesizes integration points and resolves conflicts.
 - Threshold: >1,000 estimated lines of new code → decompose. The cost of extra nodes is much lower than a stub implementation.
 
@@ -57,6 +57,7 @@ Model defaults source:
   - Correct: `* { llm_model: gemini-2.0-flash; llm_provider: google; }`
   - Wrong: `* { llm_model: gemini-2.0-flash llm_provider: google }` — space-separated declarations silently fail.
 - After writing `model_stylesheet`: verify each `{}` block uses only semicolon-terminated declarations; no two property names appear adjacent without a semicolon separator.
+- **Anthropic model IDs use dot-separated version numbers**: `claude-opus-4.6`, `claude-sonnet-4.6`, `claude-haiku-4.5`. Never use dashes in the version suffix — `claude-opus-4-6` is wrong and will cause a validation ERROR. The three current canonical Anthropic IDs are: `claude-opus-4.6`, `claude-sonnet-4.6`, `claude-haiku-4.5`.
 
 ## Model Constraint Contract (Required)
 
@@ -115,6 +116,8 @@ Model defaults source:
 - For semantic verify stages, include a content-addressable `failure_signature` when failing repeated acceptance checks.
 - **Never** instruct any `shape=box` node to write `status: retry`. It is reserved by the attractor and triggers `deterministic_failure_cycle_check`, which downgrades to `fail` after N attempts. For iteration/revision loops, use a custom outcome: e.g. `{"status": "success", "outcome": "needs_revision"}` routed via `condition="outcome=needs_revision"` edge.
 - **Never** instruct `review_consensus` (or any review/gate node) to write `status: fail` for a rejection verdict. Write a custom outcome instead: e.g. `{"status": "success", "outcome": "rejected"}`. `status: fail` triggers failure processing and blocks `goal_gate=true` re-execution. Route rejection via `condition="outcome=rejected"`.
+- **Never use DOT/Graphviz reserved keywords as node IDs**: `if`, `node`, `edge`, `graph`, `digraph`, `subgraph`, `strict`. These cause routing failures — the DOT parser interprets them as language keywords rather than node names.
+- **Every `goal_gate=true` node must declare its own `retry_target`** pointing to the appropriate recovery node (typically `postmortem`). The graph-level `retry_target` is for transient node failures and is not an appropriate retry path for a failed review/gate consensus. Example: `review_consensus [auto_status=true, goal_gate=true, retry_target="postmortem"]`.
 
 ## References
 
