@@ -74,6 +74,8 @@ Model defaults source:
 - For nodes with conditional edges, include one unconditional fallback edge.
 - Use only supported condition operators: `=`, `!=`, `&&`.
 - Use `loop_restart=true` only for `context.failure_class=transient_infra`.
+- The `postmortem` node **MUST** have at least three condition-keyed outbound edges covering distinct outcome classes (e.g. `impl_repair`, `needs_replan`, `needs_toolchain` or equivalents for the task domain) **before** the unconditional fallback. A `postmortem` with only one unconditional edge is invalid — it prevents recovery classification from routing differently and collapses all failure modes into a single path.
+- The unconditional fallback from `postmortem` MUST come last among its outbound edges.
 
 7. Preserve authoritative text contracts.
 - If user explicitly provides goal/spec/DoD text, keep it verbatim (DOT-escape only).
@@ -90,6 +92,8 @@ Model defaults source:
 - Keep prerequisite/tool gates real: route success/failure explicitly.
 - Add deterministic checks for explicit deliverable paths named in requirements.
 - For semantic verify stages, include a content-addressable `failure_signature` when failing repeated acceptance checks.
+- **Never** instruct any `shape=box` node to write `status: retry`. It is reserved by the attractor and triggers `deterministic_failure_cycle_check`, which downgrades to `fail` after N attempts. For iteration/revision loops, use a custom outcome: e.g. `{"status": "success", "outcome": "needs_revision"}` routed via `condition="outcome=needs_revision"` edge.
+- **Never** instruct `review_consensus` (or any review/gate node) to write `status: fail` for a rejection verdict. Write a custom outcome instead: e.g. `{"status": "success", "outcome": "rejected"}`. `status: fail` triggers failure processing and blocks `goal_gate=true` re-execution. Route rejection via `condition="outcome=rejected"`.
 
 ## References
 
