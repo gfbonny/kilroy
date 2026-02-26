@@ -7,12 +7,12 @@ digraph rogue_port {
         fallback_retry_target="debate_consolidate",
         provenance_version="1",
         model_stylesheet="
-            * { llm_model: gemini-3.0-flash-preview; llm_provider: google; }
-            .hard { llm_model: gemini-3.0-flash-preview; llm_provider: google; }
-            .verify { llm_model: gemini-3.0-flash-preview; llm_provider: google; }
-            .branch-a { llm_model: gemini-3.0-flash-preview; llm_provider: google; }
-            .branch-b { llm_model: gemini-3.0-flash-preview; llm_provider: google; }
-            .branch-c { llm_model: gemini-3.0-flash-preview; llm_provider: google; }
+            * { llm_model: gemini-3-flash-preview; llm_provider: google; }
+            .hard { llm_model: gemini-3-flash-preview; llm_provider: google; }
+            .verify { llm_model: gemini-3-flash-preview; llm_provider: google; }
+            .branch-a { llm_model: gemini-3-flash-preview; llm_provider: google; }
+            .branch-b { llm_model: gemini-3-flash-preview; llm_provider: google; }
+            .branch-c { llm_model: gemini-3-flash-preview; llm_provider: google; }
         "
     ]
 
