@@ -859,3 +859,94 @@ digraph G {
 	}
 	t.Fatal("expected exit_no_outgoing diagnostic for exit2")
 }
+
+// --- Tests for orphan_custom_outcome_hint lint rule (G5) ---
+
+// (a) Node with condition="outcome=approved" edge (custom) + no unconditional fallback -> WARNING fires.
+func TestValidate_OrphanCustomOutcomeHint_CustomOutcomeNoFallback_Warns(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  review [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="review"]
+  implement [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="impl"]
+  start -> review
+  review -> exit [condition="outcome=approved"]
+  review -> implement [condition="outcome=retry"]
+  implement -> exit [condition="outcome=success"]
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	found := false
+	for _, d := range diags {
+		if d.Rule == "orphan_custom_outcome_hint" && d.Severity == SeverityWarning && d.NodeID == "review" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected orphan_custom_outcome_hint WARNING for node 'review'; got %+v", diags)
+	}
+}
+
+// (b) Node with condition="outcome=approved" edge + unconditional fallback -> no warning.
+func TestValidate_OrphanCustomOutcomeHint_CustomOutcomeWithFallback_NoWarn(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  review [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="review"]
+  implement [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="impl"]
+  start -> review
+  review -> exit [condition="outcome=approved"]
+  review -> implement
+  implement -> exit [condition="outcome=success"]
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "orphan_custom_outcome_hint")
+}
+
+// (c) Node with only condition="status=success" (reserved status key, no custom outcome) -> no warning.
+func TestValidate_OrphanCustomOutcomeHint_ReservedOutcomeOnly_NoWarn(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  postmortem [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="pm"]
+  start -> a
+  a -> exit [condition="outcome=success"]
+  a -> postmortem [condition="outcome=fail"]
+  postmortem -> exit [condition="outcome=success"]
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "orphan_custom_outcome_hint")
+}
+
+// (d) Node with no conditional edges at all -> no warning.
+func TestValidate_OrphanCustomOutcomeHint_NoConditionalEdges_NoWarn(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="y"]
+  start -> a -> b -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "orphan_custom_outcome_hint")
+}
