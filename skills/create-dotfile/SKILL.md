@@ -44,6 +44,12 @@ Model defaults source:
 - Start from `reference_template.dot` for node shapes, routing, and loop structure.
 - If user says `no fanout` or `single path`, remove fan-out/fan-in branch families.
 
+### Implementation Decomposition
+
+- If the task involves implementing or porting a codebase estimated to exceed ~1,000 lines of new code, decompose the `implement` node into per-module fan-out nodes (e.g. `implement_core`, `implement_rendering`, `implement_input`) with a `merge_implementation` synthesis node. Each module node targets a bounded deliverable (~200–500 lines). A single `implement` node for large codebases produces stub implementations that pass structural checks but deliver no functional behavior.
+- Use parallel fan-out (multiple `implement_X` → `merge_implementation`) or sequential chain as appropriate. Each `implement_X` node writes to `.ai/module_X_impl.md` and commits the code. `merge_implementation` synthesizes integration points and resolves conflicts.
+- Threshold: >1,000 estimated lines of new code → decompose. The cost of extra nodes is much lower than a stub implementation.
+
 4. Set model/provider resolution in `model_stylesheet`.
 - Ensure every `shape=box` node resolves provider + model via attrs or stylesheet.
 - Keep backend choice (`cli` vs `api`) out of DOT; backend belongs in run config.
@@ -68,6 +74,9 @@ Model defaults source:
 - Require explicit success/fail/retry behavior. For fail/retry include `failure_reason` and `details` (and `failure_class` where applicable).
 - Keep `.ai/*` producer/consumer paths exact; no filename drift.
 - `shape=parallelogram` nodes must use `tool_command`.
+- For compiled artifact targets (WASM, native binary, shared library): the verification node MUST confirm the artifact is executable and exports expected entry points — not just that the file exists or that compilation exited 0. For WASM: use `wasm-objdump -x` or inspect `wasm-bindgen` output to confirm required exports. For native binaries: run with a smoke-test invocation. File existence alone is insufficient.
+- For game/interactive application ports: add a `verify_gameplay` node (`shape=parallelogram`) that runs a headless smoke test or symbol check confirming expected game logic exports are present.
+- A stub binary that compiles successfully will pass existence/exit-code checks; only symbol verification catches stub implementations.
 
 6. Enforce routing guardrails.
 - Do not bypass actionable outcomes with unconditional pass-through edges.

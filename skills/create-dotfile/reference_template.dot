@@ -203,6 +203,7 @@ digraph reference_template {
 
         // Replace tool_command with artifact hygiene check.
         // Include both .cargo-target* and .cargo_target* patterns if Rust.
+        // For compiled artifact targets: confirm binary exports expected symbols; file existence alone is insufficient.
         verify_artifacts [
             shape=parallelogram,
             max_retries=0,
