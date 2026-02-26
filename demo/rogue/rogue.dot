@@ -3,16 +3,16 @@ digraph rogue_port {
         goal="Port the classic Rogue 5.4.4 game from C to Rust compiled to WebAssembly, playable in a browser. The original C source is at demo/rogue/original-rogue/ — about 16,800 lines across 33 files. The deliverable is a single HTML page at demo/rogue/rogue-wasm/www/index.html with classic ASCII terminal rendering: 80x24 grid, @ player, # corridors, monster letters A-Z, dark background, monospace font. This must be an exact mechanical port — same dungeon generation algorithms, same monster stats and AI, same item tables, same RNG formula, same combat math — a faithful 1:1 translation of every game system. ncurses I/O gets replaced by a WASM bridge to a JS terminal renderer, and save/load uses localStorage instead of the filesystem.",
         rankdir=LR,
         default_max_retry=3,
-        retry_target="implement",
+        retry_target="implement_fanout",
         fallback_retry_target="debate_consolidate",
         provenance_version="1",
         model_stylesheet="
-            * { llm_model: gemini-3-flash-preview; llm_provider: google; }
-            .hard { llm_model: gemini-3-flash-preview; llm_provider: google; }
-            .verify { llm_model: gemini-3-flash-preview; llm_provider: google; }
-            .branch-a { llm_model: gemini-3-flash-preview; llm_provider: google; }
-            .branch-b { llm_model: gemini-3-flash-preview; llm_provider: google; }
-            .branch-c { llm_model: gemini-3-flash-preview; llm_provider: google; }
+            * { llm_model: gemini-3.0-flash-preview; llm_provider: google; }
+            .hard { llm_model: gemini-3.0-flash-preview; llm_provider: google; }
+            .verify { llm_model: gemini-3.0-flash-preview; llm_provider: google; }
+            .branch-a { llm_model: gemini-3.0-flash-preview; llm_provider: google; }
+            .branch-b { llm_model: gemini-3.0-flash-preview; llm_provider: google; }
+            .branch-c { llm_model: gemini-3.0-flash-preview; llm_provider: google; }
         "
     ]
 
@@ -101,7 +101,7 @@ Write .ai/spec.md with the above structure. Include the full user-provided goal 
 $goal
 ---END-VERBATIM-GOAL---
 
-Status: This node has auto_status=true, so no explicit status write is needed."
+Status: This node has auto_status=true. Write your status to $KILROY_STAGE_STATUS_PATH, with $KILROY_STAGE_STATUS_FALLBACK_PATH as fallback, if you need to report a failure."
         ]
 
         check_dod [
@@ -398,6 +398,7 @@ Write to $KILROY_STAGE_STATUS_PATH (or fall back to $KILROY_STAGE_STATUS_FALLBAC
         ]
 
         consolidate_dod [
+            auto_status=true,
             prompt="Synthesize the three DoD proposals (dod_a, dod_b, dod_c) into a single consensus Definition of Done.
 
 GOAL:
@@ -647,6 +648,7 @@ Write to $KILROY_STAGE_STATUS_PATH (or fall back to $KILROY_STAGE_STATUS_FALLBAC
         ]
 
         debate_consolidate [
+            auto_status=true,
             prompt="Synthesize the three implementation plans (plan_a, plan_b, plan_c) into a single best-of-breed final plan.
 
 GOAL:
@@ -675,108 +677,349 @@ Write to $KILROY_STAGE_STATUS_PATH (or fall back to $KILROY_STAGE_STATUS_FALLBAC
     subgraph cluster_implement_verify {
         label="Implement And Verify"
 
-        implement [
+        implement_fanout [shape=component, label="Implement Fan-Out"]
+
+        // AC5: RNG algorithm + core type definitions used by all modules
+        implement_core_types [
             shape=box,
             class="hard",
             auto_status=true,
             max_retries=2,
-            prompt="Implement the Rogue 5.4.4 C-to-Rust/WASM port.
+            prompt="You are implementing the core Rust data structures and RNG for Rogue WASM.
 
-GOAL:
-$goal
+**Goal:** $goal
 
-YOUR TASK:
+**This module owns:** AC5 (faithful RNG — same seed must produce same sequence), plus core type definitions used by all other modules.
 
-**REPAIR MODE CHECK:**
-If .ai/postmortem_latest.md exists:
-1. Read it FIRST
-2. Fix ONLY the identified gaps
-3. DO NOT regenerate working systems
-4. Preserve all passing code and tests
+**REPAIR MODE CHECK:** If .ai/postmortem_latest.md exists, read it FIRST. Fix ONLY the identified gaps in core types. Do NOT regenerate working code. Preserve all passing implementations.
 
-**FRESH IMPLEMENTATION:**
-If no postmortem exists:
-1. Read .ai/plan_final.md for implementation approach
-2. Read .ai/spec.md and .ai/definition_of_done.md
+**FRESH MODE:** If no postmortem exists, implement from .ai/plan_final.md.
 
-**IMPLEMENTATION REQUIREMENTS:**
+**Module Scope:**
+Port core C structs from demo/rogue/original-rogue/ to Rust:
+- Player (HP, stats, position, inventory, level)
+- Monster (type, HP, position, AI state)
+- Item (type, position, identified flag, enchantment)
+- Level (rooms, corridors, tile map)
+- Game state container
+- RNG: port exact C rand() algorithm from original source (same seed → same sequence)
 
-### Project Structure
-Create demo/rogue/rogue-wasm/ with:
-- Cargo.toml (wasm-pack configuration)
-- src/ (Rust modules)
-- www/ (HTML/JS/CSS)
-- www/index.html (single-page deliverable)
+**Requirements:**
+- Read original C struct definitions from demo/rogue/original-rogue/*.h
+- Preserve field names and types (translate C types to Rust equivalents)
+- Add serde Serialize/Deserialize derives for save/load
+- Add wasm-bindgen annotations where needed for JS interop
+- Use idiomatic Rust (Option<T> for nullables, Vec<T> for arrays)
 
-### Module Organization
-Organize Rust code by system (match the 33 C files' logical structure):
-- src/lib.rs (WASM exports and main loop)
-- src/types.rs (core data structures)
-- src/rng.rs (RNG port from original C)
-- src/dungeon.rs (dungeon generation)
-- src/monster.rs (monster AI and stats)
-- src/item.rs (item system)
-- src/combat.rs (combat mechanics)
-- src/io.rs (WASM/JS bridge for terminal I/O)
-- src/save.rs (localStorage save/load)
+**Deliverables:**
+- demo/rogue/rogue-wasm/src/types.rs with all core structs
+- demo/rogue/rogue-wasm/src/rng.rs with RNG port
+- Cargo.toml with wasm-bindgen and serde dependencies
 
-### Faithful Port Requirements
-1. **RNG**: Port the exact RNG algorithm from original C
-   - Same seed must produce same sequence
-   - Verify: test with fixed seed, compare outputs
+**Logging:**
+Append progress to .ai/implementation_log.md
 
-2. **Dungeon Generation**: Port room placement, corridor generation, door placement algorithms exactly
-   - Match original layout behavior
-   - Verify: generate dungeons with fixed seeds, compare
+**Write implementation notes to .ai/module_core_types_impl.md**
 
-3. **Monster System**: Port all monster stats (A-Z), AI, pathfinding, movement
-   - Use original stat tables
-   - Match original behavior
-   - Verify: monster actions match C version
+Write your status to $KILROY_STAGE_STATUS_PATH, with $KILROY_STAGE_STATUS_FALLBACK_PATH as fallback.
 
-4. **Item System**: Port all item types (weapons, armor, potions, scrolls, rings, food) and effects
-   - Use original item tables
-   - Match original effects
-   - Verify: item interactions match C version
+On success: {\"status\": \"success\"}
+On failure: {\"status\": \"fail\", \"failure_reason\": \"<reason>\", \"details\": \"<details>\", \"failure_class\": \"deterministic_agent_bug\", \"failure_signature\": \"<sorted comma-separated list of failed items>\"}
 
-5. **Combat**: Port damage calculation and hit/miss formulas exactly
-   - Match original math
-   - Verify: combat outcomes match C version
-
-### WASM/JS Bridge
-- Export terminal I/O functions from Rust via wasm-bindgen
-- Create JS terminal renderer in www/index.html:
-  - 80x24 character grid
-  - Monospace font (Courier New or similar)
-  - Dark background (#000000 or #1a1a1a)
-  - ASCII characters: @ player, # corridors, + doors, . floor, | - walls, A-Z monsters
-- Wire keyboard input (arrow keys, inventory keys) from JS to WASM
-
-### localStorage Save/Load
-- Replace C file I/O with Web Storage API
-- Serialize game state to JSON
-- Save to localStorage on save command
-- Load from localStorage on load command
-
-### Progressive Compilation
-- Build each module before starting the next
-- Fix compilation errors immediately
-- Use cargo check frequently
-
-### Implementation Log
-- Log progress to .ai/implementation_log.md
-- Note completed modules, remaining work, blockers
-
-**ON FAILURE:**
-If implementation fails, include failure_signature in status metadata with specific failed component(s).
-
-OUTPUT STATUS:
-Write to $KILROY_STAGE_STATUS_PATH (or fall back to $KILROY_STAGE_STATUS_FALLBACK_PATH if unavailable) with JSON schema:
-- Success: {\"status\":\"success\"}
-- Failure: {\"status\":\"fail\",\"failure_reason\":\"...\",\"details\":\"...\",\"failure_class\":\"permanent|transient_infra\",\"meta\":{\"failure_signature\":\"component1,component2\"}}
-- Retry: {\"status\":\"retry\",\"failure_reason\":\"...\",\"details\":\"...\",\"failure_class\":\"transient_infra|permanent\"}"
+Do NOT write {\"status\": \"retry\"} — use custom outcomes for iteration."
         ]
-        check_implement [shape=diamond, label="Implement OK?"]
+
+        // AC1: rooms + corridors + gold placement
+        implement_dungeon_gen [
+            shape=box,
+            class="hard",
+            auto_status=true,
+            max_retries=2,
+            prompt="You are implementing dungeon generation for Rogue WASM.
+
+**Goal:** $goal
+
+**This module owns:** AC1 (faithful dungeon generation — same algorithm as original C).
+
+**REPAIR MODE CHECK:** If .ai/postmortem_latest.md exists, read it FIRST. Fix ONLY the identified gaps in dungeon generation. Do NOT regenerate working code.
+
+**FRESH MODE:** If no postmortem exists, implement from .ai/plan_final.md.
+
+**Module Scope:**
+Port dungeon generation from demo/rogue/original-rogue/ to Rust:
+- Room placement algorithm (from rnd_room.c or equivalent)
+- Corridor carving (connect rooms via hallways)
+- Tile type assignment (floor, wall, door, corridor)
+- Monster/gold placement
+
+**Requirements:**
+- Read original C code for room generation and corridor logic
+- Preserve RNG sequence (port C rand() calls using rng module from types.rs)
+- Maintain same probability distributions for room sizes and placement
+- Ensure generated levels are fully connected (all rooms reachable)
+
+**Deliverables:**
+- demo/rogue/rogue-wasm/src/dungeon.rs with generation functions
+- Uses types from src/types.rs
+
+**Logging:**
+Append progress to .ai/implementation_log.md
+
+**Write implementation notes to .ai/module_dungeon_gen_impl.md**
+
+Write your status to $KILROY_STAGE_STATUS_PATH, with $KILROY_STAGE_STATUS_FALLBACK_PATH as fallback.
+
+On success: {\"status\": \"success\"}
+On failure: {\"status\": \"fail\", \"failure_reason\": \"<reason>\", \"details\": \"<details>\", \"failure_class\": \"deterministic_agent_bug\", \"failure_signature\": \"<sorted comma-separated list of failed items>\"}
+
+Do NOT write {\"status\": \"retry\"} — use custom outcomes for iteration."
+        ]
+
+        // AC2: pathfinding + AC3: combat resolution
+        implement_monster_ai [
+            shape=box,
+            class="hard",
+            auto_status=true,
+            max_retries=2,
+            prompt="You are implementing monster AI and combat for Rogue WASM.
+
+**Goal:** $goal
+
+**This module owns:** AC2 (monster AI — all A-Z monsters with original stats, original pathfinding), AC3 (combat resolution — exact damage and hit formulas from original C).
+
+**REPAIR MODE CHECK:** If .ai/postmortem_latest.md exists, read it FIRST. Fix ONLY the identified gaps in monster AI. Do NOT regenerate working code.
+
+**FRESH MODE:** If no postmortem exists, implement from .ai/plan_final.md.
+
+**Module Scope:**
+Port monster behavior from demo/rogue/original-rogue/ to Rust:
+- Monster stats table (HP, damage, armor for each monster type A-Z)
+- Pathfinding (chase player when visible)
+- Combat formulas (hit chance, damage calculation — MUST match original C exactly)
+- Special abilities (if any)
+- Monster death and loot drops
+
+**Requirements:**
+- Read original C monster data (mon_data.c or rogue.h monster definitions)
+- Preserve exact combat math (to-hit rolls, damage dice)
+- Match pathfinding behavior (chase logic as in original)
+- Ensure monster AI uses same RNG sequence
+
+**Deliverables:**
+- demo/rogue/rogue-wasm/src/monster.rs with AI and combat logic
+- Uses types from src/types.rs
+
+**Logging:**
+Append progress to .ai/implementation_log.md
+
+**Write implementation notes to .ai/module_monster_ai_impl.md**
+
+Write your status to $KILROY_STAGE_STATUS_PATH, with $KILROY_STAGE_STATUS_FALLBACK_PATH as fallback.
+
+On success: {\"status\": \"success\"}
+On failure: {\"status\": \"fail\", \"failure_reason\": \"<reason>\", \"details\": \"<details>\", \"failure_class\": \"deterministic_agent_bug\", \"failure_signature\": \"<sorted comma-separated list of failed items>\"}
+
+Do NOT write {\"status\": \"retry\"} — use custom outcomes for iteration."
+        ]
+
+        // AC4: item types + AC8: pickup/drop/inventory
+        implement_items [
+            shape=box,
+            class="hard",
+            auto_status=true,
+            max_retries=2,
+            prompt="You are implementing the item system for Rogue WASM.
+
+**Goal:** $goal
+
+**This module owns:** AC4 (item system — all item types with original effects), AC8 (inventory/pickup/drop as precondition for browser playability).
+
+**REPAIR MODE CHECK:** If .ai/postmortem_latest.md exists, read it FIRST. Fix ONLY the identified gaps in item logic. Do NOT regenerate working code.
+
+**FRESH MODE:** If no postmortem exists, implement from .ai/plan_final.md.
+
+**Module Scope:**
+Port item handling from demo/rogue/original-rogue/ to Rust:
+- Item generation (weapons, armor, potions, scrolls, rings, food)
+- Item identification system (unidentified vs identified)
+- Usage effects (potion effects, scroll effects, weapon/armor bonuses)
+- Inventory management (pickup, drop, equip)
+- Item drop tables and probabilities
+
+**Requirements:**
+- Read original C item tables and effect code
+- Preserve item generation probabilities
+- Match item effect formulas exactly (healing amounts, stat boosts)
+- Maintain identification mechanics
+
+**Deliverables:**
+- demo/rogue/rogue-wasm/src/items.rs with generation and effect logic
+- Uses types from src/types.rs
+
+**Logging:**
+Append progress to .ai/implementation_log.md
+
+**Write implementation notes to .ai/module_items_impl.md**
+
+Write your status to $KILROY_STAGE_STATUS_PATH, with $KILROY_STAGE_STATUS_FALLBACK_PATH as fallback.
+
+On success: {\"status\": \"success\"}
+On failure: {\"status\": \"fail\", \"failure_reason\": \"<reason>\", \"details\": \"<details>\", \"failure_class\": \"deterministic_agent_bug\", \"failure_signature\": \"<sorted comma-separated list of failed items>\"}
+
+Do NOT write {\"status\": \"retry\"} — use custom outcomes for iteration."
+        ]
+
+        // AC6: terminal rendering + status/message lines
+        implement_io_bridge [
+            shape=box,
+            class="hard",
+            auto_status=true,
+            max_retries=2,
+            prompt="You are implementing the WASM/JS I/O bridge for Rogue WASM.
+
+**Goal:** $goal
+
+**This module owns:** AC6 (terminal rendering — 80x24 ASCII grid, correct chars, dark background), AC8 (browser playability — keyboard input, WASM loading in index.html).
+
+**REPAIR MODE CHECK:** If .ai/postmortem_latest.md exists, read it FIRST. Fix ONLY the identified gaps in I/O bridge. Do NOT regenerate working code.
+
+**FRESH MODE:** If no postmortem exists, implement from .ai/plan_final.md.
+
+**Module Scope:**
+Replace ncurses calls with WASM bridge to JS terminal renderer:
+- Terminal abstraction layer (move cursor, set char, get input)
+- WASM-exported functions: game_loop(), handle_input(key), new_game()
+- Terminal state buffer (80x24 grid) exposed to JS
+- Input event handling (arrow keys, inventory commands)
+- Status line and message line rendering
+
+**Requirements:**
+- Use wasm-bindgen to export game_loop, handle_input, new_game
+- Terminal buffer as static or WASM linear memory accessible from JS
+- Map ncurses calls (mvaddch, getch, refresh) to buffer updates
+- Handle keyboard input codes (arrow keys, inventory commands)
+- CSS: dark background, monospace font; ASCII: @ player, # corridors, + doors, . floor, | - walls, A-Z monsters
+
+**Deliverables:**
+- demo/rogue/rogue-wasm/src/io.rs with terminal abstraction
+- demo/rogue/rogue-wasm/src/lib.rs with wasm-bindgen exports
+- demo/rogue/rogue-wasm/www/index.html with JS terminal renderer
+
+**Logging:**
+Append progress to .ai/implementation_log.md
+
+**Write implementation notes to .ai/module_io_bridge_impl.md**
+
+Write your status to $KILROY_STAGE_STATUS_PATH, with $KILROY_STAGE_STATUS_FALLBACK_PATH as fallback.
+
+On success: {\"status\": \"success\"}
+On failure: {\"status\": \"fail\", \"failure_reason\": \"<reason>\", \"details\": \"<details>\", \"failure_class\": \"deterministic_agent_bug\", \"failure_signature\": \"<sorted comma-separated list of failed items>\"}
+
+Do NOT write {\"status\": \"retry\"} — use custom outcomes for iteration."
+        ]
+
+        // AC7: save/load persistence via localStorage
+        implement_save_load [
+            shape=box,
+            class="hard",
+            auto_status=true,
+            max_retries=2,
+            prompt="You are implementing save/load for Rogue WASM.
+
+**Goal:** $goal
+
+**This module owns:** AC7 (save/load — localStorage persists and restores exact game state).
+
+**REPAIR MODE CHECK:** If .ai/postmortem_latest.md exists, read it FIRST. Fix ONLY the identified gaps in save/load. Do NOT regenerate working code.
+
+**FRESH MODE:** If no postmortem exists, implement from .ai/plan_final.md.
+
+**Module Scope:**
+Replace filesystem save/load with localStorage:
+- Serialize entire game state to JSON (serde_json)
+- WASM-exported functions: save_game(), load_game()
+- JS bridge to localStorage.setItem / getItem
+- Handle save/load errors gracefully
+
+**Requirements:**
+- Use serde to serialize game state (Player, Level, Monsters, Items)
+- Export save_game() and load_game() via wasm-bindgen
+- JS code calls these and stores result in localStorage
+- Verify deserialization round-trips correctly
+
+**Deliverables:**
+- demo/rogue/rogue-wasm/src/save.rs with serialization logic
+- Updated src/lib.rs with save_game/load_game exports
+- Updated www/index.html with save/load button handlers
+
+**Logging:**
+Append progress to .ai/implementation_log.md
+
+**Write implementation notes to .ai/module_save_load_impl.md**
+
+Write your status to $KILROY_STAGE_STATUS_PATH, with $KILROY_STAGE_STATUS_FALLBACK_PATH as fallback.
+
+On success: {\"status\": \"success\"}
+On failure: {\"status\": \"fail\", \"failure_reason\": \"<reason>\", \"details\": \"<details>\", \"failure_class\": \"deterministic_agent_bug\", \"failure_signature\": \"<sorted comma-separated list of failed items>\"}
+
+Do NOT write {\"status\": \"retry\"} — use custom outcomes for iteration."
+        ]
+
+        merge_implementation [
+            shape=box,
+            auto_status=true,
+            max_retries=2,
+            prompt="You are integrating all Rogue WASM modules and resolving conflicts.
+
+**Goal:** $goal
+
+**REPAIR MODE CHECK:** If .ai/postmortem_latest.md exists, read it FIRST. Fix ONLY integration issues. Do NOT regenerate working modules.
+
+**FRESH MODE:** If no postmortem exists, integrate from module outputs.
+
+**Module Integration:**
+1. Read implementation notes from:
+   - .ai/module_core_types_impl.md
+   - .ai/module_dungeon_gen_impl.md
+   - .ai/module_monster_ai_impl.md
+   - .ai/module_items_impl.md
+   - .ai/module_io_bridge_impl.md
+   - .ai/module_save_load_impl.md
+
+2. Integrate modules into cohesive game:
+   - Main game loop in src/lib.rs calls dungeon gen, monster AI, item handling
+   - I/O bridge renders game state to terminal buffer
+   - Save/load serializes full state
+   - All modules compile together
+
+3. Resolve conflicts:
+   - Ensure module interfaces match (types, function signatures)
+   - Fix circular dependencies
+   - Add missing glue code
+
+4. Progressive compilation:
+   - Compile after each integration step
+   - Fix errors before continuing
+
+**Deliverables:**
+- demo/rogue/rogue-wasm/src/lib.rs with main game loop
+- demo/rogue/rogue-wasm/Cargo.toml with all dependencies
+- All modules compiling together
+
+**Logging:**
+Append integration progress to .ai/implementation_log.md
+
+**Write integration notes to .ai/merge_implementation.md**
+
+Write your status to $KILROY_STAGE_STATUS_PATH, with $KILROY_STAGE_STATUS_FALLBACK_PATH as fallback.
+
+On success: {\"status\": \"success\"}
+On failure: {\"status\": \"fail\", \"failure_reason\": \"<reason>\", \"details\": \"<details>\", \"failure_class\": \"deterministic_agent_bug\", \"failure_signature\": \"<sorted comma-separated list of failed integration points>\"}
+
+Do NOT write {\"status\": \"retry\"} — use custom outcomes for iteration."
+        ]
+
+        check_implement [shape=diamond, label="Merge OK?"]
 
         fix_fmt [
             shape=parallelogram,
@@ -818,6 +1061,16 @@ Write to $KILROY_STAGE_STATUS_PATH (or fall back to $KILROY_STAGE_STATUS_FALLBAC
 GOAL:
 $goal
 
+**AC-to-module ownership (for blame attribution):**
+- AC1: Dungeon Generation → implement_dungeon_gen (src/dungeon.rs)
+- AC2: Monster AI        → implement_monster_ai  (src/monster.rs)
+- AC3: Combat System     → implement_monster_ai  (src/monster.rs or src/combat.rs)
+- AC4: Item System       → implement_items       (src/items.rs)
+- AC5: RNG/Core Types    → implement_core_types  (src/rng.rs, src/types.rs)
+- AC6: Terminal Rendering → implement_io_bridge  (src/io.rs, www/index.html)
+- AC7: Save/Load         → implement_save_load   (src/save.rs)
+- AC8: Browser Playability → implement_io_bridge (www/index.html, src/lib.rs)
+
 YOUR TASK:
 1. Read .ai/definition_of_done.md and .ai/spec.md
 
@@ -836,47 +1089,49 @@ YOUR TASK:
    - Evidence: Read src/monster.rs and compare to original monster code
 
    **AC3: Faithful Port - Combat System**
-   - Check: Does damage calculation in src/combat.rs match original formula?
+   - Check: Does damage calculation match original formula?
    - Check: Do hit/miss mechanics match original?
-   - Evidence: Read src/combat.rs and compare to original combat code
+   - Evidence: Read combat logic and compare to original combat code
 
    **AC4: Faithful Port - Item System**
-   - Check: Are all item types present in src/item.rs?
+   - Check: Are all item types present in src/items.rs?
    - Check: Do item effects match original?
-   - Evidence: Read src/item.rs and compare to original item code
+   - Evidence: Read src/items.rs and compare to original item code
 
    **AC5: Faithful Port - RNG**
    - Check: Does src/rng.rs use the same RNG algorithm as original C?
+   - Check: Does same seed produce same sequence?
    - Evidence: Read src/rng.rs and compare to original RNG code
 
    **AC6: Terminal Rendering**
    - Check: Does www/index.html implement 80x24 grid?
-   - Check: Are ASCII characters correct (@ player, # corridors, etc.)?
+   - Check: Are ASCII characters correct (@ player, # corridors, A-Z monsters, etc.)?
    - Check: Is background dark and font monospace?
    - Evidence: Read www/index.html and verify rendering code
 
    **AC7: Save/Load**
    - Check: Does src/save.rs implement localStorage save/load?
-   - Check: Is game state fully serialized?
+   - Check: Is game state fully serialized and round-trip verified?
    - Evidence: Read src/save.rs
 
    **AC8: Browser Playability**
    - Check: Does index.html load WASM correctly?
    - Check: Is keyboard input wired up?
+   - Check: Are game_loop, handle_input, save_game, load_game, new_game exported?
    - Evidence: Read www/index.html and verify JS glue code
 
 3. Write detailed verification results to .ai/verify_fidelity.md:
-   - List each AC with pass/fail status
+   - List each AC with PASS/FAIL status
    - Provide specific evidence for each
-   - If any AC fails, list specific gaps
+   - If any AC fails, name the owning module
 
-**ON FAILURE:**
-Include failure_signature in status metadata: comma-separated list of failed AC identifiers (e.g., \"AC1,AC3,AC5\").
+**failure_signature format:** comma-separated list of failing AC IDs, uppercase, no spaces — e.g. \"AC1,AC3,AC7\". Include exactly the ACs that have NOT been met.
 
 OUTPUT STATUS:
-Write to $KILROY_STAGE_STATUS_PATH (or fall back to $KILROY_STAGE_STATUS_FALLBACK_PATH if unavailable) with JSON schema:
-- Success: {\"status\":\"success\"}
-- Failure: {\"status\":\"fail\",\"failure_reason\":\"...\",\"details\":\"...\",\"failure_class\":\"permanent\",\"meta\":{\"failure_signature\":\"AC1,AC3\"}}"
+Write to $KILROY_STAGE_STATUS_PATH (or fall back to $KILROY_STAGE_STATUS_FALLBACK_PATH if unavailable):
+- All ACs pass: {\"status\":\"success\",\"outcome\":\"pass\"}
+- Some ACs fail: {\"status\":\"success\",\"outcome\":\"fail\",\"failure_signature\":\"AC1,AC3\"}
+- Agent/tool crash: {\"status\":\"fail\",\"failure_reason\":\"...\",\"details\":\"...\",\"failure_class\":\"transient_infra\"}"
         ]
         check_impl [shape=diamond, label="Impl OK?"]
     }
@@ -916,9 +1171,10 @@ YOUR TASK:
    - If REJECTED: List specific gaps with AC identifiers (e.g., AC1, AC3)
 
 OUTPUT STATUS:
-Write to $KILROY_STAGE_STATUS_PATH (or fall back to $KILROY_STAGE_STATUS_FALLBACK_PATH if unavailable) with JSON schema:
-- APPROVED: {\"status\":\"success\"}
-- REJECTED: {\"status\":\"fail\",\"failure_reason\":\"gaps in [AC identifiers]\",\"details\":\"specific issues\",\"failure_class\":\"permanent\"}"
+Write to $KILROY_STAGE_STATUS_PATH (or fall back to $KILROY_STAGE_STATUS_FALLBACK_PATH if unavailable):
+- APPROVED: {\"status\":\"success\",\"outcome\":\"approved\"}
+- REJECTED: {\"status\":\"success\",\"outcome\":\"rejected\",\"failure_signature\":\"AC1,AC3\"}
+- Agent/tool crash: {\"status\":\"fail\",\"failure_reason\":\"...\",\"details\":\"...\",\"failure_class\":\"transient_infra\"}"
         ]
 
         review_b [
@@ -950,9 +1206,10 @@ YOUR TASK:
    - If REJECTED: List specific gaps with AC identifiers (e.g., AC1, AC3)
 
 OUTPUT STATUS:
-Write to $KILROY_STAGE_STATUS_PATH (or fall back to $KILROY_STAGE_STATUS_FALLBACK_PATH if unavailable) with JSON schema:
-- APPROVED: {\"status\":\"success\"}
-- REJECTED: {\"status\":\"fail\",\"failure_reason\":\"gaps in [AC identifiers]\",\"details\":\"specific issues\",\"failure_class\":\"permanent\"}"
+Write to $KILROY_STAGE_STATUS_PATH (or fall back to $KILROY_STAGE_STATUS_FALLBACK_PATH if unavailable):
+- APPROVED: {\"status\":\"success\",\"outcome\":\"approved\"}
+- REJECTED: {\"status\":\"success\",\"outcome\":\"rejected\",\"failure_signature\":\"AC1,AC3\"}
+- Agent/tool crash: {\"status\":\"fail\",\"failure_reason\":\"...\",\"details\":\"...\",\"failure_class\":\"transient_infra\"}"
         ]
 
         review_c [
@@ -984,12 +1241,14 @@ YOUR TASK:
    - If REJECTED: List specific gaps with AC identifiers (e.g., AC1, AC3)
 
 OUTPUT STATUS:
-Write to $KILROY_STAGE_STATUS_PATH (or fall back to $KILROY_STAGE_STATUS_FALLBACK_PATH if unavailable) with JSON schema:
-- APPROVED: {\"status\":\"success\"}
-- REJECTED: {\"status\":\"fail\",\"failure_reason\":\"gaps in [AC identifiers]\",\"details\":\"specific issues\",\"failure_class\":\"permanent\"}"
+Write to $KILROY_STAGE_STATUS_PATH (or fall back to $KILROY_STAGE_STATUS_FALLBACK_PATH if unavailable):
+- APPROVED: {\"status\":\"success\",\"outcome\":\"approved\"}
+- REJECTED: {\"status\":\"success\",\"outcome\":\"rejected\",\"failure_signature\":\"AC1,AC3\"}
+- Agent/tool crash: {\"status\":\"fail\",\"failure_reason\":\"...\",\"details\":\"...\",\"failure_class\":\"transient_infra\"}"
         ]
 
         review_consensus [
+            auto_status=true,
             goal_gate=true,
             prompt="Synthesize the three reviews (review_a, review_b, review_c) into a consensus verdict.
 
@@ -1006,17 +1265,19 @@ YOUR TASK:
 
 3. Apply consensus rule:
    - If 2+ reviews are APPROVED with no critical gaps → **SUCCESS**
-   - If 1 or fewer APPROVED, or critical gaps identified → **RETRY** with specific issues
+   - If 1 or fewer APPROVED, or critical gaps identified → **REJECTED** with specific issues
 
 4. Write .ai/review_consensus.md with:
-   - **Consensus Verdict**: SUCCESS or RETRY
+   - **Consensus Verdict**: SUCCESS or REJECTED
    - **Summary**: What passed, what needs fixing
-   - If RETRY: Specific issues to address (with AC identifiers)
+   - If REJECTED: Specific issues to address (with AC identifiers)
 
 OUTPUT STATUS:
-Write to $KILROY_STAGE_STATUS_PATH (or fall back to $KILROY_STAGE_STATUS_FALLBACK_PATH if unavailable) with JSON schema:
+Write to $KILROY_STAGE_STATUS_PATH (or fall back to $KILROY_STAGE_STATUS_FALLBACK_PATH if unavailable):
 - SUCCESS: {\"status\":\"success\",\"outcome\":\"success\"}
-- RETRY: {\"status\":\"fail\",\"failure_reason\":\"issues found\",\"details\":\"specific gaps\",\"failure_class\":\"permanent\"}"
+- REJECTED: {\"status\":\"success\",\"outcome\":\"rejected\"}
+
+Do NOT use {\"status\":\"fail\"} for rejection — that blocks goal_gate re-execution."
         ]
     }
 
@@ -1025,6 +1286,7 @@ Write to $KILROY_STAGE_STATUS_PATH (or fall back to $KILROY_STAGE_STATUS_FALLBAC
         node [shape=box]
 
         postmortem [
+            auto_status=true,
             prompt="Analyze the implementation failure and guide the next repair iteration.
 
 GOAL:
@@ -1092,45 +1354,59 @@ Note: status=success means postmortem analysis completed successfully, NOT that 
     plan_a -> debate_consolidate
     plan_b -> debate_consolidate
     plan_c -> debate_consolidate
-    debate_consolidate -> implement
+    debate_consolidate -> implement_fanout
 
-    implement -> check_implement
+    implement_fanout -> implement_core_types
+    implement_fanout -> implement_dungeon_gen
+    implement_fanout -> implement_monster_ai
+    implement_fanout -> implement_items
+    implement_fanout -> implement_io_bridge
+    implement_fanout -> implement_save_load
+
+    implement_core_types -> merge_implementation
+    implement_dungeon_gen -> merge_implementation
+    implement_monster_ai -> merge_implementation
+    implement_items -> merge_implementation
+    implement_io_bridge -> merge_implementation
+    implement_save_load -> merge_implementation
+
+    merge_implementation -> check_implement
     check_implement -> fix_fmt [condition="outcome=success"]
     fix_fmt -> verify_fmt
-    check_implement -> implement  [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
-    check_implement -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
+    check_implement -> merge_implementation [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
+    check_implement -> postmortem           [condition="outcome=fail && context.failure_class!=transient_infra"]
     check_implement -> postmortem
     verify_fmt -> check_fmt
     check_fmt -> verify_build [condition="outcome=success"]
-    check_fmt -> implement    [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
-    check_fmt -> postmortem   [condition="outcome=fail && context.failure_class!=transient_infra"]
+    check_fmt -> merge_implementation [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
+    check_fmt -> postmortem           [condition="outcome=fail && context.failure_class!=transient_infra"]
     check_fmt -> postmortem
 
     verify_build -> check_build
-    check_build -> verify_test  [condition="outcome=success"]
-    check_build -> implement    [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
-    check_build -> postmortem   [condition="outcome=fail && context.failure_class!=transient_infra"]
+    check_build -> verify_test        [condition="outcome=success"]
+    check_build -> merge_implementation [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
+    check_build -> postmortem         [condition="outcome=fail && context.failure_class!=transient_infra"]
     check_build -> postmortem
 
     verify_test -> check_test
-    check_test -> verify_artifacts [condition="outcome=success"]
-    check_test -> implement        [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
-    check_test -> postmortem       [condition="outcome=fail && context.failure_class!=transient_infra"]
+    check_test -> verify_artifacts    [condition="outcome=success"]
+    check_test -> merge_implementation [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
+    check_test -> postmortem          [condition="outcome=fail && context.failure_class!=transient_infra"]
     check_test -> postmortem
 
     verify_artifacts -> check_artifacts
-    check_artifacts -> verify_fidelity [condition="outcome=success"]
-    check_artifacts -> implement       [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
-    check_artifacts -> postmortem      [condition="outcome=fail && context.failure_class!=transient_infra"]
+    check_artifacts -> verify_fidelity  [condition="outcome=success"]
+    check_artifacts -> merge_implementation [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
+    check_artifacts -> postmortem       [condition="outcome=fail && context.failure_class!=transient_infra"]
     check_artifacts -> postmortem
 
     verify_fidelity -> check_impl
-    check_impl -> review_fanout [condition="outcome=success"]
+    check_impl -> review_fanout [condition="outcome=pass"]
     review_fanout -> review_a
     review_fanout -> review_b
     review_fanout -> review_c
-    check_impl -> implement  [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
-    check_impl -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
+    check_impl -> merge_implementation [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
+    check_impl -> postmortem           [condition="outcome=fail && context.failure_class!=transient_infra"]
     check_impl -> postmortem
 
     review_a -> review_consensus
@@ -1140,9 +1416,9 @@ Note: status=success means postmortem analysis completed successfully, NOT that 
     review_consensus -> exit [condition="outcome=success"]
     review_consensus -> postmortem
 
-    postmortem -> check_toolchain [condition="outcome=fail && context.failure_class=transient_infra"]
-    postmortem -> implement [condition="outcome=impl_repair"]
-    postmortem -> plan_fanout [condition="outcome=needs_replan"]
-    postmortem -> check_toolchain [condition="outcome=needs_toolchain"]
-    postmortem -> implement
+    postmortem -> check_toolchain    [condition="outcome=fail && context.failure_class=transient_infra"]
+    postmortem -> implement_fanout   [condition="outcome=impl_repair"]
+    postmortem -> plan_fanout        [condition="outcome=needs_replan"]
+    postmortem -> check_toolchain    [condition="outcome=needs_toolchain"]
+    postmortem -> implement_fanout
 }
