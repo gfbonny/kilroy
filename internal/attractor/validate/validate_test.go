@@ -1357,3 +1357,100 @@ func TestValidate_G12_UnknownProvider_NoWarning(t *testing.T) {
 	assertNoRule(t, diags, "stylesheet_unknown_model")
 	assertNoRule(t, diags, "stylesheet_noncanonical_model_id")
 }
+// TestPromptFile_ConflictLintRule_FiresWhenBothSet verifies that when a node
+// has both prompt_file and prompt/llm_prompt set and expandPromptFiles has NOT
+// run (RepoPath is empty, so prompt_file remains unresolved), the
+// prompt_file_conflict lint rule fires with severity ERROR.
+//
+// This exercises the standalone-validate path: lintPromptFileConflict checks
+// for the ambiguous combination and reports it so the user knows.
+func TestPromptFile_ConflictLintRule_FiresWhenBothSet(t *testing.T) {
+	// Construct a minimal graph by hand so we can inject both attributes without
+	// going through the DOT parser attribute-dedup semantics.
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="inline text", prompt_file="prompts/some.md"]
+  start -> a -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	diags := Validate(g)
+
+	// prompt_file_conflict must fire as ERROR because both prompt and
+	// prompt_file are set on node "a".
+	assertHasRule(t, diags, "prompt_file_conflict", SeverityError)
+
+	// The diagnostic must point at node "a".
+	found := false
+	for _, d := range diags {
+		if d.Rule == "prompt_file_conflict" && d.NodeID == "a" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected prompt_file_conflict diagnostic for node 'a'; got %+v", diags)
+	}
+}
+
+// TestPromptFile_ConflictLintRule_DoesNotFireWhenOnlyPromptFile verifies that
+// a node with only prompt_file (and no prompt/llm_prompt) does not trigger
+// the prompt_file_conflict lint rule, since there is no ambiguity.
+func TestPromptFile_ConflictLintRule_DoesNotFireWhenOnlyPromptFile(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt_file="prompts/some.md"]
+  start -> a -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	diags := Validate(g)
+
+	// No conflict: only prompt_file is set, prompt is absent.
+	assertNoRule(t, diags, "prompt_file_conflict")
+}
+
+// TestPromptFile_LlmPromptConflict_FiresWithLlmPromptAttr verifies that the
+// prompt_file_conflict rule also fires when prompt_file conflicts with the
+// legacy llm_prompt attribute (not just the primary prompt attribute).
+func TestPromptFile_LlmPromptConflict_FiresWithLlmPromptAttr(t *testing.T) {
+	// Build the graph directly via model to set llm_prompt without DOT
+	// attribute normalization potentially merging it.
+	g := model.NewGraph("G")
+	start := model.NewNode("start")
+	start.Attrs["shape"] = "Mdiamond"
+	exit := model.NewNode("exit")
+	exit.Attrs["shape"] = "Msquare"
+	a := model.NewNode("a")
+	a.Attrs["shape"] = "box"
+	a.Attrs["llm_provider"] = "openai"
+	a.Attrs["llm_model"] = "gpt-5.2"
+	a.Attrs["llm_prompt"] = "legacy inline text"
+	a.Attrs["prompt_file"] = "prompts/some.md"
+
+	_ = g.AddNode(start)
+	_ = g.AddNode(exit)
+	_ = g.AddNode(a)
+	g.Edges = append(g.Edges, &model.Edge{From: "start", To: "a"})
+	g.Edges = append(g.Edges, &model.Edge{From: "a", To: "exit"})
+
+	diags := Validate(g)
+
+	// prompt_file_conflict must fire because llm_prompt + prompt_file are both set.
+	assertHasRule(t, diags, "prompt_file_conflict", SeverityError)
+	for _, d := range diags {
+		if d.Rule == "prompt_file_conflict" && d.NodeID == "a" {
+			return
+		}
+	}
+	t.Fatalf("expected prompt_file_conflict for node 'a'; got %+v", diags)
+}
