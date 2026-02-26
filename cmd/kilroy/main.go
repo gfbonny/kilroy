@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/danshapiro/kilroy/internal/attractor/engine"
 	"github.com/danshapiro/kilroy/internal/attractor/modeldb"
+	"github.com/danshapiro/kilroy/internal/attractor/validate"
 	"github.com/danshapiro/kilroy/internal/providerspec"
 	"github.com/danshapiro/kilroy/internal/version"
 )
@@ -74,6 +76,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  kilroy attractor status [--logs-root <dir> | --latest] [--json] [--follow|-f] [--cxdb] [--raw] [--watch] [--interval <sec>]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor stop --logs-root <dir> [--grace-ms <ms>] [--force]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor validate --graph <file.dot>")
+	fmt.Fprintln(os.Stderr, "  kilroy attractor validate --batch <file.dot> [<file.dot> ...] [--json]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor ingest [--output <file.dot>] [--model <model>] [--skill <skill.md>] [--repo <path>] [--max-turns <n>] <requirements>")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor serve [--addr <host:port>]")
 }
@@ -402,6 +405,10 @@ func supportedForceModelProvidersCSV() string {
 
 func attractorValidate(args []string) {
 	var graphPath string
+	var batchFiles []string
+	var batchMode bool
+	var jsonOutput bool
+
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--graph":
@@ -411,11 +418,32 @@ func attractorValidate(args []string) {
 				os.Exit(1)
 			}
 			graphPath = args[i]
+		case "--batch":
+			batchMode = true
+			// Consume all remaining non-flag arguments as file paths.
+			for i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
+				i++
+				batchFiles = append(batchFiles, args[i])
+			}
+		case "--json":
+			jsonOutput = true
 		default:
-			fmt.Fprintf(os.Stderr, "unknown arg: %s\n", args[i])
-			os.Exit(1)
+			// Allow positional file arguments when in batch mode context
+			// (e.g. when --batch was not yet seen but a .dot was given).
+			if strings.HasSuffix(args[i], ".dot") && batchMode {
+				batchFiles = append(batchFiles, args[i])
+			} else {
+				fmt.Fprintf(os.Stderr, "unknown arg: %s\n", args[i])
+				os.Exit(1)
+			}
 		}
 	}
+
+	if batchMode {
+		attractorValidateBatch(batchFiles, jsonOutput)
+		return
+	}
+
 	if graphPath == "" {
 		usage()
 		os.Exit(1)
@@ -446,6 +474,111 @@ func attractorValidate(args []string) {
 		fmt.Printf("%s: %s (%s)\n", d.Severity, d.Message, d.Rule)
 	}
 	os.Exit(0)
+}
+
+// batchFileResult holds per-file validate results for batch mode.
+type batchFileResult struct {
+	File     string               `json:"file"`
+	Errors   []validate.Diagnostic `json:"errors"`
+	Warnings []validate.Diagnostic `json:"warnings"`
+	ParseErr string               `json:"parse_error,omitempty"`
+}
+
+// attractorValidateBatch runs validate against each file in files and emits a
+// summary.  Exit codes: 0 = all clean, 1 = any errors, 2 = warnings-only.
+func attractorValidateBatch(files []string, jsonOutput bool) {
+	if len(files) == 0 {
+		fmt.Fprintln(os.Stderr, "--batch requires at least one file path")
+		usage()
+		os.Exit(1)
+	}
+
+	results := make([]batchFileResult, 0, len(files))
+	anyErrors := false
+	anyWarnings := false
+
+	for _, f := range files {
+		res := batchFileResult{
+			File:     f,
+			Errors:   []validate.Diagnostic{},
+			Warnings: []validate.Diagnostic{},
+		}
+		dotSource, err := os.ReadFile(f)
+		if err != nil {
+			res.ParseErr = err.Error()
+			anyErrors = true
+			results = append(results, res)
+			continue
+		}
+		_, diags, prepErr := engine.Prepare(dotSource)
+		// Collect diagnostics even when Prepare returns an error.
+		for _, d := range diags {
+			switch d.Severity {
+			case validate.SeverityError:
+				res.Errors = append(res.Errors, d)
+			case validate.SeverityWarning:
+				res.Warnings = append(res.Warnings, d)
+			}
+		}
+		if prepErr != nil && len(res.Errors) == 0 {
+			// Prepare returned a fatal error that produced no diagnostic; surface it.
+			res.ParseErr = prepErr.Error()
+		}
+		if len(res.Errors) > 0 || res.ParseErr != "" {
+			anyErrors = true
+		}
+		if len(res.Warnings) > 0 {
+			anyWarnings = true
+		}
+		results = append(results, res)
+	}
+
+	if jsonOutput {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(results); err != nil {
+			fmt.Fprintln(os.Stderr, "json encode:", err)
+			os.Exit(1)
+		}
+	} else {
+		// Human-readable per-file summary table.
+		fmt.Printf("%-50s  %6s  %8s\n", "FILE", "ERRORS", "WARNINGS")
+		fmt.Println(strings.Repeat("-", 70))
+		for _, r := range results {
+			errCount := len(r.Errors)
+			if r.ParseErr != "" {
+				errCount++
+			}
+			warnCount := len(r.Warnings)
+			status := "ok"
+			if errCount > 0 {
+				status = "FAIL"
+			} else if warnCount > 0 {
+				status = "warn"
+			}
+			fmt.Printf("%-50s  %6d  %8d  [%s]\n", filepath.Base(r.File), errCount, warnCount, status)
+			if r.ParseErr != "" {
+				fmt.Printf("  parse error: %s\n", r.ParseErr)
+			}
+			for _, d := range r.Errors {
+				fmt.Printf("  ERROR   %-30s %s\n", "("+d.Rule+")", d.Message)
+			}
+			for _, d := range r.Warnings {
+				fmt.Printf("  WARNING %-30s %s\n", "("+d.Rule+")", d.Message)
+			}
+		}
+		fmt.Println(strings.Repeat("-", 70))
+		fmt.Printf("Total files: %d\n", len(results))
+	}
+
+	switch {
+	case anyErrors:
+		os.Exit(1)
+	case anyWarnings:
+		os.Exit(2)
+	default:
+		os.Exit(0)
+	}
 }
 
 func attractorResume(args []string) {
