@@ -6,8 +6,8 @@
 # and if the file ends in .dot, runs kilroy attractor validate --graph.
 #
 # Exit codes (PostToolUse semantics):
-#   0 — clean or no-op; no output means Claude continues normally
-#   0 — with stdout output means Claude receives output as feedback
+#   0 — clean or no-op; Claude continues normally
+#   2 — feedback written to stderr; Claude Code injects it into agent context
 #
 # Env vars:
 #   KILROY_CLAUDE_PATH  — if set, directory or full path used to locate kilroy binary
@@ -65,10 +65,11 @@ COMBINED_OUTPUT=$("$KILROY_BIN" attractor validate --graph "$FILE_PATH" 2>&1) ||
 FEEDBACK=$(printf '%s\n' "$COMBINED_OUTPUT" | grep -v '^ok: ' || true)
 
 # If there is anything remaining (warnings or errors), return it as feedback.
-# Claude Code injects PostToolUse stdout output back into the agent context.
-if [[ -n "$FEEDBACK" ]]; then
-    printf 'kilroy attractor validate reported issues in %s — please repair before continuing:\n\n%s\n' \
-        "$FILE_PATH" "$FEEDBACK"
+# PostToolUse hooks must use exit 2 + stderr; stdout on exit 0 is not injected
+# into the agent context.
+if [ -n "$FEEDBACK" ]; then
+    printf 'kilroy attractor validate found issues in %s — please repair before continuing:\n\n%s\n' \
+        "$FILE_PATH" "$FEEDBACK" >&2
+    exit 2
 fi
-
 exit 0

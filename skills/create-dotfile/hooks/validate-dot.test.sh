@@ -34,26 +34,29 @@ FAIL=0
 run_test() {
     local name="$1"
     local input_json="$2"
-    local expect_empty="$3"   # "yes" = expect no output, "no" = expect output
+    local expect_empty="$3"   # "yes" = expect no feedback, "no" = expect feedback (exit 2 + stderr)
 
-    local output
-    output=$(printf '%s' "$input_json" | bash "$HOOK" 2>/dev/null || true)
+    local stderr_output exit_code
+    stderr_output=$(printf '%s' "$input_json" | bash "$HOOK" 2>&1 >/dev/null; true)
+    exit_code=$(printf '%s' "$input_json" | bash "$HOOK" 2>/dev/null; echo $?)
 
     if [[ "$expect_empty" == "yes" ]]; then
-        if [[ -z "$output" ]]; then
+        # Expect: exit 0 and no stderr output
+        if [[ -z "$stderr_output" && "$exit_code" == "0" ]]; then
             echo "PASS: $name"
             PASS=$((PASS + 1))
         else
-            echo "FAIL: $name — expected no output, got:"
-            printf '  %s\n' "$output"
+            echo "FAIL: $name — expected no feedback (exit 0, no stderr), got exit=$exit_code:"
+            printf '  %s\n' "$stderr_output"
             FAIL=$((FAIL + 1))
         fi
     else
-        if [[ -n "$output" ]]; then
+        # Expect: exit 2 and non-empty stderr output
+        if [[ -n "$stderr_output" && "$exit_code" == "2" ]]; then
             echo "PASS: $name"
             PASS=$((PASS + 1))
         else
-            echo "FAIL: $name — expected output (errors/warnings), got none"
+            echo "FAIL: $name — expected exit 2 + stderr feedback, got exit=$exit_code, stderr='$stderr_output'"
             FAIL=$((FAIL + 1))
         fi
     fi
