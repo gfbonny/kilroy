@@ -32,6 +32,7 @@ digraph G {
   start -> check
   check -> exit [condition="outcome=success"]
   check -> work [condition="outcome=fail", loop_restart=true]
+  check -> exit
   work -> check
 }
 `)

@@ -102,6 +102,82 @@ func CatalogHasProviderModel(c *Catalog, provider, modelID string) bool {
 	return false
 }
 
+// ModelLookupStatus describes the result of looking up a model ID in the catalog.
+type ModelLookupStatus int
+
+const (
+	// ModelNotFound means the catalog covers the provider but no entry matched the model ID.
+	ModelNotFound ModelLookupStatus = iota
+	// ModelFoundCanonical means the model ID matched a catalog entry exactly (or via
+	// provider-prefix stripping) without needing dot/dash normalization.
+	ModelFoundCanonical
+	// ModelFoundNonCanonical means the model ID matched only after normalizing
+	// digit-separator dots to dashes (Anthropic native API format). The caller
+	// should warn and suggest the canonical (dot) form.
+	ModelFoundNonCanonical
+	// ModelProviderUnknown means the catalog has no data for the given provider,
+	// so no determination can be made.
+	ModelProviderUnknown
+)
+
+// LookupModelForProvider checks modelID against the catalog for the given provider
+// and returns a status indicating whether it was found and whether it is in canonical form.
+// This is the preferred call site for lint rules that want to distinguish "missing" from
+// "wrong format" without duplicating the Anthropic dot/dash normalization logic.
+func LookupModelForProvider(c *Catalog, provider, modelID string) ModelLookupStatus {
+	if c == nil || c.Models == nil {
+		return ModelProviderUnknown
+	}
+	provider = modelmeta.NormalizeProvider(provider)
+	modelID = strings.TrimSpace(modelID)
+	if provider == "" || modelID == "" {
+		return ModelProviderUnknown
+	}
+	if !CatalogCoversProvider(c, provider) {
+		return ModelProviderUnknown
+	}
+
+	inCanonical := canonicalModelID(provider, modelID)
+	inRelative := providerRelativeModelID(provider, modelID)
+
+	// First pass: exact / provider-relative match (no dot/dash normalization).
+	for id, entry := range c.Models {
+		entryProvider := modelmeta.NormalizeProvider(entry.Provider)
+		if entryProvider == "" {
+			entryProvider = inferProviderFromModelID(id)
+		}
+		if entryProvider != provider {
+			continue
+		}
+		if strings.EqualFold(canonicalModelID(provider, id), inCanonical) {
+			return ModelFoundCanonical
+		}
+		if strings.EqualFold(providerRelativeModelID(provider, id), inRelative) {
+			return ModelFoundCanonical
+		}
+	}
+
+	// Second pass (Anthropic only): dot/dash normalization — match exists but ID is non-canonical.
+	if provider == "anthropic" {
+		normQuery := versionDotRe.ReplaceAllString(inRelative, "${1}-${2}")
+		for id, entry := range c.Models {
+			ep := modelmeta.NormalizeProvider(entry.Provider)
+			if ep == "" {
+				ep = inferProviderFromModelID(id)
+			}
+			if ep != provider {
+				continue
+			}
+			normEntry := versionDotRe.ReplaceAllString(providerRelativeModelID(provider, id), "${1}-${2}")
+			if strings.EqualFold(normEntry, normQuery) {
+				return ModelFoundNonCanonical
+			}
+		}
+	}
+
+	return ModelNotFound
+}
+
 func inferProviderFromModelID(id string) string {
 	id = strings.TrimSpace(id)
 	if id == "" {

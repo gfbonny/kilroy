@@ -233,6 +233,7 @@ digraph G {
   start -> worker
   worker -> good [condition="outcome=success"]
   worker -> bad  [condition="outcome=fail"]
+  worker -> good
   good -> exit
   bad -> exit
 }
@@ -847,8 +848,10 @@ digraph test_pipeline {
     plan -> implement
     implement -> review [condition="outcome=success"]
     implement -> plan   [condition="outcome=fail", label="Retry"]
+    implement -> review
     review -> done      [condition="outcome=success"]
     review -> implement [condition="outcome=fail", label="Fix"]
+    review -> done
 }
 `)
 
@@ -863,8 +866,8 @@ digraph test_pipeline {
 	if got := len(g.Nodes); got != 5 {
 		t.Fatalf("Step 1: nodes = %d, want 5", got)
 	}
-	if got := len(g.Edges); got != 6 {
-		t.Fatalf("Step 1: edges = %d, want 6", got)
+	if got := len(g.Edges); got != 8 {
+		t.Fatalf("Step 1: edges = %d, want 8", got)
 	}
 
 	// --- Step 2: Validate ---

@@ -7,6 +7,7 @@ import (
 
 	"github.com/danshapiro/kilroy/internal/attractor/cond"
 	"github.com/danshapiro/kilroy/internal/attractor/model"
+	"github.com/danshapiro/kilroy/internal/attractor/modeldb"
 	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 	"github.com/danshapiro/kilroy/internal/attractor/style"
 )
@@ -36,9 +37,23 @@ type LintRule interface {
 	Apply(g *model.Graph) []Diagnostic
 }
 
+// ValidateOptions carries optional parameters for ValidateWithOptions.
+type ValidateOptions struct {
+	// Catalog is the modeldb catalog used to validate llm_model values in the
+	// model_stylesheet against known model IDs. When nil, model ID catalog checks
+	// are skipped (the stylesheet_syntax check still runs).
+	Catalog *modeldb.Catalog
+}
+
 // Validate runs all built-in lint rules and any extra rules against the graph.
 // Extra rules are appended after built-in rules (spec §7.3).
 func Validate(g *model.Graph, extraRules ...LintRule) []Diagnostic {
+	return ValidateWithOptions(g, ValidateOptions{}, extraRules...)
+}
+
+// ValidateWithOptions runs all built-in lint rules plus catalog-aware checks
+// (when opts.Catalog is non-nil) and any extra rules against the graph.
+func ValidateWithOptions(g *model.Graph, opts ValidateOptions, extraRules ...LintRule) []Diagnostic {
 	var diags []Diagnostic
 	if g == nil {
 		return []Diagnostic{{Rule: "graph_nil", Severity: SeverityError, Message: "graph is nil"}}
@@ -52,12 +67,15 @@ func Validate(g *model.Graph, extraRules ...LintRule) []Diagnostic {
 	diags = append(diags, lintReachability(g)...)
 	diags = append(diags, lintConditionSyntax(g)...)
 	diags = append(diags, lintStylesheetSyntax(g)...)
+	diags = append(diags, lintStylesheetModelIDs(g, opts.Catalog)...)
 	diags = append(diags, lintRetryTargetsExist(g)...)
 	diags = append(diags, lintGoalGateHasRetry(g)...)
+	diags = append(diags, lintGoalGateMissingNodeRetryTarget(g)...)
 	diags = append(diags, lintGoalGateExitStatusContract(g)...)
 	diags = append(diags, lintGoalGatePromptStatusHint(g)...)
 	diags = append(diags, lintFidelityValid(g)...)
 	diags = append(diags, lintPromptOnCodergenNodes(g)...)
+	diags = append(diags, lintStatusContractInPrompt(g)...)
 	diags = append(diags, lintPromptOnConditionalNodes(g)...)
 	diags = append(diags, lintPromptFileConflict(g)...)
 	diags = append(diags, lintToolCommandRequired(g)...)
@@ -66,7 +84,10 @@ func Validate(g *model.Graph, extraRules ...LintRule) []Diagnostic {
 	diags = append(diags, lintFailLoopFailureClassGuard(g)...)
 	diags = append(diags, lintEscalationModelsSyntax(g)...)
 	diags = append(diags, lintAllConditionalEdges(g)...)
+	diags = append(diags, lintStatusFallbackInPrompt(g)...)
 	diags = append(diags, lintTemplatePostmortemRecoveryRouting(g)...)
+	diags = append(diags, lintOrphanCustomOutcomeHint(g)...)
+	diags = append(diags, lintReservedKeywordNodeID(g)...)
 
 	// Run custom lint rules (spec §7.3: extra_rules appended after built-in rules).
 	for _, rule := range extraRules {
@@ -312,8 +333,25 @@ func lintConditionSyntax(g *model.Graph) []Diagnostic {
 			})
 			continue
 		}
-		// Also ensure our evaluator can process it.
-		_, _ = cond.Evaluate(c, runtime.Outcome{Status: runtime.StatusSuccess}, runtime.NewContext())
+		// NOTE: evalClause error paths are unreachable for inputs that pass
+		// validateConditionSyntax above: SplitN(s, op, 2) on a string that
+		// contains op always yields exactly 2 parts. The Evaluate call below
+		// is retained as a forward-compatibility safety net.
+		//
+		// Also ensure our evaluator can process it. Discard the boolean result
+		// (we are linting with a synthetic outcome, so the match value is
+		// meaningless) but treat an error as a lint failure: it means the
+		// evaluator found something the syntax checker missed, which would
+		// cause a silent mis-route at runtime.
+		if _, evalErr := cond.Evaluate(c, runtime.Outcome{Status: runtime.StatusSuccess}, runtime.NewContext()); evalErr != nil {
+			diags = append(diags, Diagnostic{
+				Rule:     "condition_syntax",
+				Severity: SeverityError,
+				Message:  fmt.Sprintf("condition evaluator rejected expression %q: %v", c, evalErr),
+				EdgeFrom: e.From,
+				EdgeTo:   e.To,
+			})
+		}
 	}
 	return diags
 }
@@ -415,6 +453,73 @@ func lintStylesheetSyntax(g *model.Graph) []Diagnostic {
 	return nil
 }
 
+// lintStylesheetModelIDs checks llm_model values in the model_stylesheet against
+// the modeldb catalog. When catalog is nil, the check is skipped silently.
+//
+// Diagnostics emitted:
+//   - stylesheet_unknown_model (WARNING): model ID is not found in the catalog for
+//     the declared provider.
+//   - stylesheet_noncanonical_model_id (ERROR): model ID is found only after
+//     normalizing dashes to dots in version numbers (Anthropic native format).
+//     The canonical catalog form (with dots) must be used instead.
+func lintStylesheetModelIDs(g *model.Graph, catalog *modeldb.Catalog) []Diagnostic {
+	if catalog == nil {
+		return nil
+	}
+	raw := strings.TrimSpace(g.Attrs["model_stylesheet"])
+	if raw == "" {
+		return nil
+	}
+	rules, err := style.ParseStylesheet(raw)
+	if err != nil {
+		// Syntax errors are already reported by lintStylesheetSyntax; skip here.
+		return nil
+	}
+
+	var diags []Diagnostic
+	// Track already-reported (provider, modelID) pairs to avoid duplicate warnings.
+	seen := map[string]bool{}
+	for _, r := range rules {
+		modelID, hasModel := r.Decls["llm_model"]
+		if !hasModel || strings.TrimSpace(modelID) == "" {
+			continue
+		}
+		modelID = strings.TrimSpace(modelID)
+		provider := strings.TrimSpace(r.Decls["llm_provider"])
+
+		key := provider + "|" + modelID
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		if provider == "" {
+			// Without a provider we cannot do a targeted catalog lookup; skip.
+			continue
+		}
+
+		status := modeldb.LookupModelForProvider(catalog, provider, modelID)
+		switch status {
+		case modeldb.ModelNotFound:
+			diags = append(diags, Diagnostic{
+				Rule:     "stylesheet_unknown_model",
+				Severity: SeverityWarning,
+				Message:  fmt.Sprintf("model_stylesheet: model %q not found in catalog for provider %q", modelID, provider),
+			})
+		case modeldb.ModelFoundNonCanonical:
+			diags = append(diags, Diagnostic{
+				Rule:     "stylesheet_noncanonical_model_id",
+				Severity: SeverityError,
+				Message:  fmt.Sprintf("model_stylesheet: model %q uses non-canonical format; version suffixes must use dots not dashes (e.g. claude-opus-4.6 not claude-opus-4-6)", modelID),
+				Fix:      "replace dashes in the version number suffix with dots: claude-opus-4-6 → claude-opus-4.6",
+			})
+		case modeldb.ModelFoundCanonical, modeldb.ModelProviderUnknown:
+			// No warning: canonical match or catalog has no data for this provider.
+		}
+	}
+	return diags
+}
+
 func lintRetryTargetsExist(g *model.Graph) []Diagnostic {
 	var diags []Diagnostic
 	for id, n := range g.Nodes {
@@ -455,6 +560,36 @@ func lintGoalGateHasRetry(g *model.Graph) []Diagnostic {
 					NodeID:   id,
 				})
 			}
+		}
+	}
+	return diags
+}
+
+// lintGoalGateMissingNodeRetryTarget warns when a goal_gate=true node does not
+// declare its own retry_target or fallback_retry_target. Relying on the
+// graph-level retry_target is insufficient: the graph-level attribute is
+// intended for transient node failures, not goal-gate rejection re-execution.
+// Each goal_gate node should explicitly declare where to route on rejection
+// (typically "postmortem").
+func lintGoalGateMissingNodeRetryTarget(g *model.Graph) []Diagnostic {
+	var diags []Diagnostic
+	for id, n := range g.Nodes {
+		if n == nil {
+			continue
+		}
+		if !strings.EqualFold(n.Attr("goal_gate", "false"), "true") {
+			continue
+		}
+		nodeRetry := strings.TrimSpace(n.Attr("retry_target", ""))
+		nodeFallback := strings.TrimSpace(n.Attr("fallback_retry_target", ""))
+		if nodeRetry == "" && nodeFallback == "" {
+			diags = append(diags, Diagnostic{
+				Rule:     "goal_gate_missing_node_retry_target",
+				Severity: SeverityWarning,
+				Message:  "goal_gate node has no node-level retry_target or fallback_retry_target; graph-level retry_target is for transient failures, not goal-gate rejection",
+				NodeID:   id,
+				Fix:      "add retry_target=\"postmortem\" (or the appropriate recovery node) to this node's attributes",
+			})
 		}
 	}
 	return diags
@@ -639,6 +774,39 @@ func lintPromptOnCodergenNodes(g *model.Graph) []Diagnostic {
 				NodeID:   id,
 			})
 		}
+	}
+	return diags
+}
+
+// lintStatusContractInPrompt checks that shape=box nodes reference
+// $KILROY_STAGE_STATUS_PATH in their prompt text.
+// NOTE: This rule only checks shape=box nodes. Future codergen shapes
+// that write status.json should be added here.
+func lintStatusContractInPrompt(g *model.Graph) []Diagnostic {
+	var diags []Diagnostic
+	for id, n := range g.Nodes {
+		if n == nil {
+			continue
+		}
+		if n.Shape() != "box" {
+			continue
+		}
+		prompt := n.Prompt()
+		if strings.TrimSpace(prompt) == "" {
+			// Empty prompt — defer to the existing prompt_on_llm_nodes rule.
+			continue
+		}
+		if strings.Contains(prompt, "KILROY_STAGE_STATUS_PATH") ||
+			strings.Contains(prompt, "KILROY_STAGE_STATUS_FALLBACK_PATH") {
+			continue
+		}
+		diags = append(diags, Diagnostic{
+			Rule:     "status_contract_in_prompt",
+			Severity: SeverityWarning,
+			Message:  "codergen node prompt does not reference KILROY_STAGE_STATUS_PATH or KILROY_STAGE_STATUS_FALLBACK_PATH; node cannot write status.json and custom outcome routing will be lost",
+			NodeID:   id,
+			Fix:      "add instructions to write $KILROY_STAGE_STATUS_PATH with the appropriate outcome",
+		})
 	}
 	return diags
 }
@@ -1149,7 +1317,7 @@ func lintAllConditionalEdges(g *model.Graph) []Diagnostic {
 		if allConditional {
 			diags = append(diags, Diagnostic{
 				Rule:     "all_conditional_edges",
-				Severity: SeverityWarning,
+				Severity: SeverityError,
 				NodeID:   id,
 				Message:  fmt.Sprintf("node %q has %d outgoing edge(s) but all are conditional; add an unconditional fallback edge to avoid routing gaps", id, len(edges)),
 				Fix:      "Add an unconditional edge (no condition attribute) as a fallback route",
@@ -1218,5 +1386,161 @@ func lintTemplatePostmortemRecoveryRouting(g *model.Graph) []Diagnostic {
 		})
 	}
 
+	return diags
+}
+
+// lintOrphanCustomOutcomeHint warns when a node has custom outcome routing
+// (condition="outcome=<non-reserved-value>") but no unconditional fallback edge.
+// A typo'd custom outcome string will have no valid route, silently routing
+// through to unintended edges or falling through entirely. The unconditional
+// fallback provides a safety net for unexpected outcome values.
+func lintOrphanCustomOutcomeHint(g *model.Graph) []Diagnostic {
+	if g == nil {
+		return nil
+	}
+
+	// Build per-node outgoing edge lists.
+	outgoing := make(map[string][]*model.Edge)
+	for _, e := range g.Edges {
+		if e != nil {
+			outgoing[e.From] = append(outgoing[e.From], e)
+		}
+	}
+
+	var diags []Diagnostic
+	for id := range g.Nodes {
+		edges := outgoing[id]
+		if len(edges) == 0 {
+			continue
+		}
+
+		hasCustomOutcomeEdge := false
+		hasUnconditionalEdge := false
+
+		for _, e := range edges {
+			cond := strings.TrimSpace(e.Condition())
+			if cond == "" {
+				hasUnconditionalEdge = true
+				continue
+			}
+			if edgeHasCustomOutcomeCondition(cond) {
+				hasCustomOutcomeEdge = true
+			}
+		}
+
+		if hasCustomOutcomeEdge && !hasUnconditionalEdge {
+			diags = append(diags, Diagnostic{
+				Rule:     "orphan_custom_outcome_hint",
+				Severity: SeverityWarning,
+				NodeID:   id,
+				Message:  "node has custom outcome routing but no unconditional fallback — a typo'd outcome string will have no valid route",
+				Fix:      "add an unconditional fallback edge to handle unexpected outcome values",
+			})
+		}
+	}
+	return diags
+}
+
+// edgeHasCustomOutcomeCondition returns true if the condition expression contains
+// at least one outcome=<value> clause where <value> is NOT a reserved outcome
+// (success, partial_success, retry, fail, skipped and their aliases).
+func edgeHasCustomOutcomeCondition(condExpr string) bool {
+	for _, clause := range strings.Split(condExpr, "&&") {
+		clause = strings.TrimSpace(clause)
+		if clause == "" {
+			continue
+		}
+		// Only look at equality comparisons (not !=).
+		if strings.Contains(clause, "!=") {
+			continue
+		}
+		if !strings.Contains(clause, "=") {
+			continue
+		}
+		parts := strings.SplitN(clause, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		if key != "outcome" {
+			continue
+		}
+		val := strings.Trim(strings.TrimSpace(parts[1]), "\"'")
+		// Check if this is a reserved (canonical) outcome value.
+		status, err := runtime.ParseStageStatus(val)
+		if err != nil {
+			// Unparseable value — treat as custom.
+			return true
+		}
+		if !status.IsCanonical() {
+			return true
+		}
+	}
+	return false
+}
+
+// lintStatusFallbackInPrompt warns when a codergen (shape=box) node's prompt
+// references the primary status path ($KILROY_STAGE_STATUS_PATH) but omits the
+// fallback path ($KILROY_STAGE_STATUS_FALLBACK_PATH). Without a fallback, a
+// failed primary write leaves the engine with no recovery signal.
+//
+// Rule: status_fallback_in_prompt (WARNING)
+func lintStatusFallbackInPrompt(g *model.Graph) []Diagnostic {
+	var diags []Diagnostic
+	for id, n := range g.Nodes {
+		if n == nil {
+			continue
+		}
+		if n.Shape() != "box" {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(n.Attr("auto_status", "false")), "true") {
+			continue
+		}
+		prompt := n.Prompt()
+		hasPrimary := strings.Contains(prompt, "KILROY_STAGE_STATUS_PATH")
+		hasFallback := strings.Contains(prompt, "KILROY_STAGE_STATUS_FALLBACK_PATH")
+		if hasPrimary && !hasFallback {
+			diags = append(diags, Diagnostic{
+				Rule:     "status_fallback_in_prompt",
+				Severity: SeverityWarning,
+				Message:  "codergen node prompt references $KILROY_STAGE_STATUS_PATH but omits $KILROY_STAGE_STATUS_FALLBACK_PATH; if the primary write fails the engine has no recovery signal",
+				NodeID:   id,
+				Fix:      "add $KILROY_STAGE_STATUS_FALLBACK_PATH alongside $KILROY_STAGE_STATUS_PATH in the node prompt",
+			})
+		}
+	}
+	return diags
+}
+
+// dotReservedKeywords is the set of DOT/Graphviz keywords that must not be
+// used as node IDs. Using any of these causes silent routing failures because
+// the DOT parser interprets them as language keywords rather than node names.
+var dotReservedKeywords = map[string]bool{
+	"graph":    true,
+	"digraph":  true,
+	"subgraph": true,
+	"node":     true,
+	"edge":     true,
+	"strict":   true,
+	"if":       true,
+}
+
+// lintReservedKeywordNodeID warns when any node ID is a DOT/Graphviz reserved
+// keyword. A node named "if" (for example) will never be reachable via normal
+// DOT routing and always represents LLM confusion.
+func lintReservedKeywordNodeID(g *model.Graph) []Diagnostic {
+	var diags []Diagnostic
+	for id := range g.Nodes {
+		if dotReservedKeywords[strings.ToLower(id)] {
+			diags = append(diags, Diagnostic{
+				Rule:     "reserved_keyword_node_id",
+				Severity: SeverityWarning,
+				Message:  fmt.Sprintf("node ID %q is a DOT/Graphviz reserved keyword and will cause routing failures", id),
+				NodeID:   id,
+				Fix:      fmt.Sprintf("rename node %q to a non-reserved identifier (e.g. %q)", id, id+"_node"),
+			})
+		}
+	}
 	return diags
 }

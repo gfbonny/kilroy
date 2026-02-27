@@ -1,0 +1,5 @@
+{
+  "comment": "Update by running: RUN_INGEST_QUALITY=1 scripts/test-ingest-quality.sh --update-baseline",
+  "max_missing_status_path_nodes": 0,
+  "max_validator_errors": 0
+}

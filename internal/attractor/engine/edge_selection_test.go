@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/danshapiro/kilroy/internal/attractor/dot"
+	"github.com/danshapiro/kilroy/internal/attractor/model"
 	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
 
@@ -475,5 +476,164 @@ digraph G {
 	}
 	if edges[0].To != "c" {
 		t.Fatalf("got %q, want c (suggested next ID match)", edges[0].To)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Direct bestEdge() unit tests — isolated tiebreak algorithm
+//
+// bestEdge sorts by: weight DESC → to_node lexical ASC → declaration order ASC.
+// These tests call bestEdge() directly with hand-crafted model.Edge slices so
+// that test failures point precisely to the tiebreak logic rather than to the
+// broader edge-selection pipeline.
+// ---------------------------------------------------------------------------
+
+// makeEdge builds a minimal *model.Edge for tiebreak testing.
+// weight="" means no weight attribute (bestEdge defaults to 0).
+func makeEdge(to string, weight string, order int) *model.Edge {
+	e := model.NewEdge("src", to)
+	e.Order = order
+	if weight != "" {
+		e.Attrs["weight"] = weight
+	}
+	return e
+}
+
+// TestBestEdge_LexicalTiebreak: equal weight, different targets → lexically
+// earlier target wins ("a" beats "z").
+func TestBestEdge_LexicalTiebreak(t *testing.T) {
+	edges := []*model.Edge{
+		makeEdge("z", "5", 0),
+		makeEdge("a", "5", 1),
+	}
+	got := bestEdge(edges)
+	if got.To != "a" {
+		t.Fatalf("lexical tiebreak: got to=%q, want to=a", got.To)
+	}
+}
+
+// TestBestEdge_DeclarationOrderTiebreak: equal weight, same target, different
+// declaration order → earlier declaration order wins.
+func TestBestEdge_DeclarationOrderTiebreak(t *testing.T) {
+	edges := []*model.Edge{
+		makeEdge("x", "3", 5), // declared later
+		makeEdge("x", "3", 1), // declared earlier — should win
+	}
+	got := bestEdge(edges)
+	if got.Order != 1 {
+		t.Fatalf("order tiebreak: got order=%d, want 1", got.Order)
+	}
+}
+
+// TestBestEdge_WeightBeatsLexical: higher weight wins regardless of target
+// name ("z" with weight=10 beats "a" with weight=0).
+func TestBestEdge_WeightBeatsLexical(t *testing.T) {
+	edges := []*model.Edge{
+		makeEdge("a", "0", 0),
+		makeEdge("z", "10", 1),
+	}
+	got := bestEdge(edges)
+	if got.To != "z" {
+		t.Fatalf("weight over lexical: got to=%q, want to=z", got.To)
+	}
+}
+
+// TestBestEdge_ZeroBeatsNegativeWeight: zero weight (default) beats a
+// negative weight edge (higher weight = better).
+func TestBestEdge_ZeroBeatsNegativeWeight(t *testing.T) {
+	edges := []*model.Edge{
+		makeEdge("neg", "-5", 0),
+		makeEdge("zer", "0", 1),
+	}
+	got := bestEdge(edges)
+	if got.To != "zer" {
+		t.Fatalf("zero vs negative: got to=%q, want to=zer", got.To)
+	}
+}
+
+// TestBestEdge_AllThreeLevels exercises all three tiebreak levels at once
+// with four edges covering every combination of high/low weight and early/late
+// declaration order on two distinct target names.
+//
+//	Edge   weight  to   order
+//	  W    10      b    0     ← wins: highest weight
+//	  X    10      z    1     ← same weight as W, lexically after b
+//	  Y    0       a    2     ← lower weight than W/X, but lexically first
+//	  Z    0       a    3     ← same as Y but declared later
+//
+// Expected winner: W (weight 10 > 0, to="b" irrelevant because weight already
+// dominates "a"/"z").
+func TestBestEdge_AllThreeLevels(t *testing.T) {
+	edgeW := makeEdge("b", "10", 0)
+	edgeX := makeEdge("z", "10", 1)
+	edgeY := makeEdge("a", "0", 2)
+	edgeZ := makeEdge("a", "0", 3)
+
+	// Deliberately supply in an order that would produce wrong results if any
+	// sort key were missing or inverted.
+	edges := []*model.Edge{edgeZ, edgeY, edgeX, edgeW}
+	got := bestEdge(edges)
+	if got != edgeW {
+		t.Fatalf("all-three-levels: got to=%q order=%d weight=%s, want edgeW (to=b weight=10 order=0)",
+			got.To, got.Order, got.Attr("weight", "0"))
+	}
+}
+
+// TestBestEdge_AllThreeLevels_SecondaryLexical: when the highest-weight
+// group has multiple members with different targets, the lexically earlier
+// target wins within that group.
+func TestBestEdge_AllThreeLevels_SecondaryLexical(t *testing.T) {
+	// Both edges have weight=10; targets "apple" < "mango" lexically.
+	edgeApple := makeEdge("apple", "10", 1)
+	edgeMango := makeEdge("mango", "10", 0) // declared earlier but lexically later
+	edges := []*model.Edge{edgeMango, edgeApple}
+	got := bestEdge(edges)
+	if got.To != "apple" {
+		t.Fatalf("secondary lexical: got to=%q, want to=apple", got.To)
+	}
+}
+
+// TestBestEdge_AllThreeLevels_TertiaryOrder: when weight and target are both
+// tied, the edge with the smaller declaration order wins.
+func TestBestEdge_AllThreeLevels_TertiaryOrder(t *testing.T) {
+	// Same weight, same target, different order.
+	edgeEarly := makeEdge("same", "7", 2)
+	edgeLate := makeEdge("same", "7", 9)
+	edges := []*model.Edge{edgeLate, edgeEarly}
+	got := bestEdge(edges)
+	if got.Order != 2 {
+		t.Fatalf("tertiary order: got order=%d, want 2", got.Order)
+	}
+}
+
+// TestBestEdge_SingleEdge: a slice with exactly one edge always returns that edge.
+func TestBestEdge_SingleEdge(t *testing.T) {
+	e := makeEdge("only", "0", 0)
+	got := bestEdge([]*model.Edge{e})
+	if got != e {
+		t.Fatalf("single edge: got %+v, want original edge", got)
+	}
+}
+
+func TestBestEdge_EmptySlice_Panics(t *testing.T) {
+	// bestEdge panics on empty input — callers (selectNextEdge) must guard for len==0.
+	// This test documents the contract so future readers know the invariant is
+	// maintained by callers, not by bestEdge itself.
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic on empty slice, but bestEdge returned normally")
+		}
+	}()
+	bestEdge([]*model.Edge{})
+}
+
+func TestBestEdge_MissingWeightEqualsZero(t *testing.T) {
+	// An edge with no weight attribute should behave identically to weight="0".
+	// The tiebreak falls to declaration order: order=0 wins over order=1.
+	edgeExplicit := makeEdge("a", "0", 0) // explicit zero weight
+	edgeMissing := makeEdge("a", "", 1)   // no weight attr → defaults to 0
+	got := bestEdge([]*model.Edge{edgeMissing, edgeExplicit})
+	if got.Order != 0 {
+		t.Fatalf("missing weight should equal explicit 0: got Order=%d, want 0", got.Order)
 	}
 }

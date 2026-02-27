@@ -16,6 +16,7 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/danshapiro/kilroy/internal/llm"
+	"github.com/danshapiro/kilroy/internal/modelmeta"
 	"github.com/danshapiro/kilroy/internal/providerspec"
 )
 
@@ -170,7 +171,8 @@ func (a *Adapter) Complete(ctx context.Context, req llm.Request) (llm.Response, 
 		return llm.Response{}, err
 	}
 
-	endpoint := fmt.Sprintf("%s/v1beta/models/%s:generateContent", a.BaseURL, url.PathEscape(req.Model))
+	nativeModel := modelmeta.ProviderRelativeModelID("google", req.Model)
+	endpoint := fmt.Sprintf("%s/v1beta/models/%s:generateContent", a.BaseURL, url.PathEscape(nativeModel))
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		return llm.Response{}, err
@@ -300,7 +302,8 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 		return nil, err
 	}
 
-	endpoint := fmt.Sprintf("%s/v1beta/models/%s:streamGenerateContent", a.BaseURL, url.PathEscape(req.Model))
+	nativeModel := modelmeta.ProviderRelativeModelID("google", req.Model)
+	endpoint := fmt.Sprintf("%s/v1beta/models/%s:streamGenerateContent", a.BaseURL, url.PathEscape(nativeModel))
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		cancel()

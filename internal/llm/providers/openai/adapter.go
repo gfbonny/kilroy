@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/danshapiro/kilroy/internal/llm"
+	"github.com/danshapiro/kilroy/internal/modelmeta"
 	"github.com/danshapiro/kilroy/internal/providerspec"
 )
 
@@ -80,7 +81,7 @@ func (a *Adapter) Complete(ctx context.Context, req llm.Request) (llm.Response, 
 	}
 
 	body := map[string]any{
-		"model":               req.Model,
+		"model":               modelmeta.ProviderRelativeModelID("openai", req.Model),
 		"instructions":        instructions,
 		"input":               inputItems,
 		"parallel_tool_calls": false, // safer default; can be overridden later per profile

@@ -249,7 +249,7 @@ func TestReferenceTemplate_PostmortemPromptClarifiesStatusContract(t *testing.T)
 	}
 	templateText := string(template)
 	const startMarker = "// PROMPT: postmortem"
-	const endMarker = "postmortem []"
+	const endMarker = "postmortem [auto_status=true]"
 	const requiredText = "status reflects analysis completion, not implementation state"
 
 	start := strings.Index(templateText, startMarker)

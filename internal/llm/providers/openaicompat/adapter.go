@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/danshapiro/kilroy/internal/llm"
+	"github.com/danshapiro/kilroy/internal/modelmeta"
 )
 
 type Config struct {
@@ -55,7 +56,7 @@ func (a *Adapter) Complete(ctx context.Context, req llm.Request) (llm.Response, 
 	requestCtx, cancel := withDefaultRequestDeadline(ctx)
 	defer cancel()
 
-	body, err := toChatCompletionsBody(req, a.cfg.OptionsKey, chatCompletionsBodyOptions{})
+	body, err := toChatCompletionsBody(req, a.cfg.Provider, a.cfg.OptionsKey, chatCompletionsBodyOptions{})
 	if err != nil {
 		return llm.Response{}, err
 	}
@@ -86,7 +87,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 		cancel()
 		baseCancel()
 	}
-	body, err := toChatCompletionsBody(req, a.cfg.OptionsKey, chatCompletionsBodyOptions{
+	body, err := toChatCompletionsBody(req, a.cfg.Provider, a.cfg.OptionsKey, chatCompletionsBodyOptions{
 		Stream:       true,
 		IncludeUsage: true,
 	})
@@ -180,9 +181,9 @@ type chatCompletionsBodyOptions struct {
 	IncludeUsage bool
 }
 
-func toChatCompletionsBody(req llm.Request, optionsKey string, opts chatCompletionsBodyOptions) ([]byte, error) {
+func toChatCompletionsBody(req llm.Request, provider, optionsKey string, opts chatCompletionsBodyOptions) ([]byte, error) {
 	body := map[string]any{
-		"model":    req.Model,
+		"model":    modelmeta.ProviderRelativeModelID(provider, req.Model),
 		"messages": toChatCompletionsMessages(req.Messages),
 	}
 	if len(req.Tools) > 0 {
