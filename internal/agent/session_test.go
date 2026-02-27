@@ -45,15 +45,165 @@ func (a *fakeAdapter) Complete(ctx context.Context, req llm.Request) (llm.Respon
 }
 
 func (a *fakeAdapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, error) {
-	_ = ctx
-	_ = req
-	return nil, errors.New("stream not implemented in fakeAdapter")
+	resp, err := a.Complete(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return streamFromResponse(ctx, resp), nil
 }
 
 func (a *fakeAdapter) Requests() []llm.Request {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return append([]llm.Request{}, a.requests...)
+}
+
+type streamFinishWithoutResponseAdapter struct {
+	name string
+
+	mu       sync.Mutex
+	requests []llm.Request
+	i        int
+}
+
+func (a *streamFinishWithoutResponseAdapter) Name() string { return a.name }
+
+func (a *streamFinishWithoutResponseAdapter) Complete(ctx context.Context, req llm.Request) (llm.Response, error) {
+	_ = ctx
+	_ = req
+	return llm.Response{Provider: a.name, Model: req.Model, Message: llm.Assistant("unexpected complete")}, nil
+}
+
+func (a *streamFinishWithoutResponseAdapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, error) {
+	a.mu.Lock()
+	a.requests = append(a.requests, req)
+	step := a.i
+	a.i++
+	a.mu.Unlock()
+
+	stream := llm.NewChanStream(nil)
+	go func() {
+		defer stream.CloseSend()
+		select {
+		case <-ctx.Done():
+			stream.Send(llm.StreamEvent{Type: llm.StreamEventError, Err: ctx.Err()})
+			return
+		default:
+		}
+
+		stream.Send(llm.StreamEvent{Type: llm.StreamEventStreamStart, Model: req.Model})
+		if step == 0 {
+			call := llm.ToolCallData{
+				ID:        "c1",
+				Name:      "write_file",
+				Type:      "function",
+				Arguments: json.RawMessage(`{"file_path":"hello.txt","content":"Hello"}`),
+			}
+			stream.Send(llm.StreamEvent{Type: llm.StreamEventToolCallStart, ToolCall: &llm.ToolCallData{ID: call.ID, Name: call.Name, Type: call.Type}})
+			stream.Send(llm.StreamEvent{Type: llm.StreamEventToolCallDelta, ToolCall: &call})
+			stream.Send(llm.StreamEvent{Type: llm.StreamEventToolCallEnd, ToolCall: &call})
+			finish := llm.FinishReason{Reason: llm.FinishReasonToolCalls}
+			stream.Send(llm.StreamEvent{Type: llm.StreamEventFinish, FinishReason: &finish})
+			return
+		}
+
+		stream.Send(llm.StreamEvent{Type: llm.StreamEventTextStart, TextID: "text_0"})
+		stream.Send(llm.StreamEvent{Type: llm.StreamEventTextDelta, TextID: "text_0", Delta: "ok"})
+		stream.Send(llm.StreamEvent{Type: llm.StreamEventTextEnd, TextID: "text_0"})
+		resp := llm.Response{
+			Provider: a.name,
+			Model:    req.Model,
+			Message:  llm.Assistant("ok"),
+			Finish:   llm.FinishReason{Reason: llm.FinishReasonStop},
+		}
+		stream.Send(llm.StreamEvent{
+			Type:         llm.StreamEventFinish,
+			FinishReason: &resp.Finish,
+			Response:     &resp,
+		})
+	}()
+	return stream, nil
+}
+
+func (a *streamFinishWithoutResponseAdapter) Requests() []llm.Request {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]llm.Request{}, a.requests...)
+}
+
+func streamFromResponse(ctx context.Context, resp llm.Response) llm.Stream {
+	stream := llm.NewChanStream(nil)
+	go func() {
+		defer stream.CloseSend()
+		select {
+		case <-ctx.Done():
+			stream.Send(llm.StreamEvent{Type: llm.StreamEventError, Err: ctx.Err()})
+			return
+		default:
+		}
+		stream.Send(llm.StreamEvent{Type: llm.StreamEventStreamStart, ID: resp.ID, Model: resp.Model})
+		text := resp.Text()
+		if text != "" {
+			stream.Send(llm.StreamEvent{Type: llm.StreamEventTextStart, TextID: "text_0"})
+			stream.Send(llm.StreamEvent{Type: llm.StreamEventTextDelta, TextID: "text_0", Delta: text})
+			stream.Send(llm.StreamEvent{Type: llm.StreamEventTextEnd, TextID: "text_0"})
+		}
+		finish := resp.Finish
+		usage := resp.Usage
+		response := resp
+		stream.Send(llm.StreamEvent{
+			Type:         llm.StreamEventFinish,
+			FinishReason: &finish,
+			Usage:        &usage,
+			Response:     &response,
+		})
+	}()
+	return stream
+}
+
+func TestSession_StreamFinishWithoutResponse_PreservesToolCalls(t *testing.T) {
+	dir := t.TempDir()
+	c := llm.NewClient()
+	f := &streamFinishWithoutResponseAdapter{name: "openai"}
+	c.Register(f)
+
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := sess.ProcessInput(ctx, "write a file")
+	if err != nil {
+		t.Fatalf("ProcessInput: %v", err)
+	}
+	if strings.TrimSpace(out) != "ok" {
+		t.Fatalf("out: %q", out)
+	}
+	sess.Close()
+
+	b, err := os.ReadFile(filepath.Join(dir, "hello.txt"))
+	if err != nil {
+		t.Fatalf("read hello.txt: %v", err)
+	}
+	if strings.TrimSpace(string(b)) != "Hello" {
+		t.Fatalf("hello.txt: %q", string(b))
+	}
+
+	reqs := f.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("requests: got %d want 2", len(reqs))
+	}
+	foundToolResult := false
+	for _, m := range reqs[1].Messages {
+		if m.Role == llm.RoleTool {
+			foundToolResult = true
+			break
+		}
+	}
+	if !foundToolResult {
+		t.Fatalf("expected tool result in second request, got %+v", reqs[1].Messages)
+	}
 }
 
 func TestSession_NaturalCompletion_LoadsOnlyProfileDocs(t *testing.T) {

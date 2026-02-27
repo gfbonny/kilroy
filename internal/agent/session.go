@@ -494,8 +494,8 @@ func (s *Session) processOneInput(ctx context.Context, input string) (string, er
 		if s.cfg.LLMRetryPolicy != nil {
 			policy = *s.cfg.LLMRetryPolicy
 		}
-		resp, err := llm.Retry(ctx, policy, s.cfg.LLMSleep, nil, func() (llm.Response, error) {
-			return s.client.Complete(ctx, req)
+		stream, err := llm.Retry(ctx, policy, s.cfg.LLMSleep, nil, func() (llm.Stream, error) {
+			return s.client.Stream(ctx, req)
 		})
 		if err != nil {
 			s.emit(EventError, map[string]any{"error": err.Error()})
@@ -519,10 +519,72 @@ func (s *Session) processOneInput(ctx context.Context, input string) (string, er
 			}
 		}
 
+		acc := llm.NewStreamAccumulator()
+		var resp *llm.Response
+		var streamErr error
+		assistantTextStarted := false
+		assistantTextDelta := false
+		emitAssistantTextStart := func() {
+			if assistantTextStarted {
+				return
+			}
+			assistantTextStarted = true
+			s.emit(EventAssistantTextStart, map[string]any{})
+		}
+		for ev := range stream.Events() {
+			acc.Process(ev)
+			switch ev.Type {
+			case llm.StreamEventTextStart:
+				emitAssistantTextStart()
+			case llm.StreamEventTextDelta:
+				emitAssistantTextStart()
+				if ev.Delta != "" {
+					assistantTextDelta = true
+					s.emit(EventAssistantTextDelta, map[string]any{"delta": ev.Delta})
+				}
+			case llm.StreamEventFinish:
+				if ev.Response != nil {
+					cp := *ev.Response
+					resp = &cp
+				}
+			case llm.StreamEventError:
+				if ev.Err != nil {
+					streamErr = ev.Err
+				} else {
+					streamErr = llm.NewStreamError(req.Provider, "stream error")
+				}
+			}
+		}
+		_ = stream.Close()
+
+		if streamErr != nil {
+			s.emit(EventError, map[string]any{"error": streamErr.Error()})
+			// Spec: context overflow should emit a warning (no automatic compaction).
+			var cle *llm.ContextLengthError
+			if errors.As(streamErr, &cle) {
+				s.emit(EventWarning, map[string]any{"message": "Context length exceeded"})
+			}
+			// Spec: non-retryable/unrecoverable errors transition the session to CLOSED.
+			var le llm.Error
+			if errors.As(streamErr, &le) && !le.Retryable() {
+				s.Close()
+			}
+			return "", streamErr
+		}
+
+		if resp == nil {
+			resp = acc.Response()
+		}
+		if resp == nil {
+			err := llm.NewStreamError(req.Provider, "stream ended without finish event")
+			s.emit(EventError, map[string]any{"error": err.Error()})
+			return "", err
+		}
+
 		txt := resp.Text()
-		s.emit(EventAssistantTextStart, map[string]any{})
+		emitAssistantTextStart()
 		s.appendTurn(TurnAssistant, resp.Message)
-		if strings.TrimSpace(txt) != "" {
+		if !assistantTextDelta && strings.TrimSpace(txt) != "" {
 			s.emit(EventAssistantTextDelta, map[string]any{"delta": txt})
 		}
 		s.emit(EventAssistantTextEnd, map[string]any{"text": txt})
