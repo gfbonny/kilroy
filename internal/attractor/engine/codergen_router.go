@@ -192,15 +192,65 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 				warnEngine(execCtx, fmt.Sprintf("write api_request.json: %v", err))
 			}
 			policy := attractorLLMRetryPolicy(execCtx, node.ID, prov, mid)
-			resp, err := llm.Retry(ctx, policy, nil, nil, func() (llm.Response, error) {
-				return client.Complete(ctx, req)
+			stream, err := llm.Retry(ctx, policy, nil, nil, func() (llm.Stream, error) {
+				return client.Stream(ctx, req)
 			})
 			if err != nil {
 				return "", err
 			}
+
+			var emitter *streamProgressEmitter
+			if execCtx != nil && execCtx.Engine != nil {
+				runID := execCtx.Engine.Options.RunID
+				emitter = newStreamProgressEmitter(execCtx.Engine, node.ID, runID)
+				defer emitter.close()
+			}
+
+			acc := llm.NewStreamAccumulator()
+			for ev := range stream.Events() {
+				acc.Process(ev)
+				if emitter != nil {
+					switch ev.Type {
+					case llm.StreamEventTextDelta:
+						if ev.Delta != "" {
+							emitter.appendDelta(ev.Delta)
+						}
+					}
+				}
+			}
+			_ = stream.Close()
+
+			resp := acc.Response()
+			if resp == nil {
+				return "", llm.NewStreamError(prov, "stream ended without finish event")
+			}
+
 			if err := writeJSON(filepath.Join(stageDir, "api_response.json"), resp.Raw); err != nil {
 				warnEngine(execCtx, fmt.Sprintf("write api_response.json: %v", err))
 			}
+
+			// WP-5: Record AssistantMessage CXDB turn for one_shot.
+			if execCtx != nil && execCtx.Engine != nil && execCtx.Engine.CXDB != nil {
+				eng := execCtx.Engine
+				text := resp.Text()
+				if strings.TrimSpace(text) != "" {
+					if _, _, cxErr := eng.CXDB.Append(ctx, "com.kilroy.attractor.AssistantMessage", 1, map[string]any{
+						"run_id":        eng.Options.RunID,
+						"node_id":       node.ID,
+						"text":          truncate(text, 8_000),
+						"input_tokens":  resp.Usage.InputTokens,
+						"output_tokens": resp.Usage.OutputTokens,
+						"timestamp_ms":  nowMS(),
+					}); cxErr != nil {
+						eng.Warn(fmt.Sprintf("cxdb append AssistantMessage failed (node=%s): %v", node.ID, cxErr))
+					}
+				}
+			}
+
+			if emitter != nil {
+				emitter.emitTurnEnd(len(resp.Text()), 0)
+			}
+
 			return resp.Text(), nil
 		})
 		if err != nil {
@@ -295,7 +345,16 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 			var eventsMu sync.Mutex
 			var events []agent.SessionEvent
 			done := make(chan struct{})
+			// Streaming progress emitter: throttles text deltas, forwards tool events.
+			var emitter *streamProgressEmitter
+			if execCtx != nil && execCtx.Engine != nil {
+				emitter = newStreamProgressEmitter(execCtx.Engine, node.ID, execCtx.Engine.Options.RunID)
+			}
+
 			go func() {
+				if emitter != nil {
+					defer emitter.close()
+				}
 				enc := json.NewEncoder(eventsFile)
 				encodeFailed := false
 				for ev := range sess.Events() {
@@ -315,6 +374,10 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 					// Spec §9.7: execute tool hooks around tool calls.
 					if execCtx != nil && execCtx.Engine != nil {
 						executeToolHookForEvent(ctx, execCtx, node, ev, stageDir)
+					}
+					// Forward LLM-level events as streaming progress.
+					if emitter != nil {
+						emitStreamProgress(emitter, ev)
 					}
 					eventsMu.Lock()
 					events = append(events, ev)
@@ -1875,6 +1938,34 @@ func fileSize(path string) (int64, error) {
 	return info.Size(), nil
 }
 
+func emitStreamProgress(emitter *streamProgressEmitter, ev agent.SessionEvent) {
+	if emitter == nil {
+		return
+	}
+	switch ev.Kind {
+	case agent.EventAssistantTextDelta:
+		if delta, _ := ev.Data["delta"].(string); delta != "" {
+			emitter.appendDelta(delta)
+		}
+	case agent.EventToolCallStart:
+		toolName, _ := ev.Data["tool_name"].(string)
+		callID, _ := ev.Data["call_id"].(string)
+		emitter.emitToolCallStart(toolName, callID)
+	case agent.EventToolCallEnd:
+		toolName, _ := ev.Data["tool_name"].(string)
+		callID, _ := ev.Data["call_id"].(string)
+		isErr, _ := ev.Data["is_error"].(bool)
+		emitter.emitToolCallEnd(toolName, callID, isErr)
+	case agent.EventAssistantTextEnd:
+		text, _ := ev.Data["text"].(string)
+		toolCount := 0
+		if tc, ok := ev.Data["tool_call_count"].(int); ok {
+			toolCount = tc
+		}
+		emitter.emitTurnEnd(len(text), toolCount)
+	}
+}
+
 func emitCXDBToolTurns(ctx context.Context, eng *Engine, nodeID string, ev agent.SessionEvent) {
 	if eng == nil || eng.CXDB == nil {
 		return
@@ -1917,6 +2008,19 @@ func emitCXDBToolTurns(ctx context.Context, eng *Engine, nodeID string, ev agent
 			"is_error":  isErr,
 		}); err != nil {
 			eng.Warn(fmt.Sprintf("cxdb append ToolResult failed (node=%s tool=%s call_id=%s): %v", nodeID, toolName, callID, err))
+		}
+	case agent.EventAssistantTextEnd:
+		text := strings.TrimSpace(fmt.Sprint(ev.Data["text"]))
+		if text == "" {
+			return
+		}
+		if _, _, err := eng.CXDB.Append(ctx, "com.kilroy.attractor.AssistantMessage", 1, map[string]any{
+			"run_id":       runID,
+			"node_id":      nodeID,
+			"text":         truncate(text, 8_000),
+			"timestamp_ms": nowMS(),
+		}); err != nil {
+			eng.Warn(fmt.Sprintf("cxdb append AssistantMessage failed (node=%s): %v", nodeID, err))
 		}
 	}
 }
