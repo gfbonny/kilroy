@@ -94,8 +94,8 @@ func (r *CodergenRouter) Run(ctx context.Context, exec *Execution, node *model.N
 		return "", nil, fmt.Errorf("no backend configured for provider %s", prov)
 	}
 
-	// CLI-only model override: models like gpt-5.3-codex-spark have no API
-	// endpoint. Force CLI backend regardless of provider configuration.
+	// CLI-only model override: force CLI backend when a model is marked
+	// CLI-only in the registry.
 	if isCLIOnlyModel(modelID) && backend != BackendCLI {
 		warnEngine(exec, fmt.Sprintf("cli-only model override: node=%s model=%s backend=%s->cli", node.ID, modelID, backend))
 		backend = BackendCLI
