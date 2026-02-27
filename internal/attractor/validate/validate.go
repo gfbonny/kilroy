@@ -79,6 +79,7 @@ func ValidateWithOptions(g *model.Graph, opts ValidateOptions, extraRules ...Lin
 	diags = append(diags, lintPromptOnConditionalNodes(g)...)
 	diags = append(diags, lintPromptFileConflict(g)...)
 	diags = append(diags, lintToolCommandRequired(g)...)
+	diags = append(diags, lintValidateScriptFailureContract(g)...)
 	diags = append(diags, lintLLMProviderPresent(g)...)
 	diags = append(diags, lintLoopRestartFailureClassGuard(g)...)
 	diags = append(diags, lintFailLoopFailureClassGuard(g)...)
@@ -87,6 +88,8 @@ func ValidateWithOptions(g *model.Graph, opts ValidateOptions, extraRules ...Lin
 	diags = append(diags, lintStatusFallbackInPrompt(g)...)
 	diags = append(diags, lintTemplatePostmortemRecoveryRouting(g)...)
 	diags = append(diags, lintOrphanCustomOutcomeHint(g)...)
+	diags = append(diags, lintStatusOutcomeFieldConfusion(g)...)
+	diags = append(diags, lintCustomOutcomeCoverage(g)...)
 	diags = append(diags, lintReservedKeywordNodeID(g)...)
 
 	// Run custom lint rules (spec §7.3: extra_rules appended after built-in rules).
@@ -889,6 +892,35 @@ func lintToolCommandRequired(g *model.Graph) []Diagnostic {
 	return diags
 }
 
+// lintValidateScriptFailureContract checks that any tool_command delegating to
+// a runtime-authored validate script (sh scripts/validate-*.sh) also includes a
+// KILROY_VALIDATE_FAILURE fallback so postmortem receives an actionable repair
+// signal when the script is missing or exits before printing its own output.
+func lintValidateScriptFailureContract(g *model.Graph) []Diagnostic {
+	validateScriptRe := regexp.MustCompile(`\bsh\s+scripts/validate-[^\s"']+\.sh\b`)
+	var diags []Diagnostic
+	for id, n := range g.Nodes {
+		if n == nil || !nodeResolvesToTool(n) {
+			continue
+		}
+		cmd := n.Attr("tool_command", "")
+		if !validateScriptRe.MatchString(cmd) {
+			continue
+		}
+		if strings.Contains(cmd, "KILROY_VALIDATE_FAILURE") {
+			continue
+		}
+		diags = append(diags, Diagnostic{
+			Rule:     "validate_script_failure_contract",
+			Severity: SeverityWarning,
+			Message:  fmt.Sprintf("tool_command calls sh scripts/validate-*.sh but has no KILROY_VALIDATE_FAILURE fallback; postmortem cannot identify a missing or crashing script"),
+			NodeID:   id,
+			Fix:      `append || { echo "KILROY_VALIDATE_FAILURE: <stage> script missing or failed — postmortem must write scripts/validate-<stage>.sh"; exit 1; } to tool_command`,
+		})
+	}
+	return diags
+}
+
 func nodeResolvesToTool(n *model.Node) bool {
 	typeOverride := strings.TrimSpace(n.Attr("type", ""))
 	if typeOverride != "" {
@@ -1477,6 +1509,119 @@ func edgeHasCustomOutcomeCondition(condExpr string) bool {
 		}
 	}
 	return false
+}
+
+// statusOutcomeFieldConfusionRe matches the antipattern where an agent is
+// instructed to write a JSON object that has both "status":"success" (or any
+// canonical status) and a separate "outcome":"..." key.  The runtime decoder
+// unmarshals into Outcome{Status: ...} and silently discards any "outcome" key,
+// so custom routing via condition="outcome=X" will never fire.
+var statusOutcomeFieldConfusionRe = regexp.MustCompile(
+	`(?i)["']?status["']?\s*:\s*["']?(?:success|fail|retry|skipped|partial_success)["']?[^}]{0,80}["']?outcome["']?\s*:`)
+
+// lintStatusOutcomeFieldConfusion detects prompts that instruct agents to write
+// {"status":"success","outcome":"..."} — a JSON shape where the "outcome" field
+// is silently ignored by DecodeOutcomeJSON.  Custom routing must use the status
+// field directly: {"status":"more_work"} not {"status":"success","outcome":"more_work"}.
+//
+// Rule: status_outcome_field_confusion (ERROR)
+func lintStatusOutcomeFieldConfusion(g *model.Graph) []Diagnostic {
+	var diags []Diagnostic
+	for id, n := range g.Nodes {
+		if n == nil || n.Shape() != "box" {
+			continue
+		}
+		prompt := n.Prompt()
+		if !statusOutcomeFieldConfusionRe.MatchString(prompt) {
+			continue
+		}
+		diags = append(diags, Diagnostic{
+			Rule:     "status_outcome_field_confusion",
+			Severity: SeverityError,
+			NodeID:   id,
+			Message:  `prompt instructs agent to write {"status":"<canonical>","outcome":"..."} — the "outcome" JSON key is silently discarded by the runtime decoder; only the "status" field drives edge-condition matching`,
+			Fix:      `replace {"status":"success","outcome":"X"} with {"status":"X"} — custom routing uses status as the routing value, e.g. condition="outcome=X" matches {"status":"X"}`,
+		})
+	}
+	return diags
+}
+
+// promptStatusWriteRe extracts values from "status":"VALUE" patterns inside
+// what look like JSON status-write instructions in a prompt.
+var promptStatusWriteRe = regexp.MustCompile(`["']status["']\s*:\s*["']([a-zA-Z0-9_-]+)["']`)
+
+// lintCustomOutcomeCoverage checks that for every custom outcome condition on an
+// outgoing edge (e.g. condition="outcome=more_work"), the source node's prompt
+// contains at least one JSON write with "status":"more_work".  A missing match
+// means the agent will never emit the status value the edge requires, so the
+// conditional edge is permanently dead.
+//
+// Rule: custom_outcome_coverage (WARNING)
+func lintCustomOutcomeCoverage(g *model.Graph) []Diagnostic {
+	outgoing := make(map[string][]*model.Edge)
+	for _, e := range g.Edges {
+		if e != nil {
+			outgoing[e.From] = append(outgoing[e.From], e)
+		}
+	}
+	var diags []Diagnostic
+	for id, n := range g.Nodes {
+		if n == nil || n.Shape() != "box" {
+			continue
+		}
+		prompt := n.Prompt()
+		if strings.TrimSpace(prompt) == "" {
+			continue
+		}
+
+		// Collect the set of custom outcome values required by outgoing edges.
+		required := map[string]bool{}
+		for _, e := range outgoing[id] {
+			cond := strings.TrimSpace(e.Condition())
+			if cond == "" {
+				continue
+			}
+			for _, clause := range strings.Split(cond, "&&") {
+				clause = strings.TrimSpace(clause)
+				if strings.Contains(clause, "!=") || !strings.Contains(clause, "=") {
+					continue
+				}
+				parts := strings.SplitN(clause, "=", 2)
+				if len(parts) != 2 || strings.TrimSpace(parts[0]) != "outcome" {
+					continue
+				}
+				val := strings.Trim(strings.TrimSpace(parts[1]), "\"'")
+				st, err := runtime.ParseStageStatus(val)
+				if err != nil || !st.IsCanonical() {
+					required[val] = true
+				}
+			}
+		}
+		if len(required) == 0 {
+			continue
+		}
+
+		// Collect what status values the prompt actually writes.
+		written := map[string]bool{}
+		for _, m := range promptStatusWriteRe.FindAllStringSubmatch(prompt, -1) {
+			if len(m) >= 2 {
+				written[strings.ToLower(m[1])] = true
+			}
+		}
+
+		for val := range required {
+			if !written[strings.ToLower(val)] {
+				diags = append(diags, Diagnostic{
+					Rule:     "custom_outcome_coverage",
+					Severity: SeverityWarning,
+					NodeID:   id,
+					Message:  fmt.Sprintf(`outgoing edge requires condition="outcome=%s" but prompt contains no \"status\":\"%s\" write instruction — the conditional edge will never fire`, val, val),
+					Fix:      fmt.Sprintf(`add a status write case to the prompt: echo '{"status":"%s"}' > "$KILROY_STAGE_STATUS_PATH"`, val),
+				})
+			}
+		}
+	}
+	return diags
 }
 
 // lintStatusFallbackInPrompt warns when a codergen (shape=box) node's prompt

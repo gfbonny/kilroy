@@ -80,6 +80,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  kilroy attractor ingest [--output <file.dot>] [--model <model>] [--skill <skill.md>] [--repo <path>] [--max-turns <n>] <requirements>")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor serve [--addr <host:port>]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor modeldb suggest [--refresh] [--ttl <duration>] [--provider <name>]")
+	fmt.Fprintln(os.Stderr, "  kilroy attractor review --graph <file.dot> [--output <file>] [--json] [--max-turns <n>]")
 }
 
 func attractor(args []string) {
@@ -104,6 +105,8 @@ func attractor(args []string) {
 		attractorServe(args[1:])
 	case "modeldb":
 		attractorModelDB(args[1:])
+	case "review":
+		attractorReview(args[1:])
 	default:
 		usage()
 		os.Exit(1)

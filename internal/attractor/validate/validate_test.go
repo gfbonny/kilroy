@@ -1606,3 +1606,190 @@ func TestValidate_ReservedKeywordNodeID_PassesOnNormalID(t *testing.T) {
 	diags := lintReservedKeywordNodeID(g)
 	assertNoRule(t, diags, "reserved_keyword_node_id")
 }
+
+// --- Tests for validate_script_failure_contract lint rule ---
+
+func TestValidate_ValidateScriptFailureContract_MissingFallback_Warns(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  v [shape=parallelogram, tool_command="sh scripts/validate-build.sh"]
+  start -> v -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertHasRule(t, diags, "validate_script_failure_contract", SeverityWarning)
+}
+
+func TestValidate_ValidateScriptFailureContract_WithFallback_NoWarn(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  v [shape=parallelogram, tool_command="sh scripts/validate-build.sh || { echo 'KILROY_VALIDATE_FAILURE: build script missing'; exit 1; }"]
+  start -> v -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "validate_script_failure_contract")
+}
+
+func TestValidate_ValidateScriptFailureContract_NonValidateScript_NoWarn(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  v [shape=parallelogram, tool_command="sh scripts/run-tests.sh"]
+  start -> v -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "validate_script_failure_contract")
+}
+
+func TestValidate_ValidateScriptFailureContract_EchoCommand_NoWarn(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  v [shape=parallelogram, tool_command="echo ok"]
+  start -> v -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "validate_script_failure_contract")
+}
+
+// --- status_outcome_field_confusion ---
+
+func TestValidate_StatusOutcomeFieldConfusion_ErrorOnAntiPattern(t *testing.T) {
+	// Prompt contains the antipattern: {"status":"success","outcome":"more_work"}
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  check [shape=box, prompt="Do work. Write status: echo '{\"status\":\"success\",\"outcome\":\"more_work\"}' > \"$KILROY_STAGE_STATUS_PATH\". Fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH."]
+  start -> check -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertHasRule(t, diags, "status_outcome_field_confusion", SeverityError)
+}
+
+func TestValidate_StatusOutcomeFieldConfusion_NoErrorOnCorrectPattern(t *testing.T) {
+	// Correct pattern: {"status":"more_work"} with no extra outcome key
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  check [shape=box, prompt="Do work. Write status: echo '{\"status\":\"more_work\"}' > \"$KILROY_STAGE_STATUS_PATH\". Fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH."]
+  start -> check -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "status_outcome_field_confusion")
+}
+
+func TestValidate_StatusOutcomeFieldConfusion_NoErrorOnNonBoxNode(t *testing.T) {
+	// The antipattern in a non-box node should not trigger (no agent writes status there)
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  start -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "status_outcome_field_confusion")
+}
+
+// --- custom_outcome_coverage ---
+
+func TestValidate_CustomOutcomeCoverage_WarnWhenMissing(t *testing.T) {
+	// Edge requires outcome=more_work but prompt only writes status:success
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start      [shape=Mdiamond]
+  exit       [shape=Msquare]
+  work_pool  [shape=component]
+  merger     [shape=box]
+  check [shape=box, prompt="Harvest files. If all done: echo '{\"status\":\"success\"}' > \"$KILROY_STAGE_STATUS_PATH\". Fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH."]
+  start -> check
+  check -> work_pool [condition="outcome=more_work"]
+  check -> merger
+  work_pool -> check
+  merger -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertHasRule(t, diags, "custom_outcome_coverage", SeverityWarning)
+}
+
+func TestValidate_CustomOutcomeCoverage_NoWarnWhenCovered(t *testing.T) {
+	// Edge requires outcome=more_work and prompt correctly writes status:more_work
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start      [shape=Mdiamond]
+  exit       [shape=Msquare]
+  work_pool  [shape=component]
+  merger     [shape=box]
+  check [shape=box, prompt="Harvest files. If done: echo '{\"status\":\"success\"}' > \"$KILROY_STAGE_STATUS_PATH\". If more work: echo '{\"status\":\"more_work\"}' > \"$KILROY_STAGE_STATUS_PATH\". Fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH."]
+  start -> check
+  check -> work_pool [condition="outcome=more_work"]
+  check -> merger
+  work_pool -> check
+  merger -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "custom_outcome_coverage")
+}
+
+func TestValidate_CustomOutcomeCoverage_NoWarnForCanonicalOutcomes(t *testing.T) {
+	// condition="outcome=success" is canonical — no coverage check needed
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  check [shape=box, prompt="Do work. Write: echo '{\"status\":\"success\"}' > \"$KILROY_STAGE_STATUS_PATH\". Fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH."]
+  bad   [shape=box]
+  start -> check
+  check -> exit   [condition="outcome=success"]
+  check -> bad
+  bad -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "custom_outcome_coverage")
+}
