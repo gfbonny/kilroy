@@ -31,6 +31,77 @@ func (a *okAdapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, er
 	return nil, fmt.Errorf("stream not implemented")
 }
 
+type scriptedStreamAdapter struct {
+	name   string
+	script func(s *llm.ChanStream)
+}
+
+func (a *scriptedStreamAdapter) Name() string { return a.name }
+func (a *scriptedStreamAdapter) Complete(ctx context.Context, req llm.Request) (llm.Response, error) {
+	_ = ctx
+	return llm.Response{Provider: a.name, Model: req.Model, Message: llm.Assistant("ok")}, nil
+}
+func (a *scriptedStreamAdapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, error) {
+	_ = ctx
+	_ = req
+	st := llm.NewChanStream(nil)
+	go func() {
+		defer st.CloseSend()
+		if a.script != nil {
+			a.script(st)
+		}
+	}()
+	return st, nil
+}
+
+func TestCodergenRouter_RunAPI_OneShot_StreamErrorEventTakesPrecedence(t *testing.T) {
+	cfg := &RunConfigFile{Version: 1}
+	cfg.LLM.Providers = map[string]ProviderConfig{
+		"openai": {Backend: BackendAPI},
+	}
+	r := NewCodergenRouterWithRuntimes(cfg, nil, map[string]ProviderRuntime{
+		"openai": {Key: "openai", Backend: BackendAPI},
+	})
+	r.apiClientFactory = func(map[string]ProviderRuntime) (*llm.Client, error) {
+		client := llm.NewClient()
+		client.Register(&scriptedStreamAdapter{
+			name: "openai",
+			script: func(s *llm.ChanStream) {
+				s.Send(llm.StreamEvent{Type: llm.StreamEventStreamStart})
+				s.Send(llm.StreamEvent{Type: llm.StreamEventError, Err: llm.NewStreamError("openai", "synthetic stream failure")})
+				resp := llm.Response{Provider: "openai", Model: "gpt-5.2", Message: llm.Assistant("finish should not win")}
+				finish := llm.FinishReason{Reason: "stop"}
+				usage := llm.Usage{InputTokens: 1, OutputTokens: 2, TotalTokens: 3}
+				s.Send(llm.StreamEvent{Type: llm.StreamEventFinish, FinishReason: &finish, Usage: &usage, Response: &resp})
+			},
+		})
+		return client, nil
+	}
+
+	execCtx := &Execution{
+		LogsRoot:    t.TempDir(),
+		WorktreeDir: t.TempDir(),
+	}
+	node := &model.Node{
+		ID:    "stage-a",
+		Attrs: map[string]string{"codergen_mode": "one_shot"},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	text, out, err := r.runAPI(ctx, execCtx, node, "openai", "gpt-5.2", "say hi")
+	if err == nil || !strings.Contains(err.Error(), "synthetic stream failure") {
+		t.Fatalf("expected stream failure, got err=%v", err)
+	}
+	if strings.TrimSpace(text) != "" {
+		t.Fatalf("text: got %q want empty on stream error", text)
+	}
+	if out != nil {
+		t.Fatalf("outcome: got %+v want nil", out)
+	}
+}
+
 func TestCodergenRouter_WithFailoverText_FailsOverToDifferentProvider(t *testing.T) {
 	cfg := &RunConfigFile{Version: 1}
 	cfg.LLM.Providers = map[string]ProviderConfig{

@@ -207,8 +207,13 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 			}
 
 			acc := llm.NewStreamAccumulator()
+			var streamErr error
 			for ev := range stream.Events() {
 				acc.Process(ev)
+				if ev.Type == llm.StreamEventError && ev.Err != nil {
+					streamErr = ev.Err
+					break
+				}
 				if emitter != nil {
 					switch ev.Type {
 					case llm.StreamEventTextDelta:
@@ -219,6 +224,9 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 				}
 			}
 			_ = stream.Close()
+			if streamErr != nil {
+				return "", streamErr
+			}
 
 			resp := acc.Response()
 			if resp == nil {
