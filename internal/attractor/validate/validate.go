@@ -70,6 +70,7 @@ func ValidateWithOptions(g *model.Graph, opts ValidateOptions, extraRules ...Lin
 	diags = append(diags, lintStylesheetModelIDs(g, opts.Catalog)...)
 	diags = append(diags, lintRetryTargetsExist(g)...)
 	diags = append(diags, lintGoalGateHasRetry(g)...)
+	diags = append(diags, lintGoalGateMissingNodeRetryTarget(g)...)
 	diags = append(diags, lintGoalGateExitStatusContract(g)...)
 	diags = append(diags, lintGoalGatePromptStatusHint(g)...)
 	diags = append(diags, lintFidelityValid(g)...)
@@ -78,6 +79,7 @@ func ValidateWithOptions(g *model.Graph, opts ValidateOptions, extraRules ...Lin
 	diags = append(diags, lintPromptOnConditionalNodes(g)...)
 	diags = append(diags, lintPromptFileConflict(g)...)
 	diags = append(diags, lintToolCommandRequired(g)...)
+	diags = append(diags, lintValidateScriptFailureContract(g)...)
 	diags = append(diags, lintLLMProviderPresent(g)...)
 	diags = append(diags, lintLoopRestartFailureClassGuard(g)...)
 	diags = append(diags, lintFailLoopFailureClassGuard(g)...)
@@ -86,6 +88,9 @@ func ValidateWithOptions(g *model.Graph, opts ValidateOptions, extraRules ...Lin
 	diags = append(diags, lintStatusFallbackInPrompt(g)...)
 	diags = append(diags, lintTemplatePostmortemRecoveryRouting(g)...)
 	diags = append(diags, lintOrphanCustomOutcomeHint(g)...)
+	diags = append(diags, lintStatusOutcomeFieldConfusion(g)...)
+	diags = append(diags, lintCustomOutcomeCoverage(g)...)
+	diags = append(diags, lintReservedKeywordNodeID(g)...)
 
 	// Run custom lint rules (spec §7.3: extra_rules appended after built-in rules).
 	for _, rule := range extraRules {
@@ -331,6 +336,11 @@ func lintConditionSyntax(g *model.Graph) []Diagnostic {
 			})
 			continue
 		}
+		// NOTE: evalClause error paths are unreachable for inputs that pass
+		// validateConditionSyntax above: SplitN(s, op, 2) on a string that
+		// contains op always yields exactly 2 parts. The Evaluate call below
+		// is retained as a forward-compatibility safety net.
+		//
 		// Also ensure our evaluator can process it. Discard the boolean result
 		// (we are linting with a synthetic outcome, so the match value is
 		// meaningless) but treat an error as a lint failure: it means the
@@ -452,9 +462,9 @@ func lintStylesheetSyntax(g *model.Graph) []Diagnostic {
 // Diagnostics emitted:
 //   - stylesheet_unknown_model (WARNING): model ID is not found in the catalog for
 //     the declared provider.
-//   - stylesheet_noncanonical_model_id (WARNING): model ID is found only after
+//   - stylesheet_noncanonical_model_id (ERROR): model ID is found only after
 //     normalizing dashes to dots in version numbers (Anthropic native format).
-//     The canonical catalog form (with dots) should be used instead.
+//     The canonical catalog form (with dots) must be used instead.
 func lintStylesheetModelIDs(g *model.Graph, catalog *modeldb.Catalog) []Diagnostic {
 	if catalog == nil {
 		return nil
@@ -502,8 +512,9 @@ func lintStylesheetModelIDs(g *model.Graph, catalog *modeldb.Catalog) []Diagnost
 		case modeldb.ModelFoundNonCanonical:
 			diags = append(diags, Diagnostic{
 				Rule:     "stylesheet_noncanonical_model_id",
-				Severity: SeverityWarning,
-				Message:  fmt.Sprintf("model_stylesheet: model %q uses non-canonical format (use dot-separated version numbers, e.g. replace dashes with dots in the version suffix)", modelID),
+				Severity: SeverityError,
+				Message:  fmt.Sprintf("model_stylesheet: model %q uses non-canonical format; version suffixes must use dots not dashes (e.g. claude-opus-4.6 not claude-opus-4-6)", modelID),
+				Fix:      "replace dashes in the version number suffix with dots: claude-opus-4-6 → claude-opus-4.6",
 			})
 		case modeldb.ModelFoundCanonical, modeldb.ModelProviderUnknown:
 			// No warning: canonical match or catalog has no data for this provider.
@@ -552,6 +563,36 @@ func lintGoalGateHasRetry(g *model.Graph) []Diagnostic {
 					NodeID:   id,
 				})
 			}
+		}
+	}
+	return diags
+}
+
+// lintGoalGateMissingNodeRetryTarget warns when a goal_gate=true node does not
+// declare its own retry_target or fallback_retry_target. Relying on the
+// graph-level retry_target is insufficient: the graph-level attribute is
+// intended for transient node failures, not goal-gate rejection re-execution.
+// Each goal_gate node should explicitly declare where to route on rejection
+// (typically "postmortem").
+func lintGoalGateMissingNodeRetryTarget(g *model.Graph) []Diagnostic {
+	var diags []Diagnostic
+	for id, n := range g.Nodes {
+		if n == nil {
+			continue
+		}
+		if !strings.EqualFold(n.Attr("goal_gate", "false"), "true") {
+			continue
+		}
+		nodeRetry := strings.TrimSpace(n.Attr("retry_target", ""))
+		nodeFallback := strings.TrimSpace(n.Attr("fallback_retry_target", ""))
+		if nodeRetry == "" && nodeFallback == "" {
+			diags = append(diags, Diagnostic{
+				Rule:     "goal_gate_missing_node_retry_target",
+				Severity: SeverityWarning,
+				Message:  "goal_gate node has no node-level retry_target or fallback_retry_target; graph-level retry_target is for transient failures, not goal-gate rejection",
+				NodeID:   id,
+				Fix:      "add retry_target=\"postmortem\" (or the appropriate recovery node) to this node's attributes",
+			})
 		}
 	}
 	return diags
@@ -740,14 +781,10 @@ func lintPromptOnCodergenNodes(g *model.Graph) []Diagnostic {
 	return diags
 }
 
-// lintStatusContractInPrompt warns when a codergen (shape=box) node has a
-// non-empty prompt that does not reference KILROY_STAGE_STATUS_PATH or
-// KILROY_STAGE_STATUS_FALLBACK_PATH.  Without the contract the node cannot
-// write status.json and the engine silently falls back to exit-code-only
-// interpretation, losing all custom outcome routing (Gap F).
-//
-// The rule is silent when the prompt is empty — the existing
-// prompt_on_llm_nodes rule already handles that case.
+// lintStatusContractInPrompt checks that shape=box nodes reference
+// $KILROY_STAGE_STATUS_PATH in their prompt text.
+// NOTE: This rule only checks shape=box nodes. Future codergen shapes
+// that write status.json should be added here.
 func lintStatusContractInPrompt(g *model.Graph) []Diagnostic {
 	var diags []Diagnostic
 	for id, n := range g.Nodes {
@@ -850,6 +887,35 @@ func lintToolCommandRequired(g *model.Graph) []Diagnostic {
 			Message:  msg,
 			NodeID:   id,
 			Fix:      fix,
+		})
+	}
+	return diags
+}
+
+// lintValidateScriptFailureContract checks that any tool_command delegating to
+// a runtime-authored validate script (sh scripts/validate-*.sh) also includes a
+// KILROY_VALIDATE_FAILURE fallback so postmortem receives an actionable repair
+// signal when the script is missing or exits before printing its own output.
+func lintValidateScriptFailureContract(g *model.Graph) []Diagnostic {
+	validateScriptRe := regexp.MustCompile(`\bsh\s+scripts/validate-[^\s"']+\.sh\b`)
+	var diags []Diagnostic
+	for id, n := range g.Nodes {
+		if n == nil || !nodeResolvesToTool(n) {
+			continue
+		}
+		cmd := n.Attr("tool_command", "")
+		if !validateScriptRe.MatchString(cmd) {
+			continue
+		}
+		if strings.Contains(cmd, "KILROY_VALIDATE_FAILURE") {
+			continue
+		}
+		diags = append(diags, Diagnostic{
+			Rule:     "validate_script_failure_contract",
+			Severity: SeverityWarning,
+			Message:  fmt.Sprintf("tool_command calls sh scripts/validate-*.sh but has no KILROY_VALIDATE_FAILURE fallback; postmortem cannot identify a missing or crashing script"),
+			NodeID:   id,
+			Fix:      `append || { echo "KILROY_VALIDATE_FAILURE: <stage> script missing or failed — postmortem must write scripts/validate-<stage>.sh"; exit 1; } to tool_command`,
 		})
 	}
 	return diags
@@ -1445,6 +1511,119 @@ func edgeHasCustomOutcomeCondition(condExpr string) bool {
 	return false
 }
 
+// statusOutcomeFieldConfusionRe matches the antipattern where an agent is
+// instructed to write a JSON object that has both "status":"success" (or any
+// canonical status) and a separate "outcome":"..." key.  The runtime decoder
+// unmarshals into Outcome{Status: ...} and silently discards any "outcome" key,
+// so custom routing via condition="outcome=X" will never fire.
+var statusOutcomeFieldConfusionRe = regexp.MustCompile(
+	`(?i)["']?status["']?\s*:\s*["']?(?:success|fail|retry|skipped|partial_success)["']?[^}]{0,80}["']?outcome["']?\s*:`)
+
+// lintStatusOutcomeFieldConfusion detects prompts that instruct agents to write
+// {"status":"success","outcome":"..."} — a JSON shape where the "outcome" field
+// is silently ignored by DecodeOutcomeJSON.  Custom routing must use the status
+// field directly: {"status":"more_work"} not {"status":"success","outcome":"more_work"}.
+//
+// Rule: status_outcome_field_confusion (ERROR)
+func lintStatusOutcomeFieldConfusion(g *model.Graph) []Diagnostic {
+	var diags []Diagnostic
+	for id, n := range g.Nodes {
+		if n == nil || n.Shape() != "box" {
+			continue
+		}
+		prompt := n.Prompt()
+		if !statusOutcomeFieldConfusionRe.MatchString(prompt) {
+			continue
+		}
+		diags = append(diags, Diagnostic{
+			Rule:     "status_outcome_field_confusion",
+			Severity: SeverityError,
+			NodeID:   id,
+			Message:  `prompt instructs agent to write {"status":"<canonical>","outcome":"..."} — the "outcome" JSON key is silently discarded by the runtime decoder; only the "status" field drives edge-condition matching`,
+			Fix:      `replace {"status":"success","outcome":"X"} with {"status":"X"} — custom routing uses status as the routing value, e.g. condition="outcome=X" matches {"status":"X"}`,
+		})
+	}
+	return diags
+}
+
+// promptStatusWriteRe extracts values from "status":"VALUE" patterns inside
+// what look like JSON status-write instructions in a prompt.
+var promptStatusWriteRe = regexp.MustCompile(`["']status["']\s*:\s*["']([a-zA-Z0-9_-]+)["']`)
+
+// lintCustomOutcomeCoverage checks that for every custom outcome condition on an
+// outgoing edge (e.g. condition="outcome=more_work"), the source node's prompt
+// contains at least one JSON write with "status":"more_work".  A missing match
+// means the agent will never emit the status value the edge requires, so the
+// conditional edge is permanently dead.
+//
+// Rule: custom_outcome_coverage (WARNING)
+func lintCustomOutcomeCoverage(g *model.Graph) []Diagnostic {
+	outgoing := make(map[string][]*model.Edge)
+	for _, e := range g.Edges {
+		if e != nil {
+			outgoing[e.From] = append(outgoing[e.From], e)
+		}
+	}
+	var diags []Diagnostic
+	for id, n := range g.Nodes {
+		if n == nil || n.Shape() != "box" {
+			continue
+		}
+		prompt := n.Prompt()
+		if strings.TrimSpace(prompt) == "" {
+			continue
+		}
+
+		// Collect the set of custom outcome values required by outgoing edges.
+		required := map[string]bool{}
+		for _, e := range outgoing[id] {
+			cond := strings.TrimSpace(e.Condition())
+			if cond == "" {
+				continue
+			}
+			for _, clause := range strings.Split(cond, "&&") {
+				clause = strings.TrimSpace(clause)
+				if strings.Contains(clause, "!=") || !strings.Contains(clause, "=") {
+					continue
+				}
+				parts := strings.SplitN(clause, "=", 2)
+				if len(parts) != 2 || strings.TrimSpace(parts[0]) != "outcome" {
+					continue
+				}
+				val := strings.Trim(strings.TrimSpace(parts[1]), "\"'")
+				st, err := runtime.ParseStageStatus(val)
+				if err != nil || !st.IsCanonical() {
+					required[val] = true
+				}
+			}
+		}
+		if len(required) == 0 {
+			continue
+		}
+
+		// Collect what status values the prompt actually writes.
+		written := map[string]bool{}
+		for _, m := range promptStatusWriteRe.FindAllStringSubmatch(prompt, -1) {
+			if len(m) >= 2 {
+				written[strings.ToLower(m[1])] = true
+			}
+		}
+
+		for val := range required {
+			if !written[strings.ToLower(val)] {
+				diags = append(diags, Diagnostic{
+					Rule:     "custom_outcome_coverage",
+					Severity: SeverityWarning,
+					NodeID:   id,
+					Message:  fmt.Sprintf(`outgoing edge requires condition="outcome=%s" but prompt contains no \"status\":\"%s\" write instruction — the conditional edge will never fire`, val, val),
+					Fix:      fmt.Sprintf(`add a status write case to the prompt: echo '{"status":"%s"}' > "$KILROY_STAGE_STATUS_PATH"`, val),
+				})
+			}
+		}
+	}
+	return diags
+}
+
 // lintStatusFallbackInPrompt warns when a codergen (shape=box) node's prompt
 // references the primary status path ($KILROY_STAGE_STATUS_PATH) but omits the
 // fallback path ($KILROY_STAGE_STATUS_FALLBACK_PATH). Without a fallback, a
@@ -1473,6 +1652,38 @@ func lintStatusFallbackInPrompt(g *model.Graph) []Diagnostic {
 				Message:  "codergen node prompt references $KILROY_STAGE_STATUS_PATH but omits $KILROY_STAGE_STATUS_FALLBACK_PATH; if the primary write fails the engine has no recovery signal",
 				NodeID:   id,
 				Fix:      "add $KILROY_STAGE_STATUS_FALLBACK_PATH alongside $KILROY_STAGE_STATUS_PATH in the node prompt",
+			})
+		}
+	}
+	return diags
+}
+
+// dotReservedKeywords is the set of DOT/Graphviz keywords that must not be
+// used as node IDs. Using any of these causes silent routing failures because
+// the DOT parser interprets them as language keywords rather than node names.
+var dotReservedKeywords = map[string]bool{
+	"graph":    true,
+	"digraph":  true,
+	"subgraph": true,
+	"node":     true,
+	"edge":     true,
+	"strict":   true,
+	"if":       true,
+}
+
+// lintReservedKeywordNodeID warns when any node ID is a DOT/Graphviz reserved
+// keyword. A node named "if" (for example) will never be reachable via normal
+// DOT routing and always represents LLM confusion.
+func lintReservedKeywordNodeID(g *model.Graph) []Diagnostic {
+	var diags []Diagnostic
+	for id := range g.Nodes {
+		if dotReservedKeywords[strings.ToLower(id)] {
+			diags = append(diags, Diagnostic{
+				Rule:     "reserved_keyword_node_id",
+				Severity: SeverityWarning,
+				Message:  fmt.Sprintf("node ID %q is a DOT/Graphviz reserved keyword and will cause routing failures", id),
+				NodeID:   id,
+				Fix:      fmt.Sprintf("rename node %q to a non-reserved identifier (e.g. %q)", id, id+"_node"),
 			})
 		}
 	}

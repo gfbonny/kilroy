@@ -147,6 +147,21 @@ digraph reference_template {
         debate_consolidate [auto_status=true]
     }
 
+    // OPTIONAL: For porting/reading-existing-source tasks — add analyze cluster here.
+    // analyze_fanout [shape=component, label="Analyze Fan-Out"]
+    // analyze_module_a [shape=box, auto_status=true, prompt="...read source, write .ai/design_a.md..."]
+    // analyze_module_b [shape=box, auto_status=true, prompt="..."]
+    // merge_analysis   [shape=box, auto_status=true, prompt="...verify all design docs..."]
+    // See reference_template.dot OPTIONAL stubs below for pattern.
+
+    // OPTIONAL: For 5+ discrete deliverable files — use worker pool instead of flat fan-out.
+    // plan_work          [shape=box, auto_status=true, label="Plan Work Queue", prompt="...write .ai/work_queue.json..."]
+    // work_pool          [shape=component, label="Worker Pool"]
+    // worker_0           [shape=box, auto_status=true, label="Worker 0", prompt="...id%3==0..."]
+    // worker_1           [shape=box, auto_status=true, label="Worker 1", prompt="...id%3==1..."]
+    // worker_2           [shape=box, auto_status=true, label="Worker 2", prompt="...id%3==2..."]
+    // check_work_complete [shape=box, auto_status=true, label="Work Complete?", prompt="...pass counter..."]
+
     subgraph cluster_implement_verify {
         label="Implement And Verify"
 
@@ -161,7 +176,7 @@ digraph reference_template {
         //   - Implementation instructions must be specific to the project's
         //     deliverables, domain, technology, and constraints — derived
         //     from the ingestor's reading of the spec and DoD
-        //   - Progressive compilation: each module compiling before next
+        //   - Incremental implementation: each module complete before next
         //   - Log progress to .ai/implementation_log.md
         // Failure: also include failure_signature in meta
         implement [
@@ -202,8 +217,8 @@ digraph reference_template {
         check_test [shape=diamond, label="Tests OK?"]
 
         // Replace tool_command with artifact hygiene check.
-        // Include both .cargo-target* and .cargo_target* patterns if Rust.
-        // For compiled artifact targets: confirm binary exports expected symbols; file existence alone is insufficient.
+        // Confirm deliverables meet their interface contract (exports, endpoints,
+        // CLI behavior, observable outputs); file existence alone is insufficient.
         verify_artifacts [
             shape=parallelogram,
             max_retries=0,
@@ -260,7 +275,7 @@ digraph reference_template {
         //   - Consensus: 2+ APPROVED with no critical gaps -> success;
         //     otherwise -> retry with specific issues
         // Writes: .ai/review_consensus.md
-        review_consensus [auto_status=true, goal_gate=true]
+        review_consensus [auto_status=true, goal_gate=true, retry_target="postmortem"]
     }
 
     subgraph cluster_postmortem {

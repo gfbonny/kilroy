@@ -35,8 +35,10 @@ case "$FILE_PATH" in
 esac
 
 # Locate the kilroy binary.
-# Honour KILROY_CLAUDE_PATH as a PATH hint (same env var the ingestor uses for
-# the claude binary, repurposed here to override the kilroy binary location).
+# Resolution order:
+#   1. KILROY_CLAUDE_PATH env var (full path or directory)
+#   2. CLAUDE_PROJECT_DIR/kilroy (binary built in project root)
+#   3. kilroy in PATH
 KILROY_BIN="kilroy"
 if [[ -n "${KILROY_CLAUDE_PATH:-}" ]]; then
     if [[ -x "$KILROY_CLAUDE_PATH" ]]; then
@@ -46,6 +48,9 @@ if [[ -n "${KILROY_CLAUDE_PATH:-}" ]]; then
         # A directory was provided; look for kilroy inside it.
         KILROY_BIN="$KILROY_CLAUDE_PATH/kilroy"
     fi
+elif [[ -x "${CLAUDE_PROJECT_DIR:-}/kilroy" ]]; then
+    # Binary built in the project root (common during development).
+    KILROY_BIN="${CLAUDE_PROJECT_DIR}/kilroy"
 fi
 
 # Verify kilroy is available.
@@ -55,14 +60,22 @@ if ! command -v "$KILROY_BIN" &>/dev/null && [[ ! -x "$KILROY_BIN" ]]; then
     exit 0
 fi
 
-# Run validation. Capture both stdout and stderr.
+# Run validation. Capture stdout and stderr separately to avoid injecting
+# debug/progress stderr into agent feedback when the graph is valid.
 # kilroy attractor validate prints:
 #   stdout: "ok: <file>" on success; "WARNING/ERROR: <msg> (<rule>)" for diagnostics
 #   stderr: error details on fatal failure; exits non-zero
-COMBINED_OUTPUT=$("$KILROY_BIN" attractor validate --graph "$FILE_PATH" 2>&1) || true
+EXIT_CODE=0
+STDOUT=$("$KILROY_BIN" attractor validate --graph "$FILE_PATH" 2>/tmp/kilroy_validate_err_$$) || EXIT_CODE=$?
+STDERR=$(cat /tmp/kilroy_validate_err_$$); rm -f /tmp/kilroy_validate_err_$$
 
 # Strip the "ok: <file>" success line — that is expected and not actionable.
-FEEDBACK=$(printf '%s\n' "$COMBINED_OUTPUT" | grep -v '^ok: ' || true)
+FEEDBACK=$(printf '%s\n' "$STDOUT" | grep -v '^ok: ' || true)
+
+# Only include stderr in feedback if kilroy exited non-zero.
+if [ "$EXIT_CODE" -ne 0 ] && [ -n "$STDERR" ]; then
+    FEEDBACK=$(printf '%s\n%s' "$FEEDBACK" "$STDERR")
+fi
 
 # If there is anything remaining (warnings or errors), return it as feedback.
 # PostToolUse hooks must use exit 2 + stderr; stdout on exit 0 is not injected

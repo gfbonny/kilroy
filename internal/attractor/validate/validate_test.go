@@ -685,14 +685,14 @@ digraph G {
 	}
 }
 
-// TestLintConditionSyntax_EvaluatorErrorCaptured verifies that the G2 fix is
-// in place: the function signature of lintConditionSyntax now captures
-// (rather than discards) the evaluator's error return.  We test this
-// indirectly by confirming that the existing invalid-operator condition
-// (outcome>success) still produces a condition_syntax ERROR, and that a valid
-// condition (outcome=success) does not — ensuring we have not regressed the
-// existing detection path while adding the new capture.
-func TestLintConditionSyntax_EvaluatorCapture_NoRegressionOnKnownInvalid(t *testing.T) {
+// TestLintConditionSyntax_SyntaxRejectsGreaterThanOperator verifies that
+// "outcome>success" produces a condition_syntax ERROR. Note: cond.Evaluate
+// is never reached for inputs that fail validateConditionSyntax, so this
+// test exercises only the syntax-checker path. The Evaluate error paths in
+// evalClause are unreachable for inputs that pass syntax check (SplitN with
+// a known operator always returns exactly 2 parts); the guard remains as a
+// forward-compatibility safety net.
+func TestLintConditionSyntax_SyntaxRejectsGreaterThanOperator(t *testing.T) {
 	// Invalid condition: uses ">" which validateConditionSyntax rejects.
 	g, err := dot.Parse([]byte(`
 digraph G {
@@ -1285,17 +1285,17 @@ func TestValidate_G12_UnknownModelID_EmitsWarning(t *testing.T) {
 	assertHasRule(t, diags, "stylesheet_unknown_model", SeverityWarning)
 }
 
-// TestValidate_G12_DashedAnthropicModelID_EmitsNonCanonicalWarning checks that
+// TestValidate_G12_DashedAnthropicModelID_EmitsNonCanonicalError checks that
 // claude-opus-4-6 (dashed version number) produces a stylesheet_noncanonical_model_id
-// WARNING because the catalog canonical form is claude-opus-4.6 (dotted).
-func TestValidate_G12_DashedAnthropicModelID_EmitsNonCanonicalWarning(t *testing.T) {
+// ERROR because the catalog canonical form is claude-opus-4.6 (dotted).
+func TestValidate_G12_DashedAnthropicModelID_EmitsNonCanonicalError(t *testing.T) {
 	g, err := dot.Parse(minimalGraphWithStylesheet(`* { llm_provider: anthropic; llm_model: claude-opus-4-6; }`))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	catalog := buildTestCatalog()
 	diags := ValidateWithOptions(g, ValidateOptions{Catalog: catalog})
-	assertHasRule(t, diags, "stylesheet_noncanonical_model_id", SeverityWarning)
+	assertHasRule(t, diags, "stylesheet_noncanonical_model_id", SeverityError)
 	assertNoRule(t, diags, "stylesheet_unknown_model")
 }
 
@@ -1453,4 +1453,343 @@ func TestPromptFile_LlmPromptConflict_FiresWithLlmPromptAttr(t *testing.T) {
 		}
 	}
 	t.Fatalf("expected prompt_file_conflict for node 'a'; got %+v", diags)
+}
+
+// --- Tests for all_conditional_edges lint rule ---
+
+func TestValidate_AllConditionalEdges_ErrorWhenAllConditional(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  start -> a
+  a -> exit [condition="outcome=success"]
+  a -> exit [condition="outcome=fail"]
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := lintAllConditionalEdges(g)
+	assertHasRule(t, diags, "all_conditional_edges", SeverityError)
+}
+
+func TestValidate_AllConditionalEdges_PassesWithUnconditionalFallback(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  start -> a
+  a -> exit [condition="outcome=success"]
+  a -> exit [condition="outcome=fail"]
+  a -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := lintAllConditionalEdges(g)
+	assertNoRule(t, diags, "all_conditional_edges")
+}
+
+// --- Tests for goal_gate_has_retry lint rule ---
+
+func TestValidate_GoalGateHasRetry_WarnWhenNoTargetAnywhere(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  review_consensus [shape=box, llm_provider=anthropic, llm_model="claude-sonnet-4.6", goal_gate=true, prompt="x"]
+  start -> review_consensus -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := lintGoalGateHasRetry(g)
+	assertHasRule(t, diags, "goal_gate_has_retry", SeverityWarning)
+}
+
+func TestValidate_GoalGateHasRetry_PassesWithGraphLevelTarget(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  graph [retry_target="implement"]
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  review_consensus [shape=box, llm_provider=anthropic, llm_model="claude-sonnet-4.6", goal_gate=true, prompt="x"]
+  start -> review_consensus -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := lintGoalGateHasRetry(g)
+	assertNoRule(t, diags, "goal_gate_has_retry")
+}
+
+// --- Tests for goal_gate_missing_node_retry_target lint rule ---
+
+func TestValidate_GoalGateMissingNodeRetry_WarnWhenOnlyGraphLevel(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  graph [retry_target="implement"]
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  review_consensus [shape=box, llm_provider=anthropic, llm_model="claude-sonnet-4.6", goal_gate=true, prompt="x"]
+  start -> review_consensus -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := lintGoalGateMissingNodeRetryTarget(g)
+	assertHasRule(t, diags, "goal_gate_missing_node_retry_target", SeverityWarning)
+}
+
+func TestValidate_GoalGateMissingNodeRetry_PassesWithNodeLevel(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  graph [retry_target="implement"]
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  review_consensus [shape=box, llm_provider=anthropic, llm_model="claude-sonnet-4.6", goal_gate=true, retry_target="postmortem", prompt="x"]
+  start -> review_consensus -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := lintGoalGateMissingNodeRetryTarget(g)
+	assertNoRule(t, diags, "goal_gate_missing_node_retry_target")
+}
+
+// --- Tests for reserved_keyword_node_id lint rule ---
+
+func TestValidate_ReservedKeywordNodeID_WarnsOnIfKeyword(t *testing.T) {
+	// Build graph programmatically because DOT parser treats "if" as a keyword.
+	g := model.NewGraph("G")
+	n := model.NewNode("if")
+	n.Attrs["shape"] = "box"
+	n.Attrs["llm_provider"] = "openai"
+	n.Attrs["llm_model"] = "gpt-5.2"
+	_ = g.AddNode(n)
+
+	diags := lintReservedKeywordNodeID(g)
+	assertHasRule(t, diags, "reserved_keyword_node_id", SeverityWarning)
+}
+
+func TestValidate_ReservedKeywordNodeID_WarnsOnAllKeywords(t *testing.T) {
+	keywords := []string{"graph", "digraph", "subgraph", "node", "edge", "strict", "if"}
+	for _, kw := range keywords {
+		t.Run(kw, func(t *testing.T) {
+			g := model.NewGraph("G")
+			n := model.NewNode(kw)
+			n.Attrs["shape"] = "box"
+			_ = g.AddNode(n)
+
+			diags := lintReservedKeywordNodeID(g)
+			assertHasRule(t, diags, "reserved_keyword_node_id", SeverityWarning)
+		})
+	}
+}
+
+func TestValidate_ReservedKeywordNodeID_PassesOnNormalID(t *testing.T) {
+	g := model.NewGraph("G")
+	n := model.NewNode("check_toolchain")
+	n.Attrs["shape"] = "box"
+	n.Attrs["llm_provider"] = "openai"
+	n.Attrs["llm_model"] = "gpt-5.2"
+	_ = g.AddNode(n)
+
+	diags := lintReservedKeywordNodeID(g)
+	assertNoRule(t, diags, "reserved_keyword_node_id")
+}
+
+// --- Tests for validate_script_failure_contract lint rule ---
+
+func TestValidate_ValidateScriptFailureContract_MissingFallback_Warns(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  v [shape=parallelogram, tool_command="sh scripts/validate-build.sh"]
+  start -> v -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertHasRule(t, diags, "validate_script_failure_contract", SeverityWarning)
+}
+
+func TestValidate_ValidateScriptFailureContract_WithFallback_NoWarn(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  v [shape=parallelogram, tool_command="sh scripts/validate-build.sh || { echo 'KILROY_VALIDATE_FAILURE: build script missing'; exit 1; }"]
+  start -> v -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "validate_script_failure_contract")
+}
+
+func TestValidate_ValidateScriptFailureContract_NonValidateScript_NoWarn(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  v [shape=parallelogram, tool_command="sh scripts/run-tests.sh"]
+  start -> v -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "validate_script_failure_contract")
+}
+
+func TestValidate_ValidateScriptFailureContract_EchoCommand_NoWarn(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  v [shape=parallelogram, tool_command="echo ok"]
+  start -> v -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "validate_script_failure_contract")
+}
+
+// --- status_outcome_field_confusion ---
+
+func TestValidate_StatusOutcomeFieldConfusion_ErrorOnAntiPattern(t *testing.T) {
+	// Prompt contains the antipattern: {"status":"success","outcome":"more_work"}
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  check [shape=box, prompt="Do work. Write status: echo '{\"status\":\"success\",\"outcome\":\"more_work\"}' > \"$KILROY_STAGE_STATUS_PATH\". Fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH."]
+  start -> check -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertHasRule(t, diags, "status_outcome_field_confusion", SeverityError)
+}
+
+func TestValidate_StatusOutcomeFieldConfusion_NoErrorOnCorrectPattern(t *testing.T) {
+	// Correct pattern: {"status":"more_work"} with no extra outcome key
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  check [shape=box, prompt="Do work. Write status: echo '{\"status\":\"more_work\"}' > \"$KILROY_STAGE_STATUS_PATH\". Fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH."]
+  start -> check -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "status_outcome_field_confusion")
+}
+
+func TestValidate_StatusOutcomeFieldConfusion_NoErrorOnNonBoxNode(t *testing.T) {
+	// The antipattern in a non-box node should not trigger (no agent writes status there)
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  start -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "status_outcome_field_confusion")
+}
+
+// --- custom_outcome_coverage ---
+
+func TestValidate_CustomOutcomeCoverage_WarnWhenMissing(t *testing.T) {
+	// Edge requires outcome=more_work but prompt only writes status:success
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start      [shape=Mdiamond]
+  exit       [shape=Msquare]
+  work_pool  [shape=component]
+  merger     [shape=box]
+  check [shape=box, prompt="Harvest files. If all done: echo '{\"status\":\"success\"}' > \"$KILROY_STAGE_STATUS_PATH\". Fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH."]
+  start -> check
+  check -> work_pool [condition="outcome=more_work"]
+  check -> merger
+  work_pool -> check
+  merger -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertHasRule(t, diags, "custom_outcome_coverage", SeverityWarning)
+}
+
+func TestValidate_CustomOutcomeCoverage_NoWarnWhenCovered(t *testing.T) {
+	// Edge requires outcome=more_work and prompt correctly writes status:more_work
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start      [shape=Mdiamond]
+  exit       [shape=Msquare]
+  work_pool  [shape=component]
+  merger     [shape=box]
+  check [shape=box, prompt="Harvest files. If done: echo '{\"status\":\"success\"}' > \"$KILROY_STAGE_STATUS_PATH\". If more work: echo '{\"status\":\"more_work\"}' > \"$KILROY_STAGE_STATUS_PATH\". Fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH."]
+  start -> check
+  check -> work_pool [condition="outcome=more_work"]
+  check -> merger
+  work_pool -> check
+  merger -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "custom_outcome_coverage")
+}
+
+func TestValidate_CustomOutcomeCoverage_NoWarnForCanonicalOutcomes(t *testing.T) {
+	// condition="outcome=success" is canonical — no coverage check needed
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  check [shape=box, prompt="Do work. Write: echo '{\"status\":\"success\"}' > \"$KILROY_STAGE_STATUS_PATH\". Fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH."]
+  bad   [shape=box]
+  start -> check
+  check -> exit   [condition="outcome=success"]
+  check -> bad
+  bad -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "custom_outcome_coverage")
 }
