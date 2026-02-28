@@ -1178,6 +1178,11 @@ func usedAPIProviders(g *model.Graph, runtimes map[string]ProviderRuntime) []str
 			if !ok || nextRT.Backend != BackendAPI {
 				continue
 			}
+			// Only include failover targets that have credentials available.
+			// If DefaultAPIKeyEnv is empty (e.g. test runtimes without APISpec), include unconditionally.
+			if keyEnv := strings.TrimSpace(nextRT.API.DefaultAPIKeyEnv); keyEnv != "" && strings.TrimSpace(os.Getenv(keyEnv)) == "" {
+				continue
+			}
 			seen[next] = true
 			queue = append(queue, next)
 		}

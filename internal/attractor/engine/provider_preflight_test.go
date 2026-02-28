@@ -19,6 +19,7 @@ import (
 
 	"github.com/danshapiro/kilroy/internal/attractor/model"
 	"github.com/danshapiro/kilroy/internal/attractor/modeldb"
+	"github.com/danshapiro/kilroy/internal/providerspec"
 )
 
 type preflightReportDoc struct {
@@ -1885,5 +1886,44 @@ func TestProviderPreflight_ForceModelInjectsCLIOnly_WithAPIBackend_Fails(t *test
 	}
 	if !strings.Contains(err.Error(), "CLI-only") {
 		t.Fatalf("expected error to mention 'CLI-only', got: %v", err)
+	}
+}
+
+func TestUsedAPIProviders_ExcludesUncredentialedFailoverTarget(t *testing.T) {
+	g := model.NewGraph("preflight")
+	n := model.NewNode("impl")
+	n.Attrs["shape"] = "box"
+	n.Attrs["llm_provider"] = "anthropic"
+	if err := g.AddNode(n); err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+
+	runtimes := map[string]ProviderRuntime{
+		"anthropic": {
+			Key:     "anthropic",
+			Backend: BackendAPI,
+			API:     providerspec.APISpec{DefaultAPIKeyEnv: "ANTHROPIC_API_KEY"},
+			Failover: []string{"google"},
+		},
+		"google": {
+			Key:     "google",
+			Backend: BackendAPI,
+			API:     providerspec.APISpec{DefaultAPIKeyEnv: "GEMINI_API_KEY"},
+		},
+	}
+
+	// With only ANTHROPIC_API_KEY set, google should be excluded from the BFS.
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+	t.Setenv("GEMINI_API_KEY", "")
+	got := usedAPIProviders(g, runtimes)
+	if strings.Join(got, ",") != "anthropic" {
+		t.Fatalf("want [anthropic] only (google uncredentialed), got %v", got)
+	}
+
+	// With both keys set, google should be included.
+	t.Setenv("GEMINI_API_KEY", "test-key")
+	got = usedAPIProviders(g, runtimes)
+	if strings.Join(got, ",") != "anthropic,google" {
+		t.Fatalf("want [anthropic google] (both credentialed), got %v", got)
 	}
 }
