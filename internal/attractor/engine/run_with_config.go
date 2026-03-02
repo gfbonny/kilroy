@@ -385,6 +385,7 @@ func bootstrapRunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfi
 		Startup:                 startup,
 	}, nil
 }
+
 func validateProviderModelPairs(g *model.Graph, runtimes map[string]ProviderRuntime, catalog *modeldb.Catalog, opts RunOptions) ([]providerPreflightCheck, error) {
 	if g == nil || catalog == nil {
 		return nil, nil
