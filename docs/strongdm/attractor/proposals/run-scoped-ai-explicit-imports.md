@@ -37,6 +37,23 @@ Adopt a strict runtime model:
 4. **Execution reads from run snapshots, not live repo files.**
    - Fan-out branches and resume hydrate from the same snapshot state.
 
+## Why This Fix Is Correct For Worktrees
+
+The postmortem concern is valid: when the engine creates a new worktree from
+git `HEAD`, any untracked `.ai/*` content is absent by definition.
+
+This design resolves that by removing git from the `.ai` durability path:
+
+1. `.ai` remains untracked and run-scoped (no git history churn).
+2. Inter-node durability comes from the persisted run snapshot, updated after
+   each node.
+3. Any new worktree (parallel branch or resume) is hydrated from that snapshot
+   before node execution.
+4. Therefore correctness does not depend on whether `.ai` is tracked in git.
+
+In short: worktrees are still used for code checkout isolation, but run state
+is carried by snapshot materialization, not by git index content.
+
 ## Why Shared Sources Still Matter
 
 Run-scoped execution does not eliminate the need for shared project sources.
@@ -116,6 +133,7 @@ This design answers it safely:
    - Enforce explicit include semantics.
 4. **Snapshot sync**
    - Update the run snapshot after each node, but only for run-scoped runtime files.
+   - Never treat git index content as the source of truth for `.ai` runtime files.
    - Preserve same-file copy protections.
 5. **Provenance + diagnostics**
    - Persist per-import source and digest metadata.
@@ -132,8 +150,10 @@ This design answers it safely:
 3. Node output in `./.ai/runs/<run_id>/...` persists across linear nodes.
 4. Parallel branch worktrees hydrate latest run-scoped snapshot state.
 5. Resume hydrates same run-scoped state from snapshot.
-6. Same-file copy path never truncates content.
-7. Input manifest digests are stable and auditable.
+6. Recreated worktree from clean `HEAD` still receives required `.ai/runs/<run_id>/...`
+   state before stage execution.
+7. Same-file copy path never truncates content.
+8. Input manifest digests are stable and auditable.
 
 ## Incident-Specific Cleanup (Completed)
 
