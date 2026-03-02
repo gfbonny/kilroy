@@ -32,7 +32,7 @@ digraph T {
 `)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	res, err := Run(ctx, dot, RunOptions{RepoPath: repo})
+	res, err := runForTest(t, ctx, dot, RunOptions{RepoPath: repo})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}

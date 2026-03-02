@@ -277,7 +277,15 @@ func (e *LocalExecutionEnvironment) ExecCommand(ctx context.Context, command str
 	for k, v := range envVars {
 		mergedEnv[k] = v
 	}
-	cmd.Env = filteredEnv(mergedEnv, e.StripEnvKeys)
+	// BaseEnv keys were explicitly declared by the operator (e.g. via
+	// artifact_policy.env.overrides in the run config).  Allow them through
+	// the sensitive-name deny list so that keys like GEMINI_API_KEY reach
+	// the agent shell when intentionally configured.
+	allowSensitive := make(map[string]bool, len(e.BaseEnv))
+	for k := range e.BaseEnv {
+		allowSensitive[k] = true
+	}
+	cmd.Env = filteredEnv(mergedEnv, e.StripEnvKeys, allowSensitive)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -349,7 +357,13 @@ func (e *LocalExecutionEnvironment) resolve(path string) string {
 	return filepath.Join(e.RootDir, p)
 }
 
-func filteredEnv(extra map[string]string, stripKeys []string) []string {
+// filteredEnv builds a process environment by combining os.Environ() with
+// explicit extra vars.  Sensitive-looking keys (containing API_KEY, SECRET,
+// TOKEN, PASSWORD, or CREDENTIAL) are denied by default.  Keys listed in
+// allowSensitive bypass the deny check — use this for vars the operator
+// explicitly declared in config (e.g. artifact_policy.env.overrides).
+// Keys in stripKeys are always removed regardless of allowSensitive.
+func filteredEnv(extra map[string]string, stripKeys []string, allowSensitive map[string]bool) []string {
 	stripped := map[string]bool{}
 	for _, k := range stripKeys {
 		k = strings.TrimSpace(k)
@@ -406,7 +420,7 @@ func filteredEnv(extra map[string]string, stripKeys []string) []string {
 		if isStripped(k) {
 			continue
 		}
-		if deny(k) {
+		if deny(k) && !allowSensitive[k] {
 			continue
 		}
 		out = append(out, k+"="+v)

@@ -1,0 +1,35 @@
+digraph browser_smoke {
+    graph [
+        goal="Minimal browser retry/artifact smoke test",
+        default_max_retry="1",
+        model_stylesheet="
+            * { llm_model: gpt-5.3-codex-spark; llm_provider: openai; }
+        "
+    ]
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    prep [
+        shape=box,
+        auto_status=true,
+        prompt="No-op smoke step to exercise OpenAI CLI model wiring.
+
+Do not modify repository files.
+
+Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
+{\"status\":\"fail\",\"failure_reason\":\"...\",\"failure_class\":\"deterministic\"}"
+    ]
+
+    verify_browser [
+        shape=parallelogram,
+        label="Verify Browser",
+        max_retries="1",
+        collect_browser_artifacts="true",
+        tool_command="sh demo/browser-smoke/run-browser-check.sh"
+    ]
+
+    start -> prep
+    prep -> verify_browser
+    verify_browser -> exit
+}

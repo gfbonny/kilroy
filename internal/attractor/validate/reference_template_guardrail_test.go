@@ -3,6 +3,7 @@ package validate
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -264,5 +265,61 @@ func TestReferenceTemplate_PostmortemPromptClarifiesStatusContract(t *testing.T)
 
 	if !strings.Contains(section[:end], requiredText) {
 		t.Fatal("postmortem template guidance must clarify that status reflects analysis completion, not implementation state")
+	}
+}
+
+func TestReferenceSurfaces_NoLegacyRootAIScratchPaths(t *testing.T) {
+	repoRoot := findRepoRoot(t)
+	referenceSurfaces := []string{
+		"skills/create-dotfile/SKILL.md",
+		"skills/create-dotfile/reference_template.dot",
+		"skills/build-dod/SKILL.md",
+		"skills/create-runfile/SKILL.md",
+		"skills/create-runfile/reference_run_template.yaml",
+		"demo/substack-pipeline-v01.dot",
+		"docs/strongdm/dot specs/semport.dot",
+		"docs/strongdm/attractor/attractor-spec.md",
+		"docs/strongdm/attractor/README.md",
+	}
+
+	legacyNeedles := []string{
+		".ai/postmortem_latest.md",
+		".ai/review_final.md",
+	}
+	aiPathPattern := regexp.MustCompile(`(?:^|[^A-Za-z0-9_])(\.ai/)`)
+
+	for _, relPath := range referenceSurfaces {
+		fullPath := filepath.Join(repoRoot, filepath.FromSlash(relPath))
+		b, err := os.ReadFile(fullPath)
+		if err != nil {
+			t.Fatalf("%s: read: %v", relPath, err)
+		}
+		text := string(b)
+
+		for _, needle := range legacyNeedles {
+			if strings.Contains(text, needle) {
+				t.Errorf("%s: contains legacy root scratch guidance %q; use run-scoped .ai/runs/$KILROY_RUN_ID/... paths", relPath, needle)
+			}
+		}
+
+		var nonRunScopedSnippets []string
+		matches := aiPathPattern.FindAllStringSubmatchIndex(text, -1)
+		for _, match := range matches {
+			idx := match[2]
+			tail := text[idx:]
+			if !strings.HasPrefix(tail, ".ai/runs/$KILROY_RUN_ID/") &&
+				!strings.HasPrefix(tail, ".ai/runs/${KILROY_RUN_ID}/") {
+				end := idx + 100
+				if end > len(text) {
+					end = len(text)
+				}
+				snippet := strings.ReplaceAll(text[idx:end], "\n", "\\n")
+				nonRunScopedSnippets = append(nonRunScopedSnippets, snippet)
+			}
+		}
+
+		if len(nonRunScopedSnippets) > 0 {
+			t.Errorf("%s: found non-run-scoped .ai/ scratch references (examples: %q)", relPath, nonRunScopedSnippets)
+		}
 	}
 }

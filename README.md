@@ -315,6 +315,59 @@ Kimi compatibility note:
 - Built-in `kimi` defaults target Kimi Coding (`anthropic_messages`, `https://api.kimi.com/coding`).
 - If you use Moonshot Open Platform keys instead, override `kimi.api` to `protocol: openai_chat_completions`, `base_url: https://api.moonshot.ai`, `path: /v1/chat/completions`.
 
+## Node Attributes
+
+Node attributes are DOT key=value pairs on `[shape=box]` nodes that control engine behaviour.
+
+### Output token limit (`max_tokens`)
+
+Every provider adapter has a built-in default output token cap of **32768** tokens. This is the
+per-response limit — how many tokens the model may generate in a single API call. It is completely
+separate from the model's input context window.
+
+Override it per-node with `max_tokens`:
+
+```dot
+implement [
+  shape=box,
+  max_agent_turns=300,
+  max_tokens=32768,        // default; increase for very large file writes
+  prompt="..."
+]
+```
+
+**Why this matters:** If `max_tokens` is too small the model will silently hit the cap mid-generation
+(especially during large `write_file` tool calls), return an empty or truncated response, and Kilroy
+will interpret the session as cleanly ended. For nodes that write large files (full source modules,
+extensive spec documents), keep `max_tokens` at 32768 or higher.
+
+Provider-specific behaviour:
+
+| Provider  | When `max_tokens` omitted | Notes |
+|-----------|---------------------------|-------|
+| Google (Gemini) | 32768 | Always sent; Google API requires the field |
+| Anthropic | 32768 | Always sent; Anthropic API requires the field |
+| OpenAI (Responses) | omitted (API uses model default) | Only sent when explicitly set |
+| OpenAI-compat | omitted (API uses model default) | Only sent when explicitly set |
+| Kimi | max(32768, 16000) | 16000 minimum enforced by provider policy |
+
+### Turn budget (`max_agent_turns`)
+
+Caps the number of agent turns (model calls) in a single session. Defaults to unlimited.
+
+```dot
+implement [shape=box, max_agent_turns=300, prompt="..."]
+```
+
+### Reasoning effort (`reasoning_effort`)
+
+Passed to the model as the reasoning effort parameter where supported (e.g. `low|medium|high` for
+Anthropic extended thinking, `o1`-family models).
+
+```dot
+review [shape=box, reasoning_effort=high, prompt="..."]
+```
+
 ## Run Artifacts
 
 Typical run-level artifacts under `{logs_root}`:

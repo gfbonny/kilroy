@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -83,6 +84,10 @@ type RunOptions struct {
 	// before the main loop starts. Allows callers to capture an engine
 	// reference for context inspection, etc.
 	OnEngineReady func(e *Engine)
+
+	// Arbitrary key/value metadata written to manifest.json under "labels".
+	// Use to fingerprint runs for later querying or pruning (e.g. source=test).
+	Labels map[string]string
 }
 
 func (o *RunOptions) applyDefaults() error {
@@ -170,6 +175,10 @@ type Engine struct {
 	InputReferenceInferer      InputReferenceInferer
 	InputInferenceCache        map[string][]InferredReference
 	InputSourceTargetMap       map[string]string
+	inputLineage               *InputSnapshotLineage
+	activeBranchKey            string
+	activeRunBaseRevision      string
+	activeBranchRevision       string
 	currentInputManifestPath   string
 
 	warningsMu sync.Mutex
@@ -189,6 +198,12 @@ type Engine struct {
 	// resetting would defeat the breaker in impl-succeeds/verify-fails cycles.
 	loopFailureSignatures map[string]int
 
+	// parallelDispatchCounts tracks how many times each fan-out node has been
+	// dispatched in this run. Incremented once per dispatch call. Used to
+	// produce unique pass-numbered branch names so each re-visit of a fan-out
+	// is independently reviewable in git.
+	parallelDispatchCounts map[string]int
+
 	progressMu sync.Mutex
 	// Guarded by progressMu.
 	lastProgressAt time.Time
@@ -200,6 +215,16 @@ type Engine struct {
 	forceNextFidelityUsed bool        // true once the override has been consumed
 	lastResolvedFidelity  string      // last resolved LLM fidelity for checkpoint/resume
 	lastResolvedThreadKey string      // thread key when fidelity=full (best-effort)
+}
+
+// nextParallelPassCount increments and returns the dispatch count for nodeID.
+// The first call for a given nodeID returns 1, the second returns 2, etc.
+func (e *Engine) nextParallelPassCount(nodeID string) int {
+	if e.parallelDispatchCounts == nil {
+		e.parallelDispatchCounts = map[string]int{}
+	}
+	e.parallelDispatchCounts[nodeID]++
+	return e.parallelDispatchCounts[nodeID]
 }
 
 func (e *Engine) Warn(msg string) {
@@ -393,6 +418,14 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 	_ = gitutil.RemoveWorktree(e.Options.RepoPath, e.WorktreeDir)
 	if err := gitutil.AddWorktree(e.Options.RepoPath, e.WorktreeDir, e.RunBranch); err != nil {
 		return nil, err
+	}
+	// Copy gitignored files (e.g. .env, secrets, local configs) from the
+	// source repo into the run worktree. These are not committed to git so
+	// they don't survive worktree creation; agents that rely on them (e.g. for
+	// API keys or environment config) need them present without us committing
+	// sensitive material.
+	if err := gitutil.CopyIgnoredFiles(e.Options.RepoPath, e.WorktreeDir); err != nil {
+		e.Warn(fmt.Sprintf("copy ignored files to run worktree: %v", err))
 	}
 	if err := e.materializeRunStartupInputs(ctx); err != nil {
 		return nil, err
@@ -682,8 +715,9 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 					_ = writeJSON(filepath.Join(stageDir, "parallel_results.json"), results)
 
 					e.Context.ApplyUpdates(map[string]any{
-						"parallel.join_node": joinID,
-						"parallel.results":   results,
+						"parallel.join_node":        joinID,
+						parallelMergeModeContextKey: classifyJoinMergeMode(e.Graph, joinID),
+						"parallel.results":          results,
 					})
 					e.appendProgress(map[string]any{
 						"event":       "implicit_fan_out",
@@ -1066,6 +1100,17 @@ func (e *Engine) executeNode(ctx context.Context, node *model.Node) (runtime.Out
 
 	// Write status.json (canonical metaspec shape).
 	_ = writeJSON(filepath.Join(stageDir, "status.json"), out)
+	if err := e.advanceLineageAfterStage(node.ID); err != nil {
+		out = runtime.Outcome{
+			Status:        runtime.StatusFail,
+			FailureReason: err.Error(),
+			ContextUpdates: map[string]any{
+				"failure_reason": err.Error(),
+			},
+			SuggestedNextIDs: []string{},
+		}
+		_ = writeJSON(filepath.Join(stageDir, "status.json"), out)
+	}
 	return out, nil
 }
 
@@ -1147,7 +1192,16 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 	allowPartial := strings.EqualFold(node.Attr("allow_partial", "false"), "true")
 	stageDir := filepath.Join(e.LogsRoot, node.ID)
 
+	// If this node was visited before (e.g. routed back via retry_target after a
+	// postmortem), preserve its prior output under visit_N/ before overwriting.
+	archivePriorVisitDir(stageDir)
+
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		// Before running attempt N>1, archive the previous attempt's files into
+		// attempt_{N-1}/ so they survive when executeNode overwrites them.
+		if attempt > 1 {
+			archiveAttemptDir(stageDir, attempt-1)
+		}
 		e.appendProgress(map[string]any{
 			"event":   "stage_attempt_start",
 			"node_id": node.ID,
@@ -1284,6 +1338,122 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 		return fo, nil
 	}
 	return runtime.Outcome{Status: runtime.StatusFail, FailureReason: "max retries exceeded"}, nil
+}
+
+// archivePriorVisitDir preserves the contents of stageDir from a previous node
+// visit by moving all entries (files and subdirs, including any attempt_N/ dirs)
+// into a visit_N/ subdirectory. Called at the start of executeWithRetry so that
+// when a node is re-entered via retry_target or postmortem routing, the prior
+// visit's response.md, status.json, attempt archives, etc. are not overwritten.
+//
+// Uses os.Rename for efficiency; all paths are under the same logsRoot so they
+// are on the same filesystem. Errors are silently ignored — archiving is
+// best-effort and must not block execution.
+func archivePriorVisitDir(stageDir string) {
+	entries, err := os.ReadDir(stageDir)
+	if err != nil {
+		return // stageDir doesn't exist yet — nothing to archive
+	}
+
+	// Only archive if there is something other than existing visit_N/ dirs.
+	hasContent := false
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), "visit_") {
+			hasContent = true
+			break
+		}
+	}
+	if !hasContent {
+		return
+	}
+
+	// Determine the next visit number by counting existing visit_N/ dirs.
+	visitNum := 1
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), "visit_") {
+			visitNum++
+		}
+	}
+
+	destDir := filepath.Join(stageDir, fmt.Sprintf("visit_%d", visitNum))
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return
+	}
+
+	// Move every entry except existing visit_N/ dirs into destDir.
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, "visit_") {
+			continue
+		}
+		_ = os.Rename(filepath.Join(stageDir, name), filepath.Join(destDir, name))
+	}
+}
+
+// archiveAttemptDir copies the flat files in stageDir (skipping subdirectories)
+// into stageDir/attempt_N/ so that each retry attempt's artifacts are preserved.
+// Errors are silently ignored — archiving is best-effort and must not block execution.
+func archiveAttemptDir(stageDir string, attemptNum int) {
+	destDir := filepath.Join(stageDir, fmt.Sprintf("attempt_%d", attemptNum))
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return
+	}
+	entries, err := os.ReadDir(stageDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			name := entry.Name()
+			if strings.HasPrefix(name, "attempt_") || strings.HasPrefix(name, "visit_") {
+				continue
+			}
+			if name == browserArtifactsDirName {
+				copyAttemptSubdir(filepath.Join(stageDir, name), filepath.Join(destDir, name))
+			}
+			continue
+		}
+		src := filepath.Join(stageDir, entry.Name())
+		dst := filepath.Join(destDir, entry.Name())
+		data, err := os.ReadFile(src)
+		if err != nil {
+			continue
+		}
+		_ = os.WriteFile(dst, data, 0o644)
+	}
+}
+
+func copyAttemptSubdir(srcDir, dstDir string) {
+	_ = filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		rel, relErr := filepath.Rel(srcDir, path)
+		if relErr != nil {
+			return nil
+		}
+		target := filepath.Join(dstDir, rel)
+		if d.IsDir() {
+			_ = os.MkdirAll(target, 0o755)
+			return nil
+		}
+		info, statErr := os.Lstat(path)
+		if statErr != nil {
+			return nil
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return nil
+		}
+		if mkErr := os.MkdirAll(filepath.Dir(target), 0o755); mkErr != nil {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil
+		}
+		_ = os.WriteFile(target, data, 0o644)
+		return nil
+	})
 }
 
 func sleepWithContext(ctx context.Context, delay time.Duration) bool {
@@ -1441,6 +1611,9 @@ func (e *Engine) writeManifest(baseSHA string) error {
 	}
 	if len(e.Options.ForceModels) > 0 {
 		manifest["force_models"] = copyStringStringMap(e.Options.ForceModels)
+	}
+	if len(e.Options.Labels) > 0 {
+		manifest["labels"] = copyStringStringMap(e.Options.Labels)
 	}
 	return writeJSON(filepath.Join(e.LogsRoot, "manifest.json"), manifest)
 }
@@ -1694,6 +1867,13 @@ func parseInt(s string, def int) int {
 		return def
 	}
 	return n
+}
+
+// DefaultRunsBaseDir returns the parent directory that contains all run
+// subdirectories (one per run ID). This is the directory that list/prune
+// commands scan.
+func DefaultRunsBaseDir() string {
+	return filepath.Dir(defaultLogsRoot("placeholder"))
 }
 
 func defaultLogsRoot(runID string) string {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -491,7 +492,7 @@ func TestSession_SystemPrompt_IncludesGitSnapshot_WhenInGitRepo(t *testing.T) {
 
 	// Make the repo dirty before session start so the snapshot reflects it.
 	_ = os.WriteFile(filepath.Join(dir, "README.md"), []byte("hi\nmore\n"), 0o644) // modified tracked file
-	_ = os.WriteFile(filepath.Join(dir, "UNTRACKED.txt"), []byte("u\n"), 0o644)   // untracked file
+	_ = os.WriteFile(filepath.Join(dir, "UNTRACKED.txt"), []byte("u\n"), 0o644)    // untracked file
 
 	c := llm.NewClient()
 	f := &fakeAdapter{
@@ -643,25 +644,25 @@ func TestSession_LoopDetection_EmitsEventAndInjectsSteering(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-		_, err = sess.ProcessInput(ctx, "loop")
-		if err != nil {
-			t.Fatalf("ProcessInput: %v", err)
-		}
+	_, err = sess.ProcessInput(ctx, "loop")
+	if err != nil {
+		t.Fatalf("ProcessInput: %v", err)
+	}
 
-		// Spec: loop detection warning is recorded as a SteeringTurn in history.
-		sess.mu.Lock()
-		turns := append([]Turn{}, sess.history...)
-		sess.mu.Unlock()
-		foundSteering := false
-		for _, tr := range turns {
-			if tr.Kind == TurnSteering && tr.Message.Role == llm.RoleUser && strings.Contains(tr.Message.Text(), "Loop detection:") {
-				foundSteering = true
-			}
+	// Spec: loop detection warning is recorded as a SteeringTurn in history.
+	sess.mu.Lock()
+	turns := append([]Turn{}, sess.history...)
+	sess.mu.Unlock()
+	foundSteering := false
+	for _, tr := range turns {
+		if tr.Kind == TurnSteering && tr.Message.Role == llm.RoleUser && strings.Contains(tr.Message.Text(), "Loop detection:") {
+			foundSteering = true
 		}
-		if !foundSteering {
-			t.Fatalf("expected loop detection steering turn in history; got %+v", turns)
-		}
-		sess.Close()
+	}
+	if !foundSteering {
+		t.Fatalf("expected loop detection steering turn in history; got %+v", turns)
+	}
+	sess.Close()
 
 	// Verify loop detection event was emitted.
 	loopEv := false
@@ -696,6 +697,76 @@ func TestSession_LoopDetection_EmitsEventAndInjectsSteering(t *testing.T) {
 	if !found {
 		t.Fatalf("expected loop detection steering message in request history")
 	}
+}
+
+func TestSession_RepeatedErrorToolCalls_ErrorsAtLimit(t *testing.T) {
+	dir := t.TempDir()
+	c := llm.NewClient()
+
+	// Each round: one tool call that always returns an error with a stable message.
+	errorCall := llm.ToolCallData{
+		ID:        "c1",
+		Name:      "close_agent",
+		Arguments: json.RawMessage(`{"agent_id":"main_agent"}`),
+		Type:      "function",
+	}
+	roundsExecuted := 0
+	f := &fakeAdapter{
+		name: "openai",
+		steps: func() []func(req llm.Request) llm.Response {
+			// Return 10 identical error-producing tool calls; the limit is 3 so we
+			// expect the session to abort well before reaching round 10.
+			var steps []func(req llm.Request) llm.Response
+			for i := 0; i < 10; i++ {
+				steps = append(steps, func(req llm.Request) llm.Response {
+					roundsExecuted++
+					return llm.Response{
+						Message: llm.Message{
+							Role: llm.RoleAssistant,
+							Content: []llm.ContentPart{{
+								Kind:     llm.ContentToolCall,
+								ToolCall: &errorCall,
+							}},
+						},
+					}
+				})
+			}
+			return steps
+		}(),
+	}
+	c.Register(f)
+
+	// Register a fake close_agent tool that always errors with a stable message.
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{
+		RepeatedErrorToolCallLimit: 3,
+	})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	_ = sess.reg.Register(RegisteredTool{
+		Definition: llm.ToolDefinition{
+			Name:       "close_agent",
+			Parameters: map[string]any{"type": "object", "properties": map[string]any{"agent_id": map[string]any{"type": "string"}}},
+		},
+		Exec: func(ctx context.Context, env ExecutionEnvironment, args map[string]any) (any, error) {
+			return "", fmt.Errorf("unknown agent_id: %s", argStr(args, "agent_id"))
+		},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = sess.ProcessInput(ctx, "close me")
+	if err == nil {
+		t.Fatal("expected error from repeated error tool calls, got nil")
+	}
+	if !strings.Contains(err.Error(), "repeated failing tool calls detected") {
+		t.Fatalf("expected 'repeated failing tool calls detected' in error, got: %v", err)
+	}
+	// Should trip at exactly the limit (3), not burn through all 10 rounds.
+	if roundsExecuted != 3 {
+		t.Fatalf("expected exactly 3 rounds before abort, got %d", roundsExecuted)
+	}
+	sess.Close()
 }
 
 func anyToString(v any) string {

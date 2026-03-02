@@ -64,7 +64,7 @@ digraph G {
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	res, err := Run(ctx, dot, RunOptions{
+	res, err := runForTest(t, ctx, dot, RunOptions{
 		RepoPath: repo,
 		RunID:    "fanin-all-fail-no-fallthrough",
 		LogsRoot: logsRoot,
@@ -151,7 +151,7 @@ digraph G {
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	res, err := Run(ctx, dot, RunOptions{
+	res, err := runForTest(t, ctx, dot, RunOptions{
 		RepoPath: repo,
 		RunID:    "fanin-deterministic-blocks-retry",
 		LogsRoot: logsRoot,

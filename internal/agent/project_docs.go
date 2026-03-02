@@ -32,6 +32,12 @@ func LoadProjectDocs(env ExecutionEnvironment, filenames ...string) ([]ProjectDo
 	if cwd == "" {
 		return nil, false
 	}
+	// Resolve symlinks so that git root comparisons work correctly (e.g.,
+	// on macOS /var is a symlink to /private/var, but git always returns
+	// the resolved path from rev-parse --show-toplevel).
+	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = resolved
+	}
 
 	root := cwd
 	if gr := gitRootOrEmpty(env, cwd); gr != "" {
@@ -126,11 +132,18 @@ func gitRootOrEmpty(env ExecutionEnvironment, cwd string) string {
 		return ""
 	}
 	// Best-effort sanity check: ensure the returned root is a prefix of cwd.
+	// Resolve symlinks on both sides so that macOS /var -> /private/var
+	// (and similar symlinks) don't cause a false mismatch.
 	root = filepath.Clean(root)
 	cwd = filepath.Clean(cwd)
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		root = r
+	}
+	if c, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = c
+	}
 	if root != cwd && !strings.HasPrefix(cwd, root+string(filepath.Separator)) {
 		return ""
 	}
 	return root
 }
-

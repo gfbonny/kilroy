@@ -266,6 +266,12 @@ func classifyAPIError(err error) (failureClass string, failureSignature string) 
 
 	// Non-LLM errors: fall back to the same heuristic hints used by classifyFailureClass.
 	reason := strings.ToLower(strings.TrimSpace(err.Error()))
+	if strings.Contains(reason, "repeated failing tool calls detected") {
+		return failureClassDeterministic, "repeated_tool_failure_loop"
+	}
+	if strings.Contains(reason, "repeated malformed tool calls detected") {
+		return failureClassDeterministic, "repeated_malformed_tool_loop"
+	}
 	for _, hint := range transientInfraReasonHints {
 		if strings.Contains(reason, hint) {
 			return failureClassTransientInfra, fmt.Sprintf("api_transient|%s|heuristic", provider)

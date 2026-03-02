@@ -1,0 +1,155 @@
+digraph SubstackCreatorUI {
+  graph [
+    label="Substack Creator UI: Screen and Information Flow",
+    labelloc=t,
+    fontname="Helvetica",
+    labelfontname="Times New Roman",
+    labelfontsize=24,
+    rankdir=LR,
+    splines=polyline,
+    nodesep=0.55,
+    ranksep=0.8,
+    compound=true,
+    newrank=true
+  ];
+
+  node [
+    shape=box,
+    style="rounded,filled",
+    fontname="Helvetica"
+  ];
+
+  edge [
+    arrowsize=0.7,
+    fontname="Helvetica",
+    fontsize=9
+  ];
+
+  subgraph cluster_entry {
+    label=<<FONT FACE="Times New Roman" POINT-SIZE="22"><B>Entry</B></FONT>>;
+    style="rounded";
+
+    app_start [
+      label="App Start",
+      shape=circle,
+      fixedsize=true,
+      width=1.05,
+      style="filled,bold"
+    ];
+    first_run [label="First run?", shape=diamond];
+  }
+
+  subgraph cluster_setup {
+    label=<<FONT FACE="Times New Roman" POINT-SIZE="22"><B>Setup Settings (parallel options)</B></FONT>>;
+    style="rounded";
+
+    settings_page [
+      label="Settings Hub\n(status icons show incomplete items)"
+    ];
+    api_key [label="API Key Setup"];
+    define_company [label="Identify Company"];
+    confirm_company [label="Confirm Company"];
+    define_voice [label="Define Voice"];
+    confirm_voice [label="Confirm Voice"];
+    define_guardrails [label="Define Guardrails"];
+    confirm_guardrails [label="Confirm Guardrails"];
+    reset_confirm [label="Reset Everything\n(confirm required)", shape=octagon];
+
+    {rank=same; api_key; define_company; define_voice; define_guardrails;}
+    {rank=same; confirm_company; confirm_voice; confirm_guardrails;}
+  }
+
+  subgraph cluster_dashboard {
+    label=<<FONT FACE="Times New Roman" POINT-SIZE="22"><B>Dashboard</B></FONT>>;
+    style="rounded";
+
+    dashboard [label="Dashboard"];
+    posts_drafts [label="Past Posts + Drafts"];
+    post_viewer [label="Post Viewer"];
+  }
+
+  subgraph cluster_trending {
+    label=<<FONT FACE="Times New Roman" POINT-SIZE="22"><B>Trending Topics Flow</B></FONT>>;
+    style="rounded";
+
+    trending_topics [label="Trending Topics Page"];
+    trend_fetch [label="Flash grounded research calls\n(parallel)", shape=parallelogram];
+    trend_map [label="Deterministic trend visualization"];
+    trending_prompts [label="3 Pro-generated prompts"];
+  }
+
+  subgraph cluster_new_post {
+    label=<<FONT FACE="Times New Roman" POINT-SIZE="22"><B>New Post Flow</B></FONT>>;
+    style="rounded";
+
+    topic [label="1. Topic"];
+    research [label="2. Research"];
+    outline [label="3. Outline"];
+    write_cycles [label="4. Write -> Edit -> Guardrails\n(automatic)"];
+    complete [label="5. Complete\nMarkdown + Viewer"];
+  }
+
+  subgraph cluster_demo {
+    label=<<FONT FACE="Times New Roman" POINT-SIZE="22"><B>Demo Replay Flow</B></FONT>>;
+    style="rounded";
+
+    demo_picker [label="Demo Session Picker"];
+    demo_replay [label="Replay Session\n(internally replays setup + post flow)"];
+    demo_error [label="Cache-miss Error"];
+  }
+
+  app_start -> first_run;
+  first_run -> settings_page [label="Yes"];
+  first_run -> dashboard [label="No"];
+
+  settings_page -> api_key [label="Open"];
+  settings_page -> define_company [label="Open"];
+  settings_page -> define_voice [label="Open"];
+  settings_page -> define_guardrails [label="Open"];
+  settings_page -> reset_confirm [label="Subtle option", style=dashed];
+  settings_page -> dashboard [label="All required complete"];
+
+  api_key -> settings_page [label="Saved"];
+
+  define_company -> confirm_company [label="Generate"];
+  confirm_company -> define_company [label="Back", style=dashed];
+  confirm_company -> settings_page [label="Done"];
+
+  define_voice -> confirm_voice [label="Generate"];
+  confirm_voice -> define_voice [label="Back", style=dashed];
+  confirm_voice -> settings_page [label="Done"];
+
+  define_guardrails -> confirm_guardrails [label="Generate"];
+  confirm_guardrails -> define_guardrails [label="Back", style=dashed];
+  confirm_guardrails -> settings_page [label="Done"];
+
+  reset_confirm -> settings_page [label="Cancel"];
+  reset_confirm -> app_start [label="Confirm delete all"];
+
+  dashboard -> settings_page [label="Settings"];
+  dashboard -> topic [label="New Post"];
+  dashboard -> trending_topics [label="Trending Topics"];
+  dashboard -> posts_drafts [label="History"];
+  dashboard -> demo_picker [label="Demo Mode"];
+
+  posts_drafts -> post_viewer [label="View post"];
+  posts_drafts -> topic [label="Resume draft"];
+  post_viewer -> dashboard [label="Back", style=dashed];
+
+  trending_topics -> trend_fetch;
+  trend_fetch -> trend_map;
+  trend_map -> trending_prompts;
+  trending_prompts -> topic [label="Prefill topic"];
+  trending_topics -> dashboard [label="Back", style=dashed];
+
+  topic -> research -> outline -> write_cycles -> complete -> dashboard;
+  research -> research [label="Highlight / Delete sources"];
+  outline -> research [label="Back", style=dashed];
+
+  demo_picker -> demo_replay;
+  demo_replay -> dashboard [label="Replay complete"];
+  demo_replay -> demo_error [label="Cache miss"];
+  demo_error -> demo_picker [label="Dismiss", style=dashed];
+
+  {rank=same; dashboard; topic; trending_topics; demo_picker;}
+}

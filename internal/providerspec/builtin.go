@@ -112,6 +112,19 @@ var builtinSpecs = map[string]Spec{
 		},
 		Failover: []string{"cerebras"},
 	},
+	"inception": {
+		Key:     "inception",
+		Aliases: []string{"inceptionlabs", "inception-labs"},
+		API: &APISpec{
+			Protocol:           ProtocolOpenAIChatCompletions,
+			DefaultBaseURL:     "https://api.inceptionlabs.ai",
+			DefaultPath:        "/v1/chat/completions",
+			DefaultAPIKeyEnv:   "INCEPTION_API_KEY",
+			ProviderOptionsKey: "inception",
+			ProfileFamily:      "openai",
+		},
+		Failover: []string{"cerebras"},
+	},
 }
 
 func Builtin(key string) (Spec, bool) {

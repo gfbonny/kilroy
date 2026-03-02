@@ -48,7 +48,7 @@ digraph G {
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	_, err := Run(ctx, dot, RunOptions{
+	_, err := runForTest(t, ctx, dot, RunOptions{
 		RepoPath: repo,
 		RunID:    "fanin-fallback-blocked",
 		LogsRoot: logsRoot,

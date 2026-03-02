@@ -1,4 +1,5 @@
 .ai/
+.env
 /.worktrees/
 # Root build artifacts.
 /kilroy

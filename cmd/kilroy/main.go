@@ -17,6 +17,7 @@ import (
 	"github.com/danshapiro/kilroy/internal/attractor/engine"
 	"github.com/danshapiro/kilroy/internal/attractor/modeldb"
 	"github.com/danshapiro/kilroy/internal/attractor/validate"
+	"github.com/danshapiro/kilroy/internal/dotenv"
 	"github.com/danshapiro/kilroy/internal/providerspec"
 	"github.com/danshapiro/kilroy/internal/version"
 )
@@ -49,31 +50,71 @@ func signalCancelContext() (context.Context, func()) {
 }
 
 func main() {
-	if len(os.Args) < 2 {
+	// Auto-load .env from CWD; silently ignore if absent.
+	if err := dotenv.Load(".env"); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not load .env: %v\n", err)
+	}
+
+	args := os.Args[1:]
+
+	// Pre-scan for --env-file before the subcommand switch so it works with
+	// any subcommand: kilroy --env-file .env.prod attractor run ...
+	args = loadEnvFile(args)
+
+	if len(args) < 1 {
 		usage()
 		os.Exit(1)
 	}
 
-	switch os.Args[1] {
+	switch args[0] {
 	case "--version", "-v", "version":
 		fmt.Printf("kilroy %s\n", version.Version)
 		os.Exit(0)
 	case "attractor":
-		attractor(os.Args[2:])
+		attractor(args[1:])
 	default:
 		usage()
 		os.Exit(1)
 	}
 }
 
+// loadEnvFile scans args for --env-file <path>, loads the file, and returns
+// args with the flag and its value removed. If the flag is absent, args is
+// returned unchanged. Exits on error (explicit file not found is an error).
+func loadEnvFile(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--env-file" {
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--env-file requires a path argument")
+				os.Exit(1)
+			}
+			path := args[i]
+			// Unlike auto-load, an explicit --env-file must exist.
+			if _, err := os.Stat(path); os.IsNotExist(err) {
+				fmt.Fprintf(os.Stderr, "error: --env-file %q does not exist\n", path)
+				os.Exit(1)
+			}
+			if err := dotenv.Load(path); err != nil {
+				fmt.Fprintf(os.Stderr, "error: could not load --env-file %q: %v\n", path, err)
+				os.Exit(1)
+			}
+			continue
+		}
+		out = append(out, args[i])
+	}
+	return out
+}
+
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  kilroy --version")
-	fmt.Fprintln(os.Stderr, "  kilroy attractor run [--detach] [--allow-test-shim] [--confirm-stale-build] [--no-cxdb] [--force-model <provider=model>] --graph <file.dot> --config <run.yaml> [--run-id <id>] [--logs-root <dir>]")
+	fmt.Fprintln(os.Stderr, "  kilroy [--env-file <path>] attractor run [--detach] [--allow-test-shim] [--confirm-stale-build] [--no-cxdb] [--force-model <provider=model>] --graph <file.dot> --config <run.yaml> [--run-id <id>] [--logs-root <dir>]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor resume --logs-root <dir>")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor resume --cxdb <http_base_url> --context-id <id>")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor resume --run-branch <attractor/run/...> [--repo <path>]")
-	fmt.Fprintln(os.Stderr, "  kilroy attractor status [--logs-root <dir> | --latest] [--json] [--follow|-f] [--cxdb] [--raw] [--watch] [--interval <sec>]")
+	fmt.Fprintln(os.Stderr, "  kilroy attractor status [--logs-root <dir> | --latest] [--json] [-v|--verbose] [--follow|-f] [--cxdb] [--raw] [--watch] [--interval <sec>]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor stop --logs-root <dir> [--grace-ms <ms>] [--force]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor validate --graph <file.dot>")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor validate --batch <file.dot> [<file.dot> ...] [--json]")
@@ -81,6 +122,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  kilroy attractor serve [--addr <host:port>]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor modeldb suggest [--refresh] [--ttl <duration>] [--provider <name>]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor review --graph <file.dot> [--output <file>] [--json] [--max-turns <n>]")
+	fmt.Fprintln(os.Stderr, "  kilroy attractor runs list [--json]")
+	fmt.Fprintln(os.Stderr, "  kilroy attractor runs prune [--before YYYY-MM-DD] [--graph PATTERN] [--label KEY=VALUE] [--orphans] [--dry-run | --yes]")
 }
 
 func attractor(args []string) {
@@ -107,6 +150,8 @@ func attractor(args []string) {
 		attractorModelDB(args[1:])
 	case "review":
 		attractorReview(args[1:])
+	case "runs":
+		attractorRuns(args[1:])
 	default:
 		usage()
 		os.Exit(1)
@@ -484,10 +529,10 @@ func attractorValidate(args []string) {
 
 // batchFileResult holds per-file validate results for batch mode.
 type batchFileResult struct {
-	File     string               `json:"file"`
+	File     string                `json:"file"`
 	Errors   []validate.Diagnostic `json:"errors"`
 	Warnings []validate.Diagnostic `json:"warnings"`
-	ParseErr string               `json:"parse_error,omitempty"`
+	ParseErr string                `json:"parse_error,omitempty"`
 }
 
 // attractorValidateBatch runs validate against each file in files and emits a

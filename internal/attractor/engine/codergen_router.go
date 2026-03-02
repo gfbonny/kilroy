@@ -26,7 +26,6 @@ import (
 	"github.com/danshapiro/kilroy/internal/modelmeta"
 )
 
-
 type CodergenRouter struct {
 	cfg     *RunConfigFile
 	catalog *modeldb.Catalog
@@ -171,6 +170,13 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 	if reasoning != "" {
 		reasoningPtr = &reasoning
 	}
+	maxTokensStr := strings.TrimSpace(node.Attr("max_tokens", ""))
+	var maxTokensPtr *int
+	if maxTokensStr != "" {
+		if v, err := strconv.Atoi(maxTokensStr); err == nil && v > 0 {
+			maxTokensPtr = &v
+		}
+	}
 
 	switch mode {
 	case "one_shot":
@@ -180,6 +186,7 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 				Model:           mid,
 				Messages:        []llm.Message{llm.User(prompt)},
 				ReasoningEffort: reasoningPtr,
+				MaxTokens:       maxTokensPtr,
 			}
 			if err := writeJSON(filepath.Join(stageDir, "api_request.json"), req); err != nil {
 				warnEngine(execCtx, fmt.Sprintf("write api_request.json: %v", err))
@@ -231,6 +238,9 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 			if reasoning != "" {
 				sessCfg.ReasoningEffort = reasoning
 			}
+			if maxTokensPtr != nil {
+				sessCfg.MaxTokens = maxTokensPtr
+			}
 			// Cerebras GLM 4.7: preserve reasoning across agent-loop turns.
 			// clear_thinking defaults to true on the API, which strips prior
 			// reasoning context — counterproductive for multi-step agentic work.
@@ -241,6 +251,9 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 			}
 			if v := parseInt(node.Attr("max_agent_turns", ""), 0); v > 0 {
 				sessCfg.MaxTurns = v
+			}
+			if maxTokensPtr != nil {
+				sessCfg.MaxTokens = maxTokensPtr
 			}
 			defaultCommandTimeoutMS, maxCommandTimeoutMS := resolveAgentLoopCommandTimeouts(execCtx, node)
 			if defaultCommandTimeoutMS > 0 {

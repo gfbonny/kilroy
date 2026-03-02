@@ -34,6 +34,13 @@ case "$FILE_PATH" in
     *) exit 0 ;;
 esac
 
+# Skip the reference template — it is topology-only by design and intentionally
+# has no prompts on LLM nodes. Linting it always produces prompt_on_llm_nodes
+# warnings that are expected and not actionable.
+case "$FILE_PATH" in
+    */reference_template.dot) exit 0 ;;
+esac
+
 # Locate the kilroy binary.
 # Resolution order:
 #   1. KILROY_CLAUDE_PATH env var (full path or directory)

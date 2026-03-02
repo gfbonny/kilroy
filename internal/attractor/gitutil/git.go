@@ -92,6 +92,14 @@ func RemoveWorktree(repoDir, worktreeDir string) error {
 	return err
 }
 
+// RepairWorktree repairs the .git file in worktreeDir to point to the correct
+// registered slot. This is needed when file materialization overwrites the .git
+// file with content from a different worktree.
+func RepairWorktree(repoDir, worktreeDir string) error {
+	_, _, err := runGit(repoDir, "worktree", "repair", worktreeDir)
+	return err
+}
+
 func CheckoutBranch(worktreeDir, branch string) error {
 	_, _, err := runGit(worktreeDir, "switch", branch)
 	return err

@@ -751,6 +751,40 @@ func assertNoRule(t *testing.T, diags []Diagnostic, rule string) {
 	}
 }
 
+// --- Tests for tool_command_abs_path lint rule ---
+
+func TestValidate_ToolCommandAbsPath_WarnsOnCdAbsolutePath(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  t [shape=parallelogram, tool_command="cd /tmp && echo hello"]
+  start -> t -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertHasRule(t, diags, "tool_command_abs_path", SeverityWarning)
+}
+
+func TestValidate_ToolCommandAbsPath_NoWarningOnRelativeCommand(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  t [shape=parallelogram, tool_command="cargo test"]
+  start -> t -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "tool_command_abs_path")
+}
+
 // --- Tests for V7.2: type_known lint rule ---
 
 func TestValidate_TypeKnownRule_RecognizedType_NoWarning(t *testing.T) {
@@ -1052,6 +1086,7 @@ digraph G {
 		}
 	}
 }
+
 // --- Tests for orphan_custom_outcome_hint lint rule (G5) ---
 
 // (a) Node with condition="outcome=approved" edge (custom) + no unconditional fallback -> WARNING fires.
@@ -1142,6 +1177,7 @@ digraph G {
 	diags := Validate(g)
 	assertNoRule(t, diags, "orphan_custom_outcome_hint")
 }
+
 // --- Tests for status_fallback_in_prompt lint rule (G11) ---
 
 // TestValidate_StatusFallbackInPrompt_WarnsWhenPrimaryPresentButFallbackAbsent verifies
@@ -1245,13 +1281,14 @@ digraph G {
 	diags := Validate(g)
 	assertNoRule(t, diags, "status_fallback_in_prompt")
 }
+
 // --- Tests for G12: stylesheet model ID catalog validation ---
 
 // buildTestCatalog creates a minimal in-memory catalog for testing.
 func buildTestCatalog() *modeldb.Catalog {
 	return &modeldb.Catalog{
 		Models: map[string]modeldb.ModelEntry{
-			"anthropic/claude-opus-4.6": {Provider: "anthropic"},
+			"anthropic/claude-opus-4.6":   {Provider: "anthropic"},
 			"anthropic/claude-sonnet-4.5": {Provider: "anthropic"},
 			"openai/gpt-5.2":              {Provider: "openai"},
 		},
@@ -1357,6 +1394,7 @@ func TestValidate_G12_UnknownProvider_NoWarning(t *testing.T) {
 	assertNoRule(t, diags, "stylesheet_unknown_model")
 	assertNoRule(t, diags, "stylesheet_noncanonical_model_id")
 }
+
 // TestPromptFile_ConflictLintRule_FiresWhenBothSet verifies that when a node
 // has both prompt_file and prompt/llm_prompt set and expandPromptFiles has NOT
 // run (RepoPath is empty, so prompt_file remains unresolved), the

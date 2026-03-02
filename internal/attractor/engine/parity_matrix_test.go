@@ -205,7 +205,7 @@ digraph G {
 `)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	res, err := Run(ctx, dot, RunOptions{RepoPath: repo})
+	res, err := runForTest(t, ctx, dot, RunOptions{RepoPath: repo})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -240,7 +240,7 @@ digraph G {
 `)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	res, err := Run(ctx, dot, RunOptions{RepoPath: repo})
+	res, err := runForTest(t, ctx, dot, RunOptions{RepoPath: repo})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -272,7 +272,7 @@ digraph G {
 `)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	res, err := Run(ctx, dot, RunOptions{RepoPath: repo})
+	res, err := runForTest(t, ctx, dot, RunOptions{RepoPath: repo})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -307,7 +307,7 @@ digraph G {
 `)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	_, err := Run(ctx, dot, RunOptions{RepoPath: repo})
+	_, err := runForTest(t, ctx, dot, RunOptions{RepoPath: repo})
 	if err == nil {
 		t.Fatalf("expected error for unsatisfied goal gate, got nil")
 	}
@@ -336,7 +336,7 @@ digraph G {
 `)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	res, err := Run(ctx, dot, RunOptions{RepoPath: repo})
+	res, err := runForTest(t, ctx, dot, RunOptions{RepoPath: repo})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -559,7 +559,7 @@ digraph G {
 `)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	res, err := Run(ctx, dot, RunOptions{RepoPath: repo})
+	res, err := runForTest(t, ctx, dot, RunOptions{RepoPath: repo})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -644,7 +644,7 @@ digraph G {
 `)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	res, err := Run(ctx, dotSrc, RunOptions{RepoPath: repo})
+	res, err := runForTest(t, ctx, dotSrc, RunOptions{RepoPath: repo})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -695,7 +695,7 @@ digraph P {
 `)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	res, err := Run(ctx, dot, RunOptions{RepoPath: repo})
+	res, err := runForTest(t, ctx, dot, RunOptions{RepoPath: repo})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -809,7 +809,7 @@ digraph G {
 `)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	res, err := Run(ctx, dot, RunOptions{RepoPath: repo})
+	res, err := runForTest(t, ctx, dot, RunOptions{RepoPath: repo})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -885,7 +885,7 @@ digraph test_pipeline {
 	// --- Step 3: Execute with simulated backend ---
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	res, err := Run(ctx, dotSrc, RunOptions{RepoPath: repo})
+	res, err := runForTest(t, ctx, dotSrc, RunOptions{RepoPath: repo})
 	if err != nil {
 		t.Fatalf("Step 3 (Execute): %v", err)
 	}

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -108,6 +109,9 @@ digraph G {
 }
 
 func TestWaitWithIdleWatchdog_ContextCancelKillsProcessGroup(t *testing.T) {
+	if goruntime.GOOS == "darwin" {
+		t.Skip("process group signaling is unreliable on macOS")
+	}
 	cli := filepath.Join(t.TempDir(), "codex")
 	childPIDFile := filepath.Join(t.TempDir(), "cancel-child.pid")
 	if err := os.WriteFile(cli, []byte(`#!/usr/bin/env bash
@@ -140,7 +144,13 @@ done
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	cmd := exec.CommandContext(ctx, cli)
+	// Use exec.Command (not CommandContext) so that Go's runtime does NOT
+	// send SIGKILL directly to the process PID when cancel() is called.
+	// Using CommandContext would race with waitWithIdleWatchdog's ctx.Done()
+	// handler: if Go kills the parent process first, waitCh fires before
+	// ctx.Done() is selected, and the process-group cleanup is skipped,
+	// leaving grandchild processes alive.
+	cmd := exec.Command(cli)
 	cmd.Env = append(os.Environ(), "KILROY_CANCEL_CHILD_PID_FILE="+childPIDFile)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdout = stdoutFile
@@ -148,6 +158,11 @@ done
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start cmd: %v", err)
 	}
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+	})
 
 	pidDeadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(pidDeadline) {

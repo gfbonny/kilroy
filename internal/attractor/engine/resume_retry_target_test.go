@@ -56,7 +56,7 @@ digraph G {
 	defer cancel()
 
 	// Run to completion first so we have valid artifacts/checkpoint.
-	res, err := Run(ctx, dot, RunOptions{RepoPath: repo})
+	res, err := runForTest(t, ctx, dot, RunOptions{RepoPath: repo})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}

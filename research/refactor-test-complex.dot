@@ -521,49 +521,49 @@ Write status.json: outcome=success if complete and spec-compliant, outcome=fail 
     // Flow
     start -> impl_setup -> verify_setup -> check_setup
     check_setup -> impl_loader           [condition="outcome=success"]
-    check_setup -> impl_setup            [condition="outcome=fail", label="retry"]
+    check_setup -> impl_setup            [label="retry"]
 
     impl_loader -> verify_loader -> check_loader
     check_loader -> impl_tracer          [condition="outcome=success"]
-    check_loader -> impl_loader          [condition="outcome=fail", label="retry"]
+    check_loader -> impl_loader          [label="retry"]
 
     impl_tracer -> verify_tracer -> check_tracer
     check_tracer -> impl_metrics         [condition="outcome=success"]
-    check_tracer -> impl_tracer          [condition="outcome=fail", label="retry"]
+    check_tracer -> impl_tracer          [label="retry"]
 
     impl_metrics -> verify_metrics -> check_metrics
     check_metrics -> impl_tables         [condition="outcome=success"]
-    check_metrics -> impl_metrics        [condition="outcome=fail", label="retry"]
+    check_metrics -> impl_metrics        [label="retry"]
 
     impl_tables -> verify_tables -> check_tables
     check_tables -> impl_writer          [condition="outcome=success"]
-    check_tables -> impl_tables          [condition="outcome=fail", label="retry"]
+    check_tables -> impl_tables          [label="retry"]
 
     impl_writer -> verify_writer -> check_writer
     check_writer -> impl_validator       [condition="outcome=success"]
-    check_writer -> impl_writer          [condition="outcome=fail", label="retry"]
+    check_writer -> impl_writer          [label="retry"]
 
     impl_validator -> verify_validator -> check_validator
     check_validator -> impl_rasterizer   [condition="outcome=success"]
-    check_validator -> impl_validator    [condition="outcome=fail", label="retry"]
+    check_validator -> impl_validator    [label="retry"]
 
     impl_rasterizer -> verify_rasterizer -> check_rasterizer
     check_rasterizer -> impl_cli         [condition="outcome=success"]
-    check_rasterizer -> impl_rasterizer  [condition="outcome=fail", label="retry"]
+    check_rasterizer -> impl_rasterizer  [label="retry"]
 
     impl_cli -> verify_cli -> check_cli
     check_cli -> impl_test_harness       [condition="outcome=success"]
-    check_cli -> impl_cli                [condition="outcome=fail", label="retry"]
+    check_cli -> impl_cli                [label="retry"]
 
     impl_test_harness -> verify_test_harness -> check_test_harness
     check_test_harness -> impl_integration   [condition="outcome=success"]
-    check_test_harness -> impl_test_harness  [condition="outcome=fail", label="retry"]
+    check_test_harness -> impl_test_harness  [label="retry"]
 
     impl_integration -> verify_integration -> check_integration
     check_integration -> review          [condition="outcome=success"]
-    check_integration -> impl_integration [condition="outcome=fail", label="retry"]
+    check_integration -> impl_integration [label="retry"]
 
     review -> check_review
     check_review -> exit                 [condition="outcome=success"]
-    check_review -> impl_integration     [condition="outcome=fail", label="fix"]
+    check_review -> impl_integration     [label="fix"]
 }

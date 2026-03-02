@@ -189,11 +189,11 @@ func TestRetryTargetPrecedenceChain(t *testing.T) {
 	}
 
 	cases := []struct {
-		name         string
-		graphAttrs   map[string]string
-		nodeAttrs    map[string]string
-		wantTarget   string
-		wantSource   string
+		name       string
+		graphAttrs map[string]string
+		nodeAttrs  map[string]string
+		wantTarget string
+		wantSource string
 	}{
 		{
 			name:       "only graph.fallback_retry_target set",

@@ -24,6 +24,7 @@ func TestRun_StallWatchdog(t *testing.T) {
 	repo := initTestRepo(t)
 	opts := RunOptions{
 		RepoPath:           repo,
+		LogsRoot:           t.TempDir(),
 		StallTimeout:       150 * time.Millisecond,
 		StallCheckInterval: 25 * time.Millisecond,
 	}
@@ -52,6 +53,7 @@ func TestRun_StallWatchdogInterruptsRetrySleep(t *testing.T) {
 	repo := initTestRepo(t)
 	opts := RunOptions{
 		RepoPath:           repo,
+		LogsRoot:           t.TempDir(),
 		StallTimeout:       150 * time.Millisecond,
 		StallCheckInterval: 25 * time.Millisecond,
 	}

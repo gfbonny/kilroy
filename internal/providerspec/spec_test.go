@@ -4,7 +4,7 @@ import "testing"
 
 func TestBuiltinSpecsIncludeCoreAndNewProviders(t *testing.T) {
 	s := Builtins()
-	for _, key := range []string{"openai", "anthropic", "google", "kimi", "zai", "cerebras", "minimax"} {
+	for _, key := range []string{"openai", "anthropic", "google", "kimi", "zai", "cerebras", "minimax", "inception"} {
 		if _, ok := s[key]; !ok {
 			t.Fatalf("missing builtin provider %q", key)
 		}
@@ -32,6 +32,12 @@ func TestCanonicalProviderKey_Aliases(t *testing.T) {
 	}
 	if got := CanonicalProviderKey("minimax-ai"); got != "minimax" {
 		t.Fatalf("minimax-ai alias: got %q want %q", got, "minimax")
+	}
+	if got := CanonicalProviderKey("inceptionlabs"); got != "inception" {
+		t.Fatalf("inceptionlabs alias: got %q want %q", got, "inception")
+	}
+	if got := CanonicalProviderKey("inception-labs"); got != "inception" {
+		t.Fatalf("inception-labs alias: got %q want %q", got, "inception")
 	}
 	if got := CanonicalProviderKey("glm"); got != "glm" {
 		t.Fatalf("unknown provider keys should pass through unchanged, got %q", got)
@@ -95,6 +101,25 @@ func TestBuiltinMinimaxDefaultsToOpenAICompatAPI(t *testing.T) {
 	}
 }
 
+func TestBuiltinInceptionDefaultsToOpenAICompatAPI(t *testing.T) {
+	spec, ok := Builtin("inception")
+	if !ok {
+		t.Fatalf("expected inception builtin")
+	}
+	if spec.API == nil {
+		t.Fatalf("expected inception api spec")
+	}
+	if got := spec.API.Protocol; got != ProtocolOpenAIChatCompletions {
+		t.Fatalf("inception protocol: got %q want %q", got, ProtocolOpenAIChatCompletions)
+	}
+	if got := spec.API.DefaultBaseURL; got != "https://api.inceptionlabs.ai" {
+		t.Fatalf("inception base url: got %q want %q", got, "https://api.inceptionlabs.ai")
+	}
+	if got := spec.API.DefaultAPIKeyEnv; got != "INCEPTION_API_KEY" {
+		t.Fatalf("inception api_key_env: got %q want %q", got, "INCEPTION_API_KEY")
+	}
+}
+
 func TestBuiltinFailoverDefaultsAreSingleHop(t *testing.T) {
 	cases := []struct {
 		provider string
@@ -107,6 +132,7 @@ func TestBuiltinFailoverDefaultsAreSingleHop(t *testing.T) {
 		{provider: "zai", want: []string{"cerebras"}},
 		{provider: "cerebras", want: []string{"zai"}},
 		{provider: "minimax", want: []string{"cerebras"}},
+		{provider: "inception", want: []string{"cerebras"}},
 	}
 	for _, tc := range cases {
 		spec, ok := Builtin(tc.provider)

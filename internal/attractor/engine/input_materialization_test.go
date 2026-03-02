@@ -188,6 +188,94 @@ func TestInputMaterialization_ExplicitIncludeTraversesArtifactDocs(t *testing.T)
 	assertExists(t, filepath.Join(target, "docs", "required.md"))
 }
 
+// TestCopyInputFile_SelfCopyPreservesContent verifies that copyInputFile does not
+// truncate a file when source and target resolve to the same inode (the
+// "worktree-as-both-source-and-target" case in materializeStageInputs).
+func TestCopyInputFile_SelfCopyPreservesContent(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "spec.md")
+	content := "important content\n"
+	if err := os.WriteFile(file, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyInputFile(file, file); err != nil {
+		t.Fatalf("copyInputFile self-copy returned error: %v", err)
+	}
+	got, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != content {
+		t.Fatalf("self-copy truncated file: got %d bytes, want %d", len(got), len(content))
+	}
+}
+
+// TestInputMaterialization_SelfCopyPreservesWorktreeFiles verifies that when
+// sourceRoots and targetRoot both point to the same directory (as in
+// materializeStageInputs), files already in the worktree are not truncated.
+func TestInputMaterialization_SelfCopyPreservesWorktreeFiles(t *testing.T) {
+	worktree := t.TempDir()
+	content := "design doc content\n"
+	mustWriteInputFile(t, filepath.Join(worktree, ".ai", "spec.md"), content)
+
+	_, err := materializeInputClosure(context.Background(), InputMaterializationOptions{
+		SourceRoots:      []string{worktree},
+		Include:          []string{".ai/**"},
+		FollowReferences: false,
+		TargetRoot:       worktree, // same as source root — the self-copy scenario
+	})
+	if err != nil {
+		t.Fatalf("materializeInputClosure: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(worktree, ".ai", "spec.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != content {
+		t.Fatalf("input materialization truncated .ai/spec.md: got %d bytes, want %d", len(got), len(content))
+	}
+}
+
+// TestInputMaterialization_GitDirSkippedWhenCopyingToWorktree verifies that
+// files under .git/ in the source repo are never materialized into the worktree
+// target. A git worktree has .git as a plain *file* (the worktree pointer), so
+// any attempt to MkdirAll({target}/.git) would fail with "not a directory".
+func TestInputMaterialization_GitDirSkippedWhenCopyingToWorktree(t *testing.T) {
+	source := t.TempDir()
+	target := t.TempDir()
+
+	// Simulate a git repo: .git/ is a directory with real files inside.
+	mustWriteInputFile(t, filepath.Join(source, ".git", "config"), "[core]\n\trepositoryformatversion = 0\n")
+	mustWriteInputFile(t, filepath.Join(source, ".git", "HEAD"), "ref: refs/heads/main\n")
+	mustWriteInputFile(t, filepath.Join(source, "spec.md"), "project spec\n")
+
+	// Simulate a worktree target: .git is a plain file (the worktree pointer).
+	if err := os.WriteFile(filepath.Join(target, ".git"), []byte("gitdir: /some/repo/.git/worktrees/wt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := materializeInputClosure(context.Background(), InputMaterializationOptions{
+		SourceRoots:      []string{source},
+		Include:          []string{"**"},
+		FollowReferences: false,
+		TargetRoot:       target,
+	})
+	if err != nil {
+		t.Fatalf("materializeInputClosure: %v", err)
+	}
+
+	// spec.md should be copied; .git/* should be skipped entirely.
+	assertExists(t, filepath.Join(target, "spec.md"))
+	// .git must remain a plain file, not become a directory.
+	info, err := os.Lstat(filepath.Join(target, ".git"))
+	if err != nil {
+		t.Fatalf("stat target/.git: %v", err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("target/.git should remain a regular file, got mode %v", info.Mode())
+	}
+}
+
 func mustWriteInputFile(t *testing.T, path string, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

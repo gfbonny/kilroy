@@ -34,7 +34,7 @@ digraph G {
 `)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	res, err := Run(ctx, dot, RunOptions{RepoPath: repo})
+	res, err := runForTest(t, ctx, dot, RunOptions{RepoPath: repo})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -82,7 +82,7 @@ digraph G {
 `)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	res, err := Run(ctx, dot, RunOptions{RepoPath: repo})
+	res, err := runForTest(t, ctx, dot, RunOptions{RepoPath: repo})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -128,7 +128,7 @@ digraph G {
 `)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	res, err := Run(ctx, dot, RunOptions{RepoPath: repo})
+	res, err := runForTest(t, ctx, dot, RunOptions{RepoPath: repo})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -171,7 +171,7 @@ digraph G {
 `)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	res, err := Run(ctx, dot, RunOptions{RepoPath: repo})
+	res, err := runForTest(t, ctx, dot, RunOptions{RepoPath: repo})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -187,4 +187,3 @@ digraph G {
 		t.Fatalf("t outcome: got %q want %q", out.Status, runtime.StatusPartialSuccess)
 	}
 }
-

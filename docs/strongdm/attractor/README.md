@@ -16,6 +16,9 @@ Although bringing your own agentic loop and unified LLM SDK is not required to b
 - Canonical `status.json` contract:
   - `status` values `fail` and `retry` must include a non-empty `failure_reason`.
   - Legacy worktree payloads that only provide `outcome` + `details` are normalized by the runtime decoder, but emitters should still write canonical `failure_reason` directly.
+- Run-scoped scratch artifacts:
+  - Reference prompt scratch files under `.ai/runs/$KILROY_RUN_ID/...`.
+  - Root `.ai` is not implicitly ingested into run or branch worktrees.
 - OpenAI codex CLI invocation:
   - Default args use `codex exec --json --sandbox workspace-write ...`.
   - Deprecated `--ask-for-approval` is intentionally not used.

@@ -56,7 +56,7 @@ digraph G {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	_, err := Run(ctx, dot, RunOptions{RepoPath: repo, RunID: "detfailcycle", LogsRoot: t.TempDir()})
+	_, err := runForTest(t, ctx, dot, RunOptions{RepoPath: repo, RunID: "detfailcycle", LogsRoot: t.TempDir()})
 	if err == nil {
 		t.Fatalf("expected run to abort with deterministic failure cycle error, but it succeeded")
 	}
@@ -101,7 +101,7 @@ digraph G {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	res, err := Run(ctx, dot, RunOptions{RepoPath: repo, RunID: "detfailrecovery", LogsRoot: t.TempDir()})
+	res, err := runForTest(t, ctx, dot, RunOptions{RepoPath: repo, RunID: "detfailrecovery", LogsRoot: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -176,7 +176,7 @@ digraph G {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	_, err := Run(ctx, dot, RunOptions{RepoPath: repo, RunID: "impl-ok-verify-fail", LogsRoot: t.TempDir()})
+	_, err := runForTest(t, ctx, dot, RunOptions{RepoPath: repo, RunID: "impl-ok-verify-fail", LogsRoot: t.TempDir()})
 	if err == nil {
 		t.Fatalf("expected run to abort with deterministic failure cycle error, but it succeeded")
 	}
@@ -281,12 +281,33 @@ digraph G {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	_, err := Run(ctx, dot, RunOptions{RepoPath: repo, RunID: "structural-main-loop", LogsRoot: t.TempDir()})
+	_, err := runForTest(t, ctx, dot, RunOptions{RepoPath: repo, RunID: "structural-main-loop", LogsRoot: t.TempDir()})
 	if err == nil {
 		t.Fatalf("expected run to abort with deterministic failure cycle error, but it succeeded")
 	}
 	if !strings.Contains(err.Error(), "deterministic failure cycle") {
 		t.Fatalf("expected deterministic failure cycle error from structural accumulation, got: %v", err)
+	}
+}
+
+func TestRestartFailureSignature_CommaSpacingNormalized(t *testing.T) {
+	// Failure reasons that list comma-separated AC IDs are emitted with
+	// inconsistent spacing ("ac4, ac6, ac11" vs "ac4,ac6,ac11") depending on
+	// how the checker formats its output. Both forms must produce the same
+	// signature so the cycle breaker accumulates correctly.
+	cases := []struct{ a, b string }{
+		{"ACs failed: AC4, AC6, AC11, AC12", "ACs failed: AC4,AC6,AC11,AC12"},
+		{"acs failed: ac4, ac6", "acs failed: ac4,ac6"},
+		{"err: foo,  bar,   baz", "err: foo,bar,baz"},
+	}
+	for _, tc := range cases {
+		outA := runtime.Outcome{Status: runtime.StatusFail, FailureReason: tc.a}
+		outB := runtime.Outcome{Status: runtime.StatusFail, FailureReason: tc.b}
+		sigA := restartFailureSignature("verify_fidelity", outA, failureClassDeterministic)
+		sigB := restartFailureSignature("verify_fidelity", outB, failureClassDeterministic)
+		if sigA != sigB {
+			t.Errorf("signatures differ for %q vs %q: %q != %q", tc.a, tc.b, sigA, sigB)
+		}
 	}
 }
 

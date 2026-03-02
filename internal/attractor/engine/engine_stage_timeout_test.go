@@ -29,7 +29,7 @@ func TestRun_GlobalStageTimeoutCapsToolNode(t *testing.T) {
   wait -> exit
 }`)
 	repo := initTestRepo(t)
-	opts := RunOptions{RepoPath: repo, StageTimeout: 100 * time.Millisecond}
+	opts := RunOptions{RepoPath: repo, LogsRoot: t.TempDir(), StageTimeout: 100 * time.Millisecond}
 	start := time.Now()
 	_, err := Run(context.Background(), dot, opts)
 	elapsed := time.Since(start)
@@ -57,7 +57,7 @@ func TestRun_GlobalAndNodeTimeout_UsesSmallerTimeout(t *testing.T) {
   wait -> exit
 }`)
 	repo := initTestRepo(t)
-	opts := RunOptions{RepoPath: repo, StageTimeout: 5 * time.Second}
+	opts := RunOptions{RepoPath: repo, LogsRoot: t.TempDir(), StageTimeout: 5 * time.Second}
 	// The smaller timeout (1s) should apply, not 5s.
 	start := time.Now()
 	_, _ = Run(context.Background(), dot, opts)

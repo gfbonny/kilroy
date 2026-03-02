@@ -66,7 +66,7 @@ func TestLocalExecutionEnvironment_ExecCommand_ContextCancel_KillsProcessGroup(t
 func TestFilteredEnv_ExcludesSensitiveVars(t *testing.T) {
 	t.Setenv("MY_API_KEY", "secret")
 	t.Setenv("MY_SECRET", "secret2")
-	env := filteredEnv(nil, nil)
+	env := filteredEnv(nil, nil, nil)
 	for _, kv := range env {
 		if strings.HasPrefix(kv, "MY_API_KEY=") || strings.HasPrefix(kv, "MY_SECRET=") {
 			t.Fatalf("sensitive env var leaked: %q", kv)
@@ -81,6 +81,69 @@ func TestFilteredEnv_ExcludesSensitiveVars(t *testing.T) {
 	}
 	if !foundPath {
 		t.Fatalf("expected PATH to be present in filtered env")
+	}
+}
+
+func TestFilteredEnv_AllowSensitiveBypassesDeny(t *testing.T) {
+	// Extra vars with sensitive names are denied by default.
+	env := filteredEnv(
+		map[string]string{"GEMINI_API_KEY": "gem-key-123", "OTHER_SECRET": "s3cr3t"},
+		nil,
+		nil,
+	)
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "GEMINI_API_KEY=") || strings.HasPrefix(kv, "OTHER_SECRET=") {
+			t.Fatalf("sensitive extra var should be denied without allowSensitive: %q", kv)
+		}
+	}
+
+	// With allowSensitive, the allowed key passes through but others stay denied.
+	env = filteredEnv(
+		map[string]string{"GEMINI_API_KEY": "gem-key-123", "OTHER_SECRET": "s3cr3t"},
+		nil,
+		map[string]bool{"GEMINI_API_KEY": true},
+	)
+	foundGemini := false
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "GEMINI_API_KEY=") {
+			foundGemini = true
+		}
+		if strings.HasPrefix(kv, "OTHER_SECRET=") {
+			t.Fatalf("OTHER_SECRET should still be denied: %q", kv)
+		}
+	}
+	if !foundGemini {
+		t.Fatal("GEMINI_API_KEY should pass through when in allowSensitive")
+	}
+}
+
+func TestFilteredEnv_StripKeysOverrideAllowSensitive(t *testing.T) {
+	// stripKeys always wins, even over allowSensitive.
+	env := filteredEnv(
+		map[string]string{"GEMINI_API_KEY": "gem-key-123"},
+		[]string{"GEMINI_API_KEY"},
+		map[string]bool{"GEMINI_API_KEY": true},
+	)
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "GEMINI_API_KEY=") {
+			t.Fatalf("stripKeys should override allowSensitive: %q", kv)
+		}
+	}
+}
+
+func TestFilteredEnv_AmbientSensitiveVarsStillDenied(t *testing.T) {
+	// Even with allowSensitive for extra vars, ambient os.Environ sensitive
+	// vars must still be blocked.
+	t.Setenv("MY_API_KEY", "ambient-secret")
+	env := filteredEnv(
+		nil,
+		nil,
+		map[string]bool{"GEMINI_API_KEY": true}, // unrelated allow
+	)
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "MY_API_KEY=") {
+			t.Fatalf("ambient sensitive var should still be denied: %q", kv)
+		}
 	}
 }
 

@@ -66,10 +66,10 @@ func FuzzConditionEval(f *testing.F) {
 	f.Add("outcome=")
 	f.Add("=value")
 	f.Add("&&&&")
-	f.Add("outcome = success")    // spaces around operator
-	f.Add("outcome!=fail&&x=y")   // no spaces around &&
-	f.Add("a && && b")            // double &&
-	f.Add("context.")             // incomplete context key
+	f.Add("outcome = success")  // spaces around operator
+	f.Add("outcome!=fail&&x=y") // no spaces around &&
+	f.Add("a && && b")          // double &&
+	f.Add("context.")           // incomplete context key
 
 	f.Fuzz(func(t *testing.T, condition string) {
 		// The invariant: Evaluate must never panic.

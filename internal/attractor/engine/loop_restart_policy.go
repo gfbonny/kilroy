@@ -25,6 +25,7 @@ var (
 	failureSignatureWhitespaceRE = regexp.MustCompile(`\s+`)
 	failureSignatureHexRE        = regexp.MustCompile(`\b[0-9a-f]{7,64}\b`)
 	failureSignatureDigitsRE     = regexp.MustCompile(`\b\d+\b`)
+	failureSignatureCommaSpaceRE = regexp.MustCompile(`,\s+`)
 	transientInfraReasonHints    = []string{
 		"timeout",
 		"timed out",
@@ -35,6 +36,7 @@ var (
 		"could not resolve hostname",
 		"temporary failure in name resolution",
 		"network is unreachable",
+		"net::err_internet_disconnected",
 		"broken pipe",
 		"tls handshake timeout",
 		"i/o timeout",
@@ -256,6 +258,7 @@ func normalizeFailureReason(reason string) string {
 	}
 	reason = failureSignatureHexRE.ReplaceAllString(reason, "<hex>")
 	reason = failureSignatureDigitsRE.ReplaceAllString(reason, "<n>")
+	reason = failureSignatureCommaSpaceRE.ReplaceAllString(reason, ",")
 	reason = failureSignatureWhitespaceRE.ReplaceAllString(reason, " ")
 	reason = strings.TrimSpace(reason)
 	if len(reason) > 240 {

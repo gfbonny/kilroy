@@ -91,6 +91,7 @@ func ValidateWithOptions(g *model.Graph, opts ValidateOptions, extraRules ...Lin
 	diags = append(diags, lintStatusOutcomeFieldConfusion(g)...)
 	diags = append(diags, lintCustomOutcomeCoverage(g)...)
 	diags = append(diags, lintReservedKeywordNodeID(g)...)
+	diags = append(diags, lintToolCommandAbsPath(g)...)
 
 	// Run custom lint rules (spec §7.3: extra_rules appended after built-in rules).
 	for _, rule := range extraRules {
@@ -1295,6 +1296,34 @@ func (r *TypeKnownRule) Apply(g *model.Graph) []Diagnostic {
 				Severity: SeverityWarning,
 				Message:  fmt.Sprintf("node type %q is not recognized by the handler registry", t),
 				NodeID:   id,
+			})
+		}
+	}
+	return diags
+}
+
+var toolCommandAbsPathPattern = regexp.MustCompile(`cd\s+/`)
+
+func lintToolCommandAbsPath(g *model.Graph) []Diagnostic {
+	var diags []Diagnostic
+	for id, n := range g.Nodes {
+		if n == nil {
+			continue
+		}
+		if !nodeResolvesToTool(n) {
+			continue
+		}
+		cmd := strings.TrimSpace(n.Attr("tool_command", ""))
+		if cmd == "" {
+			continue
+		}
+		if toolCommandAbsPathPattern.MatchString(cmd) {
+			diags = append(diags, Diagnostic{
+				Rule:     "tool_command_abs_path",
+				Severity: SeverityWarning,
+				Message:  fmt.Sprintf("tool_command contains 'cd /…' which overrides the engine worktree CWD"),
+				NodeID:   id,
+				Fix:      "remove the 'cd /…' prefix; the engine sets the working directory to the worktree automatically",
 			})
 		}
 	}

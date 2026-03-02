@@ -23,6 +23,22 @@ func TestAttractorValidateBatch_AllClean(t *testing.T) {
 	}
 }
 
+// TestAttractorValidateBatch_StatusContractInPromptWarns verifies that a
+// codergen node with a prompt that does not reference KILROY_STAGE_STATUS_PATH
+// triggers the status_contract_in_prompt warning (exit code 2).
+func TestAttractorValidateBatch_StatusContractInPromptWarns(t *testing.T) {
+	bin := buildKilroyBinary(t)
+	f := testdataBatchFile(t, "no_status_contract.dot")
+
+	code, out := runKilroy(t, bin, "attractor", "validate", "--batch", f)
+	if code != 2 {
+		t.Fatalf("expected exit code 2 (warnings-only), got %d\n%s", code, out)
+	}
+	if !strings.Contains(out, "status_contract_in_prompt") {
+		t.Fatalf("expected status_contract_in_prompt warning in output, got:\n%s", out)
+	}
+}
+
 // TestAttractorValidateBatch_WarningsOnly verifies exit code 2 when all files
 // have warnings but no errors.
 func TestAttractorValidateBatch_WarningsOnly(t *testing.T) {

@@ -6,6 +6,7 @@ digraph reference_template {
         retry_target="implement",
         fallback_retry_target="debate_consolidate",
         provenance_version="1",
+        loop_restart_persist_keys="last_failing_acs",
         model_stylesheet="
             * { llm_model: DEFAULT_MODEL; llm_provider: DEFAULT_PROVIDER; }
             .hard { llm_model: HARD_MODEL; llm_provider: HARD_PROVIDER; }
@@ -29,6 +30,8 @@ digraph reference_template {
     //
     // Common requirements for ALL shape=box prompts (do not repeat per node):
     //   - Reference $goal
+    //   - Use run-scoped scratch paths under .ai/runs/$KILROY_RUN_ID/...
+    //     Root .ai is not implicitly ingested.
     //   - Full status contract: write to $KILROY_STAGE_STATUS_PATH,
     //     fall back to $KILROY_STAGE_STATUS_FALLBACK_PATH, do not write
     //     nested status.json after cd, use schema {"status":"..."}
@@ -51,15 +54,15 @@ digraph reference_template {
         ]
 
         // PROMPT: expand_spec
-        // Role: create or reuse canonical spec at .ai/spec.md
+        // Role: create or reuse canonical spec at .ai/runs/$KILROY_RUN_ID/spec.md
         // Must address:
-        //   - Reuse existing .ai/spec.md or repo spec if adequate
+        //   - Reuse existing .ai/runs/$KILROY_RUN_ID/spec.md or repo spec if adequate
         //   - Copy user-declared verbatim specs without rewriting
         //   - Expand from $goal only when no adequate spec exists
         //   - Spec must include: scope, constraints, assumptions, acceptance
         //     criteria, verification approach, non-goals
-        // Reads: $goal, existing .ai/spec.md (if any), repo docs
-        // Writes: .ai/spec.md
+        // Reads: $goal, existing .ai/runs/$KILROY_RUN_ID/spec.md (if any), repo docs
+        // Writes: .ai/runs/$KILROY_RUN_ID/spec.md
         // Note: auto_status=true — no explicit status write needed
         expand_spec [
             shape=box,
@@ -67,14 +70,14 @@ digraph reference_template {
         ]
 
         // PROMPT: check_dod
-        // Role: determine if .ai/definition_of_done.md is adequate
+        // Role: determine if .ai/runs/$KILROY_RUN_ID/definition_of_done.md is adequate
         // Must address:
         //   - Check file existence and content (not placeholder)
         //   - Apply DoD rubric: scope, deliverables, AC, verification,
         //     quality/safety gates, non-goals
         //   - Apply coverage checklist: build, tests, lint, docs,
         //     compatibility, security, ops, perf
-        // Reads: .ai/definition_of_done.md
+        // Reads: .ai/runs/$KILROY_RUN_ID/definition_of_done.md
         // Outcomes: has_dod or needs_dod
         check_dod [
             shape=box,
@@ -92,13 +95,13 @@ digraph reference_template {
         // (identical prompt — diversity comes from different models)
         // Role: propose a project DoD from the spec
         // Must address:
-        //   - Read .ai/spec.md
+        //   - Read .ai/runs/$KILROY_RUN_ID/spec.md
         //   - DoD is outcomes/evidence, not a plan
         //   - Each item verifiable (pass/fail)
         //   - Don't prescribe implementation approach
         //   - Include: scope, deliverables, AC, verification, non-goals
         //   - Apply coverage checklist
-        // Writes: .ai/dod_a.md (or _b, _c)
+        // Writes: .ai/runs/$KILROY_RUN_ID/dod_a.md (or _b, _c)
         dod_a [class="branch-a"]
         dod_b [class="branch-b"]
         dod_c [class="branch-c"]
@@ -108,9 +111,9 @@ digraph reference_template {
         // Must address:
         //   - Read branch outputs via parallel_results.json + worktree_dir
         //   - Fall back to current worktree if parallel_results.json missing
-        //   - Read .ai/spec.md for context
+        //   - Read .ai/runs/$KILROY_RUN_ID/spec.md for context
         //   - Resolve contradictions, apply DoD rubric + coverage checklist
-        // Writes: .ai/definition_of_done.md
+        // Writes: .ai/runs/$KILROY_RUN_ID/definition_of_done.md
         consolidate_dod [auto_status=true]
     }
 
@@ -124,13 +127,13 @@ digraph reference_template {
         // (identical prompt — diversity comes from different models)
         // Role: create implementation plan from spec + DoD
         // Must address:
-        //   - Read .ai/spec.md and .ai/definition_of_done.md
-        //   - If .ai/postmortem_latest.md exists, incorporate its lessons
+        //   - Read .ai/runs/$KILROY_RUN_ID/spec.md and .ai/runs/$KILROY_RUN_ID/definition_of_done.md
+        //   - If .ai/runs/$KILROY_RUN_ID/postmortem_latest.md exists, incorporate its lessons
         //   - Plan must cover all deliverables and acceptance criteria
         //     from the DoD, with project-specific implementation detail
         //   - Plan must be grounded in the actual project domain,
         //     technology stack, and repo structure
-        // Writes: .ai/plan_a.md (or _b, _c)
+        // Writes: .ai/runs/$KILROY_RUN_ID/plan_a.md (or _b, _c)
         plan_a [class="branch-a"]
         plan_b [class="branch-b"]
         plan_c [class="branch-c"]
@@ -140,22 +143,22 @@ digraph reference_template {
         // Must address:
         //   - Read branch outputs via parallel_results.json + worktree_dir
         //   - Fall back to current worktree if parallel_results.json missing
-        //   - If .ai/postmortem_latest.md exists, verify plan addresses
+        //   - If .ai/runs/$KILROY_RUN_ID/postmortem_latest.md exists, verify plan addresses
         //     every identified issue
         //   - Resolve conflicts, ensure dependency order
-        // Writes: .ai/plan_final.md
+        // Writes: .ai/runs/$KILROY_RUN_ID/plan_final.md
         debate_consolidate [auto_status=true]
     }
 
     // OPTIONAL: For porting/reading-existing-source tasks — add analyze cluster here.
     // analyze_fanout [shape=component, label="Analyze Fan-Out"]
-    // analyze_module_a [shape=box, auto_status=true, prompt="...read source, write .ai/design_a.md..."]
+    // analyze_module_a [shape=box, auto_status=true, prompt="...read source, write .ai/runs/$KILROY_RUN_ID/design_a.md..."]
     // analyze_module_b [shape=box, auto_status=true, prompt="..."]
     // merge_analysis   [shape=box, auto_status=true, prompt="...verify all design docs..."]
     // See reference_template.dot OPTIONAL stubs below for pattern.
 
     // OPTIONAL: For 5+ discrete deliverable files — use worker pool instead of flat fan-out.
-    // plan_work          [shape=box, auto_status=true, label="Plan Work Queue", prompt="...write .ai/work_queue.json..."]
+    // plan_work          [shape=box, auto_status=true, label="Plan Work Queue", prompt="...write .ai/runs/$KILROY_RUN_ID/work_queue.json..."]
     // work_pool          [shape=component, label="Worker Pool"]
     // worker_0           [shape=box, auto_status=true, label="Worker 0", prompt="...id%3==0..."]
     // worker_1           [shape=box, auto_status=true, label="Worker 1", prompt="...id%3==1..."]
@@ -168,16 +171,19 @@ digraph reference_template {
         // PROMPT: implement
         // Role: single-writer code implementation (fresh or repair)
         // Must address:
-        //   - REPAIR FIRST: if .ai/postmortem_latest.md exists, read it
+        //   - REPAIR FIRST: if .ai/runs/$KILROY_RUN_ID/postmortem_latest.md exists, read it
         //     FIRST, fix ONLY identified gaps, do NOT regenerate working
         //     systems, preserve all passing code and tests
-        //   - FRESH: if no postmortem, execute .ai/plan_final.md
-        //   - Read .ai/spec.md and .ai/definition_of_done.md
+        //   - FRESH: if no postmortem, execute .ai/runs/$KILROY_RUN_ID/plan_final.md
+        //   - Read .ai/runs/$KILROY_RUN_ID/spec.md and .ai/runs/$KILROY_RUN_ID/definition_of_done.md
         //   - Implementation instructions must be specific to the project's
         //     deliverables, domain, technology, and constraints — derived
         //     from the ingestor's reading of the spec and DoD
         //   - Incremental implementation: each module complete before next
-        //   - Log progress to .ai/implementation_log.md
+        //   - Log progress to .ai/runs/$KILROY_RUN_ID/implementation_log.md
+        //   - PRE-EXIT VERIFICATION (repair passes): if .ai/runs/$KILROY_RUN_ID/postmortem_latest.md
+        //     exists, run sh scripts/validate-build.sh and re-read each targeted
+        //     file before exiting; do NOT exit silently on a repair pass
         // Failure: also include failure_signature in meta
         implement [
             shape=box,
@@ -210,15 +216,26 @@ digraph reference_template {
         check_build [shape=diamond, label="Build OK?"]
 
         // Replace tool_command with project-specific test command.
+        // Required evidence contract:
+        //   - Run integration scenarios required by .ai/definition_of_done.md
+        //   - Write evidence under .ai/test-evidence/latest/
+        //   - Write .ai/test-evidence/latest/manifest.json mapping each IT-*
+        //     scenario to status and artifact paths/types
+        //   - Emit best-effort evidence and manifest entry even on failure
         verify_test [
             shape=parallelogram,
             tool_command="echo 'Replace with project-specific test check'; exit 0"
         ]
         check_test [shape=diamond, label="Tests OK?"]
 
-        // Replace tool_command with artifact hygiene check.
+        // Replace tool_command with artifact/evidence hygiene check.
         // Confirm deliverables meet their interface contract (exports, endpoints,
         // CLI behavior, observable outputs); file existence alone is insufficient.
+        // Also verify test evidence contract:
+        //   - .ai/test-evidence/latest/manifest.json exists and is parseable
+        //   - Manifest scenario IDs cover DoD integration scenarios
+        //   - Each scenario has required artifact types (UI/mixed => screenshot;
+        //     non-ui => text/structured evidence)
         verify_artifacts [
             shape=parallelogram,
             max_retries=0,
@@ -230,11 +247,11 @@ digraph reference_template {
         // Role: semantic review after all deterministic checks pass
         // Must address:
         //   - Read implementation outputs and verify against
-        //     .ai/definition_of_done.md and .ai/spec.md
+        //     .ai/runs/$KILROY_RUN_ID/definition_of_done.md and .ai/runs/$KILROY_RUN_ID/spec.md
         //   - Verification must be specific to the project's acceptance
         //     criteria — enumerate the actual areas to check, derived from
         //     the ingestor's reading of the DoD
-        //   - Write results to .ai/verify_fidelity.md
+        //   - Write results to .ai/runs/$KILROY_RUN_ID/verify_fidelity.md
         // Failure: also include failure_signature in meta — sorted
         //   comma-separated list of specific failed criteria identifiers
         verify_fidelity [
@@ -254,14 +271,14 @@ digraph reference_template {
         // (identical prompt — diversity comes from different models)
         // Role: review implementation against DoD
         // Must address:
-        //   - Read .ai/definition_of_done.md for acceptance criteria
+        //   - Read .ai/runs/$KILROY_RUN_ID/definition_of_done.md for acceptance criteria
         //   - Read implementation outputs
         //   - Check build, completeness, correctness, tests against all
         //     DoD criteria — enumerate what to check, derived from the
         //     ingestor's reading of the DoD
         //   - Verdict: APPROVED or REJECTED with specific evidence
         // Failure: include specific gaps with criteria identifiers
-        // Writes: .ai/review_a.md (or _b, _c)
+        // Writes: .ai/runs/$KILROY_RUN_ID/review_a.md (or _b, _c)
         review_a [class="branch-a"]
         review_b [class="branch-b"]
         review_c [class="branch-c"]
@@ -271,10 +288,10 @@ digraph reference_template {
         // Must address:
         //   - Read branch outputs via parallel_results.json + worktree_dir
         //   - Fall back to current worktree if parallel_results.json missing
-        //   - Read .ai/definition_of_done.md for criteria
+        //   - Read .ai/runs/$KILROY_RUN_ID/definition_of_done.md for criteria
         //   - Consensus: 2+ APPROVED with no critical gaps -> success;
         //     otherwise -> retry with specific issues
-        // Writes: .ai/review_consensus.md
+        // Writes: .ai/runs/$KILROY_RUN_ID/review_consensus.md
         review_consensus [auto_status=true, goal_gate=true, retry_target="postmortem"]
     }
 
@@ -285,20 +302,35 @@ digraph reference_template {
         // PROMPT: postmortem
         // Role: analyze failure and guide next repair iteration
         // Must address:
-        //   - Read .ai/review_consensus.md (if review stage reached)
-        //   - Read .ai/verify_fidelity.md (if semantic verify ran)
+        //   - Read .ai/runs/$KILROY_RUN_ID/review_consensus.md (if review stage reached)
+        //   - Read .ai/runs/$KILROY_RUN_ID/verify_fidelity.md (if semantic verify ran)
         //   - Read branch review outputs via parallel_results.json +
         //     worktree_dir if available
-        //   - Read .ai/implementation_log.md
+        //   - Read .ai/runs/$KILROY_RUN_ID/implementation_log.md
+        //   - If .ai/test-evidence/latest/manifest.json exists:
+        //       * read it first
+        //       * for each failed or suspicious IT-* scenario, read listed artifacts
+        //         that can materially improve diagnosis
+        //       * cite artifact file paths used as evidence
+        //       * if an artifact is missing/unreadable/not produced, record that as
+        //         a finding with the attempted path
         //   - Output: root causes, what worked (preserve), what failed
         //     (fix), concrete next changes
         //   - Must NOT direct from-scratch restart — preserve working code
+        // Progress detection (required):
+        //   - Extract current failing AC IDs from verify_fidelity.md / review outputs
+        //   - Read context key last_failing_acs (written by previous postmortem iteration)
+        //   - If failing AC set is IDENTICAL to last_failing_acs → route needs_replan
+        //     (zero progress; another impl_repair will not help)
+        //   - If failing AC set is smaller/different or this is first failure → impl_repair
+        //   - Include context_updates in every status write:
+        //     {"context_updates":{"last_failing_acs":"AC4,AC6"}} (sorted, comma-separated)
         // Outcome classification (recovery routing):
         //   - impl_repair: code repair needed; plan/toolchain still valid
-        //   - needs_replan: plan/approach is inadequate; regenerate plan branches
+        //   - needs_replan: plan/approach is inadequate; OR zero progress detected
         //   - needs_toolchain: environment/bootstrap/toolchain issue detected
-        //   - When uncertain, default to impl_repair
-        // Writes: .ai/postmortem_latest.md (overwrite previous)
+        //   - When uncertain on first failure, default to impl_repair
+        // Writes: .ai/runs/$KILROY_RUN_ID/postmortem_latest.md (overwrite previous)
         // Note: status reflects analysis completion, not implementation state
         postmortem [auto_status=true]
     }

@@ -27,7 +27,7 @@ type Options struct {
 // CycleEdge describes a back edge (cycle) detected in the graph.
 type CycleEdge struct {
 	From        string
-	To          string   // backward target (loop entry point)
+	To          string // backward target (loop entry point)
 	Condition   string
 	LoopRestart bool
 	LoopBody    []string // node IDs on the cycle path (inclusive of To)
@@ -38,8 +38,8 @@ type LoopAnalysis struct {
 	EntryNode   string   `json:"entry_node"`
 	BackEdgeTo  string   `json:"back_edge_to"`
 	Condition   string   `json:"condition"`
-	Verdict     string   `json:"verdict"`    // "ok" | "warning" | "error"
-	Score       int      `json:"score"`      // 0-100
+	Verdict     string   `json:"verdict"` // "ok" | "warning" | "error"
+	Score       int      `json:"score"`   // 0-100
 	Issues      []string `json:"issues"`
 	Suggestions []string `json:"suggestions"`
 }

@@ -42,7 +42,7 @@ digraph P {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	res, err := Run(ctx, dot, RunOptions{RepoPath: repo, RunBranchPrefix: "attractor/run"})
+	res, err := runForTest(t, ctx, dot, RunOptions{RepoPath: repo, RunBranchPrefix: "attractor/run"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

@@ -9,7 +9,7 @@ import (
 )
 
 type profileDefaultEnvFile struct {
-	Version  int                        `yaml:"version"`
+	Version  int                          `yaml:"version"`
 	Profiles map[string]map[string]string `yaml:"profiles"`
 }
 

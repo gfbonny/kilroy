@@ -39,7 +39,7 @@ digraph G {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	res, err := Run(ctx, dot, RunOptions{RepoPath: repo, RunID: "cond-retry", LogsRoot: t.TempDir()})
+	res, err := runForTest(t, ctx, dot, RunOptions{RepoPath: repo, RunID: "cond-retry", LogsRoot: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}

@@ -192,6 +192,9 @@ func toChatCompletionsBody(req llm.Request, provider, optionsKey string, opts ch
 	if req.ToolChoice != nil {
 		body["tool_choice"] = toChatCompletionsToolChoice(*req.ToolChoice)
 	}
+	if req.MaxTokens != nil && *req.MaxTokens > 0 {
+		body["max_tokens"] = *req.MaxTokens
+	}
 	if req.ReasoningEffort != nil && *req.ReasoningEffort != "" {
 		body["reasoning_effort"] = *req.ReasoningEffort
 	}

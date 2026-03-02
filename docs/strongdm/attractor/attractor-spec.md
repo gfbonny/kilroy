@@ -573,6 +573,8 @@ The graph traversal is single-threaded. Only one node executes at a time in the 
 
 Parallelism exists within specific node handlers (`parallel`, `parallel.fan_in`) that manage concurrent execution internally. Each parallel branch receives an isolated clone of the context. Branch results are collected but individual branch context changes are not merged back into the parent -- only the handler's outcome and its `context_updates` are applied.
 
+When a `parallel` dispatch converges into a `shape=box` node (rather than `shape=tripleoctagon`), the runtime treats it as a manual merge handoff. Branch locations (`branch_key`, `worktree_dir`, `logs_root`, `head_sha`) are passed to the box-node LLM prompt, and that node is responsible for manually inspecting and merging branch outputs. Automatic winner fast-forward semantics apply only to `parallel.fan_in` (`shape=tripleoctagon`).
+
 ---
 
 ## 4. Node Handlers
@@ -2236,6 +2238,7 @@ When `auto_status=true` on a node and no `status.json` was written by the handle
 - `inputs.materialize.default_include` is **best-effort**. Unmatched default include patterns must not fail the run.
 - Run startup must persist a canonical input snapshot under `logs_root/input_snapshot/` and a run-level manifest at `logs_root/inputs_manifest.json`.
 - **Run and branch worktree hydration** must preserve input closure availability. Parallel branch worktrees must be hydrated before branch stage execution and persist branch-local manifests at `<branch_logs_root>/inputs_manifest.json`.
+- Scratch artifacts referenced by prompts/examples must be run-scoped under `.ai/runs/$KILROY_RUN_ID/...`. Root `.ai` is not implicitly ingested into run or branch worktrees.
 - Stage attempts must write stage-local input manifests at `logs_root/<node_id>/inputs_manifest.json` and expose `KILROY_INPUTS_MANIFEST_PATH` to stage runtimes.
 - Resume must provide hydration parity with fresh runs: after worktree recreation, required inputs are restored from persisted snapshot/manifest state (not mutable source workspace state).
 - LLM-assisted implicit reference inference (`inputs.materialize.infer_with_llm=true`) is additive. Inferer failures are non-fatal and must deterministically fall back to scanner-only closure with warnings.

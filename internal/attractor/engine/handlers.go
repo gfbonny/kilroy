@@ -8,11 +8,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/oklog/ulid/v2"
 
+	"github.com/danshapiro/kilroy/internal/attractor/browsergate"
+	"github.com/danshapiro/kilroy/internal/attractor/gitutil"
 	"github.com/danshapiro/kilroy/internal/attractor/model"
 	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
@@ -253,6 +256,56 @@ func copyFirstValidFallbackStatus(stageStatusPath string, fallbackPaths []fallba
 	return statusSourceNone, nil
 }
 
+func buildManualBoxFanInPromptPreamble(exec *Execution, node *model.Node) string {
+	if exec == nil || exec.Context == nil || exec.Graph == nil || node == nil {
+		return ""
+	}
+	joinNodeID := strings.TrimSpace(exec.Context.GetString("parallel.join_node", ""))
+	if joinNodeID == "" || joinNodeID != strings.TrimSpace(node.ID) {
+		return ""
+	}
+	mergeMode := strings.TrimSpace(exec.Context.GetString(parallelMergeModeContextKey, ""))
+	if mergeMode == "" {
+		mergeMode = classifyJoinMergeMode(exec.Graph, joinNodeID)
+	}
+	if mergeMode != parallelMergeModeManualBox {
+		return ""
+	}
+	raw, ok := exec.Context.Get("parallel.results")
+	if !ok || raw == nil {
+		return ""
+	}
+	results, err := decodeParallelResults(raw)
+	if err != nil || len(results) == 0 {
+		return ""
+	}
+	currentWorktree := strings.TrimSpace(exec.WorktreeDir)
+	var b strings.Builder
+	b.WriteString("Manual parallel fan-in handoff:\n")
+	b.WriteString("- This node is a convergence box. The engine does NOT auto-merge branch commits — you must manually merge all branch outputs into the current worktree.\n")
+	if currentWorktree != "" {
+		b.WriteString(fmt.Sprintf("- Current worktree (write your merged result here): %s\n", currentWorktree))
+	}
+	b.WriteString("- Branch outputs (merge ALL of these unless your task prompt specifies a different strategy):\n")
+	for _, r := range results {
+		b.WriteString(fmt.Sprintf("  - branch_key=%s status=%s head_sha=%s worktree_dir=%s logs_root=%s\n",
+			strings.TrimSpace(r.BranchKey),
+			strings.TrimSpace(string(r.Outcome.Status)),
+			strings.TrimSpace(r.HeadSHA),
+			strings.TrimSpace(r.WorktreeDir),
+			strings.TrimSpace(r.LogsRoot),
+		))
+	}
+	b.WriteString("- DEFAULT MERGE STRATEGY (use this unless your task prompt says otherwise):\n")
+	b.WriteString("  1. For each branch above, run `git merge --no-ff <head_sha>` in the current worktree.\n")
+	b.WriteString("  2. If the merge succeeds cleanly, continue to the next branch.\n")
+	b.WriteString("  3. If there is a merge conflict, resolve it however you see fit, then `git add` the resolved\n")
+	b.WriteString("     files and run `git merge --continue` (or `git commit`) to complete the merge.\n")
+	b.WriteString("  4. Do NOT read files manually or copy them by hand unless git merge itself is unavailable.\n")
+	b.WriteString("- Node run artifacts (response.md, status.json, etc.) are under <logs_root>/<node_id>/.\n")
+	return strings.TrimSpace(b.String())
+}
+
 func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *model.Node) (runtime.Outcome, error) {
 	stageDir := filepath.Join(exec.LogsRoot, node.ID)
 	stageStatusPath := filepath.Join(stageDir, "status.json")
@@ -329,6 +382,44 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 					promptText = preamble
 				} else {
 					promptText = preamble + "\n\n" + strings.TrimSpace(promptText)
+				}
+			}
+		}
+	}
+	if preamble := strings.TrimSpace(buildManualBoxFanInPromptPreamble(exec, node)); preamble != "" {
+		if strings.TrimSpace(promptText) == "" {
+			promptText = preamble
+		} else {
+			promptText = preamble + "\n\n" + strings.TrimSpace(promptText)
+		}
+		if exec != nil && exec.Engine != nil {
+			exec.Engine.appendProgress(map[string]any{
+				"event":   "manual_box_fan_in_handoff",
+				"node_id": node.ID,
+			})
+		}
+		// Copy git-ignored files from each branch worktree into the run
+		// worktree so the merging agent has access to .env / secrets /
+		// build artifacts produced by branch workers. Results are already
+		// sorted by BranchKey so the copy order is deterministic; if two
+		// branches produced the same ignored file, the alphabetically-last
+		// branch wins.
+		if exec != nil && exec.Engine != nil {
+			if raw, ok := exec.Context.Get("parallel.results"); ok && raw != nil {
+				if brResults, err := decodeParallelResults(raw); err == nil {
+					for _, br := range brResults {
+						if strings.TrimSpace(br.WorktreeDir) == "" {
+							continue
+						}
+						if cerr := gitutil.CopyIgnoredFiles(br.WorktreeDir, exec.WorktreeDir, ".ai/runs/"); cerr != nil {
+							exec.Engine.appendProgress(map[string]any{
+								"event":      "manual_box_fan_in_ignored_files_warning",
+								"node_id":    node.ID,
+								"branch_key": br.BranchKey,
+								"warning":    cerr.Error(),
+							})
+						}
+					}
 				}
 			}
 		}
@@ -542,7 +633,35 @@ func (h *WaitHumanHandler) Execute(ctx context.Context, exec *Execution, node *m
 	}, nil
 }
 
+var toolCommandAbsPathRE = regexp.MustCompile(`cd\s+/`)
+
 type ToolHandler struct{}
+
+var (
+	snapshotBrowserArtifactsFunc = snapshotBrowserArtifacts
+	collectBrowserArtifactsFunc  = collectBrowserArtifacts
+)
+
+var toolActionableLineHints = []string{
+	"error",
+	"fail",
+	"failed",
+	"failure",
+	"exception",
+	"panic",
+	"fatal",
+	"timeout",
+	"timed out",
+	"net::",
+	"err_",
+	"missing",
+	"not found",
+	"cannot",
+	"can't",
+	"refused",
+	"disconnected",
+	"assert",
+}
 
 func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *model.Node) (runtime.Outcome, error) {
 	stageDir := filepath.Join(execCtx.LogsRoot, node.ID)
@@ -550,9 +669,24 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 	if cmdStr == "" {
 		return runtime.Outcome{Status: runtime.StatusFail, FailureReason: "no tool_command specified"}, nil
 	}
+	if toolCommandAbsPathRE.MatchString(cmdStr) {
+		warnEngine(execCtx, fmt.Sprintf("tool_command for node %q contains 'cd /…' which overrides worktree CWD %q", node.ID, execCtx.WorktreeDir))
+	}
 	timeout := parseDuration(node.Attr("timeout", ""), 0)
 	if timeout <= 0 {
 		timeout = 600 * time.Second
+	}
+	isBrowserVerifyNode := browsergate.IsBrowserVerificationNode(cmdStr, node.ID, node.Label(), node.Attrs)
+	var baseline map[string]artifactFingerprint
+	var startedAt time.Time
+	if isBrowserVerifyNode {
+		baselineRun, err := snapshotBrowserArtifactsFunc(execCtx.WorktreeDir)
+		if err != nil {
+			warnEngine(execCtx, fmt.Sprintf("snapshot browser artifacts: %v", err))
+		} else {
+			baseline = baselineRun
+		}
+		startedAt = time.Now()
 	}
 
 	callID := ulid.Make().String()
@@ -606,9 +740,9 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 	cmd.Stdout = stdoutFile
 	cmd.Stderr = stderrFile
 
-	start := time.Now()
+	commandStart := time.Now()
 	runErr := cmd.Run()
-	dur := time.Since(start)
+	dur := time.Since(commandStart)
 	exitCode := -1
 	if cmd.ProcessState != nil {
 		exitCode = cmd.ProcessState.ExitCode()
@@ -622,6 +756,7 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 			warnEngine(execCtx, fmt.Sprintf("write tool_timing.json: %v", err))
 		}
 		_ = writeDiffPatch(stageDir, execCtx.WorktreeDir)
+		emitBrowserArtifactCollection(execCtx, node, stageDir, isBrowserVerifyNode, baseline, startedAt)
 		return runtime.Outcome{
 			Status:        runtime.StatusFail,
 			FailureReason: fmt.Sprintf("tool_command timed out after %s", timeout),
@@ -647,9 +782,23 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 	if rerr != nil {
 		warnEngine(execCtx, fmt.Sprintf("read stderr.log: %v", rerr))
 	}
+	emitBrowserArtifactCollection(execCtx, node, stageDir, isBrowserVerifyNode, baseline, startedAt)
+
 	combined := append(append([]byte{}, stdoutBytes...), stderrBytes...)
 	combinedStr := string(combined)
 	if runErr != nil {
+		rawExitStatus := strings.TrimSpace(runErr.Error())
+		failureReason := rawExitStatus
+		if isBrowserVerifyNode {
+			if line := firstActionableToolOutputLine(stderrBytes); line != "" {
+				failureReason = line
+			} else if line := firstActionableToolOutputLine(stdoutBytes); line != "" {
+				failureReason = line
+			}
+		}
+		if failureReason == "" {
+			failureReason = "tool command failed"
+		}
 		if execCtx != nil && execCtx.Engine != nil && execCtx.Engine.CXDB != nil {
 			if _, _, err := execCtx.Engine.CXDB.Append(ctx, "com.kilroy.attractor.ToolResult", 1, map[string]any{
 				"run_id":    execCtx.Engine.Options.RunID,
@@ -664,9 +813,10 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 		}
 		return runtime.Outcome{
 			Status:        runtime.StatusFail,
-			FailureReason: runErr.Error(),
+			FailureReason: failureReason,
 			ContextUpdates: map[string]any{
-				"tool.output": truncate(combinedStr, 8_000),
+				"tool.output":      truncate(combinedStr, 8_000),
+				"tool.exit_status": rawExitStatus,
 			},
 		}, nil
 	}
@@ -689,6 +839,65 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 		},
 		Notes: "tool completed",
 	}, nil
+}
+
+func emitBrowserArtifactCollection(execCtx *Execution, node *model.Node, stageDir string, isBrowserVerifyNode bool, baseline map[string]artifactFingerprint, startedAt time.Time) {
+	if !isBrowserVerifyNode {
+		return
+	}
+	summary, err := collectBrowserArtifactsFunc(stageDir, execCtx.WorktreeDir, baseline, startedAt)
+	if err != nil {
+		warnEngine(execCtx, fmt.Sprintf("collect browser artifacts: %v", err))
+	}
+
+	if execCtx == nil || execCtx.Engine == nil {
+		return
+	}
+	event := map[string]any{
+		"event":   "tool_browser_artifacts",
+		"node_id": node.ID,
+	}
+	for k, v := range summary.toProgressFields() {
+		event[k] = v
+	}
+	if err != nil {
+		event["collection_error"] = err.Error()
+	}
+	execCtx.Engine.appendProgress(event)
+}
+
+func firstActionableToolOutputLine(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+	lines := strings.Split(string(data), "\n")
+	firstNonEmpty := ""
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if firstNonEmpty == "" {
+			firstNonEmpty = trimToRunes(trimmed, 4000)
+		}
+		if looksActionableToolOutputLine(trimmed) {
+			return trimToRunes(trimmed, 4000)
+		}
+	}
+	return firstNonEmpty
+}
+
+func looksActionableToolOutputLine(line string) bool {
+	line = strings.ToLower(strings.TrimSpace(line))
+	if line == "" {
+		return false
+	}
+	for _, hint := range toolActionableLineHints {
+		if strings.Contains(line, hint) {
+			return true
+		}
+	}
+	return false
 }
 
 func truncate(s string, n int) string {

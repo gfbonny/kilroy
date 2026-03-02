@@ -37,7 +37,7 @@ digraph G {
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	res, err := Run(ctx, dot, RunOptions{RepoPath: repo, RunID: "fid", LogsRoot: logsRoot})
+	res, err := runForTest(t, ctx, dot, RunOptions{RepoPath: repo, RunID: "fid", LogsRoot: logsRoot})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -104,4 +104,3 @@ digraph G {
 		t.Fatalf("expected c to use full fidelity (no synthesized preamble); prompt:\n%s", string(cPrompt))
 	}
 }
-
