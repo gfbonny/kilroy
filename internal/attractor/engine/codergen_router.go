@@ -418,9 +418,6 @@ func (r *CodergenRouter) withFailoverText(
 
 	cands := []providerModel{{Provider: primaryProvider, Model: primaryModel}}
 	order, failoverExplicit := failoverOrderFromRuntime(primaryProvider, r.providerRuntimes)
-	if !failoverExplicit && len(order) == 0 {
-		order = failoverOrder(primaryProvider)
-	}
 	for _, p := range order {
 		p = normalizeProviderKey(p)
 		if p == "" || p == primaryProvider {
@@ -593,25 +590,6 @@ func failoverOrderFromRuntime(primary string, runtimes map[string]ProviderRuntim
 		return nil, rt.FailoverExplicit
 	}
 	return append([]string{}, rt.Failover...), rt.FailoverExplicit
-}
-
-func failoverOrder(primary string) []string {
-	switch normalizeProviderKey(primary) {
-	case "openai":
-		return []string{"google"}
-	case "anthropic":
-		return []string{"google"}
-	case "google":
-		return []string{"kimi"}
-	case "kimi":
-		return []string{"zai"}
-	case "zai":
-		return []string{"cerebras"}
-	case "cerebras":
-		return []string{"zai"}
-	default:
-		return nil
-	}
 }
 
 func pickFailoverModelFromRuntime(provider string, runtimes map[string]ProviderRuntime, catalog *modeldb.Catalog, fallbackModel string) string {

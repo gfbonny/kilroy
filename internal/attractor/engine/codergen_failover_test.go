@@ -34,9 +34,8 @@ func (a *okAdapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, er
 func TestCodergenRouter_WithFailoverText_FailsOverToDifferentProvider(t *testing.T) {
 	cfg := &RunConfigFile{Version: 1}
 	cfg.LLM.Providers = map[string]ProviderConfig{
-		"openai":      {Backend: BackendAPI},
+		"openai": {Backend: BackendAPI, Failover: []string{"google"}},
 		"google":      {Backend: BackendAPI},
-		"gemini":      {Backend: BackendAPI}, // alias should be normalized away
 		"unsupported": {Backend: BackendAPI},
 	}
 	// Only builtin providers are recognized by normalizeProviderKey; others are ignored by withFailoverText.
@@ -48,7 +47,11 @@ func TestCodergenRouter_WithFailoverText_FailsOverToDifferentProvider(t *testing
 		},
 	}
 
-	r := NewCodergenRouter(cfg, catalog)
+	runtimes, err := resolveProviderRuntimes(cfg)
+	if err != nil {
+		t.Fatalf("resolveProviderRuntimes: %v", err)
+	}
+	r := NewCodergenRouterWithRuntimes(cfg, catalog, runtimes)
 
 	client := llm.NewClient()
 	client.Register(&okAdapter{name: "openai"})
@@ -98,7 +101,7 @@ func TestCodergenRouter_WithFailoverText_FailsOverToDifferentProvider(t *testing
 func TestCodergenRouter_WithFailoverText_AppliesForceModelToFailoverProvider(t *testing.T) {
 	cfg := &RunConfigFile{Version: 1}
 	cfg.LLM.Providers = map[string]ProviderConfig{
-		"openai": {Backend: BackendAPI},
+		"openai": {Backend: BackendAPI, Failover: []string{"google"}},
 		"google": {Backend: BackendAPI},
 	}
 	catalog := &modeldb.Catalog{
@@ -107,7 +110,11 @@ func TestCodergenRouter_WithFailoverText_AppliesForceModelToFailoverProvider(t *
 		},
 	}
 
-	r := NewCodergenRouter(cfg, catalog)
+	runtimes, err := resolveProviderRuntimes(cfg)
+	if err != nil {
+		t.Fatalf("resolveProviderRuntimes: %v", err)
+	}
+	r := NewCodergenRouterWithRuntimes(cfg, catalog, runtimes)
 	client := llm.NewClient()
 	client.Register(&okAdapter{name: "openai"})
 	client.Register(&okAdapter{name: "google"})
@@ -191,26 +198,6 @@ func TestFailoverOrder_ExplicitEmptyFailoverPreserved(t *testing.T) {
 	}
 }
 
-func TestFailoverOrder_DefaultsAreSingleHop(t *testing.T) {
-	cases := []struct {
-		provider string
-		want     string
-	}{
-		{provider: "openai", want: "google"},
-		{provider: "anthropic", want: "google"},
-		{provider: "google", want: "kimi"},
-		{provider: "kimi", want: "zai"},
-		{provider: "zai", want: "cerebras"},
-		{provider: "cerebras", want: "zai"},
-	}
-	for _, tc := range cases {
-		got := failoverOrder(tc.provider)
-		if len(got) != 1 || got[0] != tc.want {
-			t.Fatalf("%s failover=%v want [%s]", tc.provider, got, tc.want)
-		}
-	}
-}
-
 func TestCodergenRouter_WithFailoverText_ExplicitEmptyFailoverDoesNotFallback(t *testing.T) {
 	cfg := &RunConfigFile{Version: 1}
 	cfg.LLM.Providers = map[string]ProviderConfig{
@@ -245,6 +232,35 @@ func TestCodergenRouter_WithFailoverText_ExplicitEmptyFailoverDoesNotFallback(t 
 	}
 	if attemptedAnthropic {
 		t.Fatalf("unexpected failover attempt when failover=[] is explicit")
+	}
+}
+
+func TestCodergenRouter_WithFailoverText_OmittedFailoverDoesNotFallback(t *testing.T) {
+	cfg := &RunConfigFile{Version: 1}
+	cfg.LLM.Providers = map[string]ProviderConfig{
+		"openai": {Backend: BackendAPI},
+		"google": {Backend: BackendAPI},
+	}
+	runtimes, err := resolveProviderRuntimes(cfg)
+	if err != nil {
+		t.Fatalf("resolveProviderRuntimes: %v", err)
+	}
+	r := NewCodergenRouterWithRuntimes(cfg, nil, runtimes)
+
+	attempted := []string{}
+	_, used, err := r.withFailoverText(context.Background(), nil, &model.Node{ID: "n1"}, llm.NewClient(), "openai", "gpt-5.2-codex", func(provider, model string) (string, error) {
+		_ = model
+		attempted = append(attempted, provider)
+		return "", llm.NewNetworkError(provider, "synthetic outage")
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if used.Provider != "openai" {
+		t.Fatalf("unexpected fallback provider: %q", used.Provider)
+	}
+	if len(attempted) != 1 || attempted[0] != "openai" {
+		t.Fatalf("unexpected fallback attempts: %v", attempted)
 	}
 }
 
