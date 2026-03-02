@@ -93,8 +93,29 @@ Manifest entries must map each scenario ID to:
 - artifact list (type + path)
 - missing/unreadable artifact notes (if any)
 
+Example manifest shape:
+```json
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "IT-1",
+      "status": "pass",
+      "artifacts": [
+        { "type": "log", "path": ".ai/test-evidence/latest/IT-1/test.log" }
+      ],
+      "notes": []
+    }
+  ]
+}
+```
+
 Artifact requirements:
 - Every `IT-*` scenario must produce at least one artifact.
+- Each scenario must declare one surface type in evidence metadata:
+  - `surface=ui`: visually rendered user interface is exercised.
+  - `surface=non_ui`: no visually rendered user interface is exercised.
+  - `surface=mixed`: both visual UI and non-UI interfaces are exercised.
 - Scenarios that exercise a visual UI (`surface=ui` or `surface=mixed`) must include screenshot artifacts (`.png` or `.jpg`) proving key states.
 - Scenarios that do not exercise visual UI (`surface=non_ui`) must include text or structured evidence artifacts (for example logs, stdout captures, JSON reports).
 - On test failure, emit best-effort artifacts and a manifest entry anyway; missing artifacts must be explicit in the manifest and treated as findings.
