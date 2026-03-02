@@ -25,7 +25,7 @@ llm:
   cli_profile: real
   providers:
     google:
-      backend: cli
+      backend: api
     anthropic:
       backend: cli
     openai:
