@@ -14,6 +14,7 @@ Pure React frontend (no separate backend). Private repo on GitHub. Hosted on Rai
 - Both accessed client-side using the user's API key, which is entered during configuration and persisted in IndexedDB.
 
 **IndexedDB** (via the `idb` library) is used for all local persistence: configuration, drafts, cached demo sessions, and post history.
+All persisted data is retained indefinitely unless the user deletes it.
 
 No RAG — input prompts should just be capped at generous, large values.
 
@@ -38,8 +39,9 @@ This test matrix is critical because the agentic development system needs a tigh
 **In production mode**, every session (configuration + post creation) is recorded: all inputs, all LLM responses, all intermediate state. Sessions are stored in IndexedDB.
 
 **In demo mode**, you choose from all recorded sessions. When you do, the full experience replays using the production code path — text fields prefill instantly with a subtle fade-in, attachments appear a moment after the page loads, and the button that was clicked next becomes highlighted. The user clicks through each step, seeing exactly what a real session looks like.
+If a demo replay has a cache miss, demo mode shows an error and does not fall back to live API calls.
 
-The codebase ships with **one pre-recorded session of a P&G post**, so demo mode works out of the box. This includes the configuration first-run using the cached configuration. The easiest way to build a great demo library is to record several live sessions and keep the best ones.
+The codebase ships with **one pre-recorded session of a P&G post**, so demo mode works out of the box. This includes the configuration first-run using the cached configuration. The initial bundled session is best-effort quality and can later be swapped with a cached run. The easiest way to build a great demo library is to record several live sessions and keep the best ones.
 
 ---
 
@@ -48,6 +50,7 @@ The codebase ships with **one pre-recorded session of a P&G post**, so demo mode
 The user's API key is collected first and stored in IndexedDB.
 
 Then the configuration walkthrough begins. Each input step uses a **rich input control** — a reusable component that accepts any combination of typed/pasted text, uploaded documents, and links. This same component is used everywhere the user provides information to the system.
+v01 supports one company workspace only.
 
 1. **Identify your company** — via the rich input control.
 2. **Confirm company** — **Gemini 3.1 Pro** generates a one-paragraph summary followed by beautifully formatted detailed instructions, with a back button.
@@ -94,16 +97,18 @@ Draft an outline of the post using **Gemini 3.1 Pro**. This is **one-shot** from
 #### 4. Write
 
 A **3-cycle process** using **Gemini 3.1 Pro** that the user sees visually:
+In v01, these three cycles run strictly automatically with no manual pause/edit/rerun controls between steps.
 
 1. **Write** — attempts to one-shot the article without the guardrails, incorporating inline citations that reference the research sources.
 2. **Edit** — asks for revisions to better align with the style guide, and rewrites as needed to improve the draft holistically.
 3. **Guardrails** — the only pass that receives the guardrails document (and nothing else besides the post). Assigned to fix any guardrails issues.
 
 Each cycle is visible to the user as it progresses.
+Citation behavior is best effort for credibility: source-derived claims should be cited, while unsourced generic or opinion statements are allowed.
 
 #### 5. Complete
 
-Shows the final formatted post with proper footnotes — each citation rendered with its source title and link. Then return to the dashboard.
+Shows the final formatted post with proper footnotes — each citation rendered with its source title and link. Saves the result as Markdown and displays it in a formatted Markdown viewer. Then return to the dashboard.
 
 ### Visual Design
 
