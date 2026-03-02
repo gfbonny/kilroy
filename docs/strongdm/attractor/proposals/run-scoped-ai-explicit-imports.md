@@ -1,9 +1,5 @@
 # Proposal: Run-Scoped `.ai` and Explicit Imports
 
-This document supersedes the earlier "post-node snapshot update only" proposal.
-Post-node snapshot sync remains required, but only as one part of a stricter
-run-scoped input model.
-
 ## Problem
 
 The March 2, 2026 incident (`run_id=01KJPDK649C65Y07TBX1041C73`) exposed two
@@ -119,7 +115,7 @@ This design answers it safely:
    - Add/normalize config field for imports.
    - Enforce explicit include semantics.
 4. **Snapshot sync**
-   - Continue post-node snapshot updates, but only for run-scoped runtime files.
+   - Update the run snapshot after each node, but only for run-scoped runtime files.
    - Preserve same-file copy protections.
 5. **Provenance + diagnostics**
    - Persist per-import source and digest metadata.
