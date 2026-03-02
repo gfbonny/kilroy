@@ -29,8 +29,6 @@ Use the graph in two passes:
 1. **Intent pass (primary):** Treat the graph as a map of product intent and user flow. Use it to identify the major journeys, decisions, and failure/recovery paths that matter to users.
 2. **Flow sanity pass (secondary):** Do lightweight topology checks only to catch intent-breaking issues (for example, a required outcome has no reachable path).
 
-Do **not** require one integration test per node or per edge unless the spec explicitly says graph topology itself is the contract.
-
 ## Acceptance Criteria
 
 Each AC is a single, testable assertion using observable language: "exists", "returns", "displays", "produces", "exits 0".
