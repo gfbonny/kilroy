@@ -55,6 +55,15 @@ inputs:
 # artifact_policy: language-specific env and checkpoint config.
 # The engine applies only what is declared here — no implicit defaults.
 # See skills/shared/profile_default_env.yaml for per-language reference values.
+#
+# Secrets: if the project needs API keys at build/test time, declare them
+# here with an empty value.  The engine substitutes the real value from
+# the OS environment (loaded from .env at startup).  Declared keys bypass
+# the agent shell's sensitive-name deny list.
+# Example:
+#   overrides:
+#     generic:
+#       GEMINI_API_KEY: ""    # value from .env / shell env
 artifact_policy:
   profiles: ["rust"]
   env:

@@ -59,6 +59,20 @@ Default run-config source:
 - Set `artifact_policy.checkpoint.exclude_globs` for checkpoint hygiene.
 - Do not use deprecated `git.checkpoint_exclude_globs`.
 
+5.5 Declare secrets the project needs at build/test time.
+- If the project under construction needs API keys at test or build time (e.g. `GEMINI_API_KEY` for smoke tests that call a live LLM), declare them in `artifact_policy.env.overrides` so they pass through to the agent shell.
+- The agent shell deny-lists env vars whose names contain `API_KEY`, `SECRET`, `TOKEN`, `PASSWORD`, or `CREDENTIAL` by default. Vars declared in `artifact_policy.env.overrides` bypass this deny list because they represent explicit operator intent.
+- Store the actual secret values in a `.env` file at the repo root (gitignored). The engine loads `.env` at startup and declared override keys pick up the OS values automatically.
+- Use an empty string as the override value — the engine substitutes the real value from the environment at resolve time:
+  ```yaml
+  artifact_policy:
+    env:
+      overrides:
+        generic:
+          GEMINI_API_KEY: ""   # value comes from .env / shell environment
+  ```
+- Never put actual secret values in the run config file.
+
 6. Apply runtime defaults and safety guardrails.
 - Set `git.run_branch_prefix`, `git.commit_per_node`, and `git.require_clean` intentionally.
 - Keep `runtime_policy` explicit (`stage_timeout_ms`, `stall_timeout_ms`, retry cap).
