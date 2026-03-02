@@ -69,6 +69,7 @@ Add tests that assert:
 - runfile accepts `inputs.materialize.reference_exclude` (string list),
 - entries are trim-normalized and deduplicated in stable first-seen order,
 - empty/whitespace-only entries are rejected with deterministic validation errors,
+- malformed glob patterns are rejected with deterministic validation errors,
 - default when omitted is empty (nil/empty list).
 
 ```go
@@ -94,15 +95,15 @@ inputs:
     }
     got := cfg.Inputs.Materialize.ReferenceExclude
     want := []string{"**/node_modules/**", "**/.worktrees/**"}
-    if diff := cmp.Diff(want, got); diff != "" {
-        t.Fatalf("reference_exclude mismatch (-want +got):\n%s", diff)
+    if !reflect.DeepEqual(got, want) {
+        t.Fatalf("reference_exclude mismatch: got=%v want=%v", got, want)
     }
 }
 ```
 
 - [ ] **Step 2: Run targeted tests to confirm failure baseline**
 
-Run: `go test ./internal/attractor/engine -run 'TestLoadRunConfigFile_InputMaterializationReferenceExclude|TestNormalizeAndValidateReferenceExclude' -count=1`
+Run: `go test ./internal/attractor/engine -run 'TestLoadRunConfigFile_InputMaterializationReferenceExclude|TestNormalizeAndValidateReferenceExclude|TestNormalizeAndValidateReferenceExclude_InvalidGlobRejected' -count=1`
 Expected: FAIL because schema/normalization for `reference_exclude` does not exist yet.
 
 - [ ] **Step 3: Implement schema + normalization + validation**
@@ -112,6 +113,7 @@ Implementation details:
 - In config defaulting path, trim/normalize this list.
 - Add helper in `input_materialization_config.go`:
   - validate non-empty after trim,
+  - reject malformed glob patterns with deterministic error text,
   - normalize slashes and `filepath.Clean` for non-glob segments,
   - dedupe deterministically.
 - Keep contract simple: list is optional; empty means no additional exclusion policy.
@@ -119,7 +121,7 @@ Implementation details:
 - [ ] **Step 4: Re-run targeted tests and full engine package tests**
 
 Run:
-- `go test ./internal/attractor/engine -run 'TestLoadRunConfigFile_InputMaterializationReferenceExclude|TestNormalizeAndValidateReferenceExclude' -count=1`
+- `go test ./internal/attractor/engine -run 'TestLoadRunConfigFile_InputMaterializationReferenceExclude|TestNormalizeAndValidateReferenceExclude|TestNormalizeAndValidateReferenceExclude_InvalidGlobRejected' -count=1`
 - `go test ./internal/attractor/engine -run 'TestLoadRunConfigFile_InputMaterialization' -count=1`
 Expected: PASS.
 
@@ -242,9 +244,22 @@ func TestInputMaterialization_ReferenceExcludeSkipsDiscoveredArtifacts(t *testin
     if err != nil {
         t.Fatalf("materializeInputClosure: %v", err)
     }
-    if contains(manifest.ResolvedFiles, "node_modules/pkg/readme.md") {
+    if hasString(manifest.ResolvedFiles, "node_modules/pkg/readme.md") {
         t.Fatalf("excluded transitive path should not be resolved: %+v", manifest.ResolvedFiles)
     }
+}
+```
+
+Add a tiny test-local helper in `input_materialization_test.go` if one does not exist:
+
+```go
+func hasString(items []string, want string) bool {
+    for _, item := range items {
+        if item == want {
+            return true
+        }
+    }
+    return false
 }
 ```
 
@@ -443,7 +458,9 @@ Include:
 - [ ] **Step 5: Final commit for any post-validation nits**
 
 ```bash
-git add -A
+git status --short
+# Stage only files touched by this plan (no blanket add):
+git add internal/attractor/engine/config.go internal/attractor/engine/input_materialization_config.go internal/attractor/engine/input_materialization.go internal/attractor/engine/input_reference_scan.go internal/attractor/engine/config_test.go internal/attractor/engine/input_materialization_config_test.go internal/attractor/engine/input_materialization_test.go internal/attractor/engine/input_reference_scan_test.go internal/attractor/engine/input_manifest_contract_test.go internal/attractor/engine/input_materialization_integration_test.go internal/attractor/validate/create_runfile_template_guardrail_test.go docs/strongdm/attractor/attractor-spec.md skills/create-runfile/reference_run_template.yaml skills/create-runfile/SKILL.md demo/substack-run-v01.yaml
 git commit -m "chore: finalize deterministic input scoping validation fixes"
 ```
 
