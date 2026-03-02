@@ -30,12 +30,28 @@ func ListIgnoredFiles(dir string) ([]string, error) {
 // created as needed. Symlinks and non-regular files are skipped. Individual
 // file errors are silently skipped; the function returns an error only if the
 // ignored-file listing itself fails.
-func CopyIgnoredFiles(srcDir, dstDir string) error {
+//
+// Optional excludePrefixes (forward-slash form, e.g. ".ai/runs/") are matched
+// against each repo-relative path; any matching file is skipped. This allows
+// callers to exclude paths managed by other systems (e.g. the run-scoped
+// lineage system owns .ai/runs/ and must not be overwritten by a raw copy).
+func CopyIgnoredFiles(srcDir, dstDir string, excludePrefixes ...string) error {
 	files, err := ListIgnoredFiles(srcDir)
 	if err != nil {
 		return err
 	}
 	for _, rel := range files {
+		relFwd := filepath.ToSlash(rel)
+		excluded := false
+		for _, pfx := range excludePrefixes {
+			if strings.HasPrefix(relFwd, pfx) {
+				excluded = true
+				break
+			}
+		}
+		if excluded {
+			continue
+		}
 		src := filepath.Join(srcDir, rel)
 		dst := filepath.Join(dstDir, rel)
 		info, err := os.Lstat(src)

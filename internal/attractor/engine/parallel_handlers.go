@@ -589,6 +589,24 @@ func (h *FanInHandler) Execute(ctx context.Context, exec *Execution, node *model
 		}
 	}
 
+	// Propagate git-ignored files from the winner branch worktree into the
+	// main run worktree. FastForwardFFOnly only moves the git HEAD; it does
+	// not touch untracked/ignored files. Without this, any .env / secrets /
+	// build artifacts the winning branch worker wrote are silently dropped.
+	// .ai/runs/ is excluded here: it is managed by the lineage system below
+	// (mergeRunScopedFanInState) which merges it deterministically from all
+	// branches according to promote_run_scoped patterns.
+	if strings.TrimSpace(winner.WorktreeDir) != "" {
+		if err := gitutil.CopyIgnoredFiles(winner.WorktreeDir, exec.WorktreeDir, ".ai/runs/"); err != nil {
+			exec.Engine.appendProgress(map[string]any{
+				"event":      "fan_in_ignored_files_warning",
+				"node_id":    node.ID,
+				"winner_key": winner.BranchKey,
+				"warning":    err.Error(),
+			})
+		}
+	}
+
 	lineageRunHead := ""
 	if exec != nil && exec.Engine != nil {
 		var conflicts []InputSnapshotConflict
