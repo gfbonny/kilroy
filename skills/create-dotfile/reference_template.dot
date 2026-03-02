@@ -217,9 +217,9 @@ digraph reference_template {
 
         // Replace tool_command with project-specific test command.
         // Required evidence contract:
-        //   - Run integration scenarios required by .ai/definition_of_done.md
-        //   - Write evidence under .ai/test-evidence/latest/
-        //   - Write .ai/test-evidence/latest/manifest.json mapping each IT-*
+        //   - Run integration scenarios required by .ai/runs/$KILROY_RUN_ID/definition_of_done.md
+        //   - Write evidence under .ai/runs/$KILROY_RUN_ID/test-evidence/latest/
+        //   - Write .ai/runs/$KILROY_RUN_ID/test-evidence/latest/manifest.json mapping each IT-*
         //     scenario to status and artifact paths/types
         //   - Emit best-effort evidence and manifest entry even on failure
         verify_test [
@@ -232,7 +232,7 @@ digraph reference_template {
         // Confirm deliverables meet their interface contract (exports, endpoints,
         // CLI behavior, observable outputs); file existence alone is insufficient.
         // Also verify test evidence contract:
-        //   - .ai/test-evidence/latest/manifest.json exists and is parseable
+        //   - .ai/runs/$KILROY_RUN_ID/test-evidence/latest/manifest.json exists and is parseable
         //   - Manifest scenario IDs cover DoD integration scenarios
         //   - Each scenario has required artifact types (UI/mixed => screenshot;
         //     non-ui => text/structured evidence)
@@ -307,7 +307,7 @@ digraph reference_template {
         //   - Read branch review outputs via parallel_results.json +
         //     worktree_dir if available
         //   - Read .ai/runs/$KILROY_RUN_ID/implementation_log.md
-        //   - If .ai/test-evidence/latest/manifest.json exists:
+        //   - If .ai/runs/$KILROY_RUN_ID/test-evidence/latest/manifest.json exists:
         //       * read it first
         //       * for each failed or suspicious IT-* scenario, read listed artifacts
         //         that can materially improve diagnosis
