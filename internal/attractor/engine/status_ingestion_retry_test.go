@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -130,5 +132,50 @@ func TestCopyFirstValidFallbackStatus_RetryDecodeSucceedsAfterTransientCorruptio
 	}
 	if out.FailureReason != "transient decode retry success" {
 		t.Fatalf("failure_reason=%q want %q", out.FailureReason, "transient decode retry success")
+	}
+}
+
+func TestCopyFirstValidFallbackStatus_TypeMismatchIsInvalidPayload(t *testing.T) {
+	tmp := t.TempDir()
+	stageStatusPath := filepath.Join(tmp, "logs", "a", "status.json")
+	fallbackPath := filepath.Join(tmp, "status.json")
+
+	// Deterministic schema/type violation: status must be a string.
+	if err := os.WriteFile(fallbackPath, []byte(`{"status":123}`), 0o644); err != nil {
+		t.Fatalf("write invalid payload fallback: %v", err)
+	}
+
+	source, diagnostic, err := copyFirstValidFallbackStatus(stageStatusPath, []fallbackStatusPath{
+		{path: fallbackPath, source: statusSourceWorktree},
+	})
+	if err != nil {
+		t.Fatalf("copyFirstValidFallbackStatus: %v", err)
+	}
+	if source != statusSourceNone {
+		t.Fatalf("source=%q want empty", source)
+	}
+	if !strings.Contains(diagnostic, "invalid status payload") {
+		t.Fatalf("diagnostic=%q want mention of invalid status payload", diagnostic)
+	}
+	if strings.Contains(diagnostic, "corrupt status artifact") {
+		t.Fatalf("diagnostic=%q should not classify type mismatch as corrupt artifact", diagnostic)
+	}
+}
+
+func TestShouldRetryFallbackRead_DoesNotRetryMissing(t *testing.T) {
+	if shouldRetryFallbackRead(fallbackFailureModeMissing, os.ErrNotExist) {
+		t.Fatalf("missing fallback paths should not be retried")
+	}
+}
+
+func TestShouldRetryFallbackRead_RetriesUnexpectedEOF(t *testing.T) {
+	if !shouldRetryFallbackRead(fallbackFailureModeUnreadable, io.ErrUnexpectedEOF) {
+		t.Fatalf("unexpected EOF should remain retryable for unreadable fallback artifacts")
+	}
+}
+
+func TestShouldRetryFallbackRead_DoesNotRetryRegularUnreadable(t *testing.T) {
+	if shouldRetryFallbackRead(fallbackFailureModeUnreadable, errors.New("permission denied")) {
+		t.Fatalf("regular unreadable fallback artifacts should not be retried")
 	}
 }

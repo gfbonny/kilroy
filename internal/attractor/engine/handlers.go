@@ -313,7 +313,9 @@ func classifyFallbackDecodeError(raw []byte, err error) fallbackStatusFailureMod
 
 func shouldRetryFallbackRead(mode fallbackStatusFailureMode, err error) bool {
 	if mode == fallbackFailureModeMissing {
-		return true
+		// Missing fallback files are expected in normal flows; retrying them
+		// just adds latency before trying the next candidate path.
+		return false
 	}
 	return errors.Is(err, io.ErrUnexpectedEOF)
 }
@@ -328,10 +330,6 @@ func isCorruptFallbackPayload(raw []byte, err error) bool {
 	}
 	var syntaxErr *json.SyntaxError
 	if errors.As(err, &syntaxErr) {
-		return true
-	}
-	var typeErr *json.UnmarshalTypeError
-	if errors.As(err, &typeErr) {
 		return true
 	}
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
