@@ -67,6 +67,55 @@ type pendingResult struct {
 	err    error
 }
 
+type processLifecycle struct {
+	done chan struct{}
+	once sync.Once
+	mu   sync.Mutex
+	err  error
+}
+
+type turnWaitOutcome int
+
+const (
+	turnWaitCompleted turnWaitOutcome = iota
+	turnWaitContextDone
+	turnWaitProcessTerminated
+)
+
+func newProcessLifecycle() *processLifecycle {
+	return &processLifecycle{done: make(chan struct{})}
+}
+
+func (l *processLifecycle) finish(err error) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	if l.err == nil {
+		l.err = err
+	}
+	l.mu.Unlock()
+	l.once.Do(func() {
+		close(l.done)
+	})
+}
+
+func (l *processLifecycle) doneCh() <-chan struct{} {
+	if l == nil {
+		return nil
+	}
+	return l.done
+}
+
+func (l *processLifecycle) processError() error {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.err
+}
+
 type stdioTransport struct {
 	opts TransportOptions
 
@@ -77,6 +126,7 @@ type stdioTransport struct {
 	stdout   io.ReadCloser
 	stderr   io.ReadCloser
 	procDone chan struct{}
+	life     *processLifecycle
 
 	closed       bool
 	shuttingDown bool
@@ -148,6 +198,11 @@ func (t *stdioTransport) Stream(ctx context.Context, payload map[string]any) (*N
 
 		if err := t.ensureInitialized(sctx); err != nil {
 			errs <- err
+			return
+		}
+		life := t.currentProcessLifecycle()
+		if life == nil {
+			errs <- llm.NewNetworkError(providerName, "Codex app-server process is unavailable")
 			return
 		}
 
@@ -241,19 +296,20 @@ func (t *stdioTransport) Stream(ctx context.Context, payload map[string]any) (*N
 			}
 		}
 
-		select {
-		case <-completed:
+		outcome, waitErr := t.waitForTurnCompletion(requestCtx, completed, life)
+		if waitErr == nil {
 			return
-		case <-requestCtx.Done():
+		}
+		if outcome == turnWaitContextDone {
 			stateMu.Lock()
 			currentTurnID := turnID
 			stateMu.Unlock()
 			if currentTurnID != "" {
 				go t.interruptTurnBestEffort(threadID, currentTurnID)
 			}
-			errs <- llm.WrapContextError(providerName, requestCtx.Err())
-			return
 		}
+		errs <- waitErr
+		return
 	}()
 
 	return &NotificationStream{Notifications: events, Err: errs, closeFn: cancel}, nil
@@ -302,6 +358,10 @@ func (t *stdioTransport) Close() error {
 func (t *stdioTransport) runTurn(ctx context.Context, payload map[string]any) (map[string]any, error) {
 	if err := t.ensureInitialized(ctx); err != nil {
 		return nil, err
+	}
+	life := t.currentProcessLifecycle()
+	if life == nil {
+		return nil, llm.NewNetworkError(providerName, "Codex app-server process is unavailable")
 	}
 
 	turnTemplate, err := parseTurnStartPayload(payload)
@@ -375,16 +435,17 @@ func (t *stdioTransport) runTurn(ctx context.Context, payload map[string]any) (m
 		}
 	}
 
-	select {
-	case <-completed:
-	case <-requestCtx.Done():
-		stateMu.Lock()
-		currentTurnID := turnID
-		stateMu.Unlock()
-		if currentTurnID != "" {
-			go t.interruptTurnBestEffort(threadID, currentTurnID)
+	outcome, waitErr := t.waitForTurnCompletion(requestCtx, completed, life)
+	if waitErr != nil {
+		if outcome == turnWaitContextDone {
+			stateMu.Lock()
+			currentTurnID := turnID
+			stateMu.Unlock()
+			if currentTurnID != "" {
+				go t.interruptTurnBestEffort(threadID, currentTurnID)
+			}
 		}
-		return nil, llm.WrapContextError(providerName, requestCtx.Err())
+		return nil, waitErr
 	}
 
 	stateMu.Lock()
@@ -440,6 +501,35 @@ func (t *stdioTransport) interruptTimeout() time.Duration {
 		timeout = t.opts.ShutdownTimeout
 	}
 	return timeout
+}
+
+func (t *stdioTransport) currentProcessLifecycle() *processLifecycle {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.life
+}
+
+func (t *stdioTransport) processTerminationError(life *processLifecycle) error {
+	if life != nil {
+		if err := life.processError(); err != nil {
+			return err
+		}
+	}
+	return llm.NewNetworkError(providerName, "Codex app-server process exited")
+}
+
+func (t *stdioTransport) waitForTurnCompletion(ctx context.Context, completed <-chan struct{}, life *processLifecycle) (turnWaitOutcome, error) {
+	if life == nil {
+		return turnWaitProcessTerminated, llm.NewNetworkError(providerName, "Codex app-server process is unavailable")
+	}
+	select {
+	case <-completed:
+		return turnWaitCompleted, nil
+	case <-ctx.Done():
+		return turnWaitContextDone, llm.WrapContextError(providerName, ctx.Err())
+	case <-life.doneCh():
+		return turnWaitProcessTerminated, t.processTerminationError(life)
+	}
 }
 
 func (t *stdioTransport) ensureInitialized(ctx context.Context) error {
@@ -548,24 +638,26 @@ func (t *stdioTransport) spawnProcess() error {
 	}
 
 	procDone := make(chan struct{})
+	life := newProcessLifecycle()
 	t.mu.Lock()
 	t.cmd = cmd
 	t.stdin = stdin
 	t.stdout = stdout
 	t.stderr = stderr
 	t.procDone = procDone
+	t.life = life
 	t.stderrTail = ""
 	t.initialized = false
 	t.mu.Unlock()
 
-	go t.readStdout(cmd, stdout)
+	go t.readStdout(cmd, stdout, life)
 	go t.readStderr(stderr)
-	go t.waitForExit(cmd, procDone)
+	go t.waitForExit(cmd, procDone, life)
 
 	return nil
 }
 
-func (t *stdioTransport) readStdout(cmd *exec.Cmd, stdout io.Reader) {
+func (t *stdioTransport) readStdout(cmd *exec.Cmd, stdout io.Reader, life *processLifecycle) {
 	scanner := bufio.NewScanner(stdout)
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, maxJSONRPCLineSize)
@@ -583,7 +675,7 @@ func (t *stdioTransport) readStdout(cmd *exec.Cmd, stdout io.Reader) {
 		t.handleIncomingMessage(message)
 	}
 	if err := scanner.Err(); err != nil {
-		t.handleUnexpectedProcessTermination(llm.NewNetworkError(providerName, fmt.Sprintf("Codex stdout read error: %v", err)))
+		t.handleUnexpectedProcessTermination(life, llm.NewNetworkError(providerName, fmt.Sprintf("Codex stdout read error: %v", err)))
 	}
 	_ = cmd
 }
@@ -613,7 +705,7 @@ func (t *stdioTransport) appendStderrTail(chunk string) {
 	t.mu.Unlock()
 }
 
-func (t *stdioTransport) waitForExit(cmd *exec.Cmd, done chan struct{}) {
+func (t *stdioTransport) waitForExit(cmd *exec.Cmd, done chan struct{}, life *processLifecycle) {
 	err := cmd.Wait()
 	t.mu.Lock()
 	shuttingDown := t.shuttingDown
@@ -625,11 +717,22 @@ func (t *stdioTransport) waitForExit(cmd *exec.Cmd, done chan struct{}) {
 		t.stdout = nil
 		t.stderr = nil
 		t.procDone = nil
+		t.life = nil
 		t.initialized = false
 	}
 	t.shuttingDown = false
 	t.mu.Unlock()
 	close(done)
+
+	exitMessage := "Codex app-server process exited"
+	if err != nil {
+		exitMessage = fmt.Sprintf("Codex app-server process exited: %v", err)
+	}
+	if stderrTail != "" {
+		exitMessage = exitMessage + ". stderr: " + stderrTail
+	}
+	exitErr := llm.NewNetworkError(providerName, exitMessage)
+	life.finish(exitErr)
 
 	if shuttingDown || closed {
 		return
@@ -641,10 +744,11 @@ func (t *stdioTransport) waitForExit(cmd *exec.Cmd, done chan struct{}) {
 	if stderrTail != "" {
 		message = message + ". stderr: " + stderrTail
 	}
-	t.handleUnexpectedProcessTermination(llm.NewNetworkError(providerName, message))
+	t.handleUnexpectedProcessTermination(life, llm.NewNetworkError(providerName, message))
 }
 
-func (t *stdioTransport) handleUnexpectedProcessTermination(err error) {
+func (t *stdioTransport) handleUnexpectedProcessTermination(life *processLifecycle, err error) {
+	life.finish(err)
 	t.rejectAllPending(err)
 }
 

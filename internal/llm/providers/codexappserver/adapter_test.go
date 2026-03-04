@@ -317,6 +317,30 @@ func TestNormalizeErrorInfo_UnwrapsJSONMessage(t *testing.T) {
 	}
 }
 
+func TestNormalizeErrorInfo_IgnoresSymbolicStatus(t *testing.T) {
+	info := normalizeErrorInfo(map[string]any{
+		"error": map[string]any{
+			"status":  "RESOURCE_EXHAUSTED",
+			"message": "rate limited",
+		},
+	})
+	if info.HasStatus {
+		t.Fatalf("expected symbolic status to be ignored, got status=%d", info.Status)
+	}
+}
+
+func TestNormalizeErrorInfo_ParsesNumericStatusString(t *testing.T) {
+	info := normalizeErrorInfo(map[string]any{
+		"error": map[string]any{
+			"status":  "429",
+			"message": "rate limited",
+		},
+	})
+	if !info.HasStatus || info.Status != 429 {
+		t.Fatalf("expected HTTP status 429, got hasStatus=%v status=%d", info.HasStatus, info.Status)
+	}
+}
+
 func TestParseToolCall_NormalizesArguments(t *testing.T) {
 	tool := parseToolCall(`{"id":"call_1","name":"search","arguments":{"q":"foo"}}`)
 	if tool == nil {

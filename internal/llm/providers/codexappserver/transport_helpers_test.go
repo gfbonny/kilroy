@@ -577,3 +577,54 @@ func TestTransport_HelperProcess(t *testing.T) {
 		return
 	}
 }
+
+func TestProcessLifecycle_FinishIsIdempotent(t *testing.T) {
+	life := newProcessLifecycle()
+	firstErr := errors.New("first exit")
+	secondErr := errors.New("second exit")
+
+	life.finish(firstErr)
+	life.finish(secondErr)
+
+	select {
+	case <-life.doneCh():
+	default:
+		t.Fatalf("expected lifecycle done channel to close")
+	}
+	if !errors.Is(life.processError(), firstErr) {
+		t.Fatalf("expected first process error to win, got %v", life.processError())
+	}
+}
+
+func TestTransport_WaitForTurnCompletion_UnblocksOnProcessExit(t *testing.T) {
+	tp := &stdioTransport{}
+	life := newProcessLifecycle()
+	completed := make(chan struct{})
+	resultCh := make(chan struct {
+		outcome turnWaitOutcome
+		err     error
+	}, 1)
+
+	go func() {
+		outcome, err := tp.waitForTurnCompletion(context.Background(), completed, life)
+		resultCh <- struct {
+			outcome turnWaitOutcome
+			err     error
+		}{outcome: outcome, err: err}
+	}()
+
+	processErr := llm.NewNetworkError(providerName, "Codex app-server exited unexpectedly")
+	life.finish(processErr)
+
+	select {
+	case result := <-resultCh:
+		if result.outcome != turnWaitProcessTerminated {
+			t.Fatalf("wait outcome: got %v want %v", result.outcome, turnWaitProcessTerminated)
+		}
+		if !errors.Is(result.err, processErr) {
+			t.Fatalf("wait error: got %v want %v", result.err, processErr)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("timed out waiting for process-exit unblock")
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -445,11 +446,15 @@ func normalizeErrorInfo(raw any) normalizedErrorInfo {
 	}
 
 	if statusVal, ok := source["status"]; ok {
-		info.Status = asInt(statusVal, 0)
-		info.HasStatus = true
+		if status, hasStatus := parseHTTPStatus(statusVal); hasStatus {
+			info.Status = status
+			info.HasStatus = true
+		}
 	} else if statusVal, ok := root["status"]; ok {
-		info.Status = asInt(statusVal, 0)
-		info.HasStatus = true
+		if status, hasStatus := parseHTTPStatus(statusVal); hasStatus {
+			info.Status = status
+			info.HasStatus = true
+		}
 	}
 
 	info.Code = firstNonEmpty(
@@ -494,6 +499,59 @@ func unwrapJSONMessage(message string) string {
 		return detail
 	}
 	return message
+}
+
+func parseHTTPStatus(raw any) (int, bool) {
+	switch value := raw.(type) {
+	case int:
+		return normalizeHTTPStatus(value)
+	case int8:
+		return normalizeHTTPStatus(int(value))
+	case int16:
+		return normalizeHTTPStatus(int(value))
+	case int32:
+		return normalizeHTTPStatus(int(value))
+	case int64:
+		return normalizeHTTPStatus(int(value))
+	case uint:
+		return normalizeHTTPStatus(int(value))
+	case uint8:
+		return normalizeHTTPStatus(int(value))
+	case uint16:
+		return normalizeHTTPStatus(int(value))
+	case uint32:
+		return normalizeHTTPStatus(int(value))
+	case uint64:
+		return normalizeHTTPStatus(int(value))
+	case float32:
+		return normalizeHTTPStatus(int(value))
+	case float64:
+		return normalizeHTTPStatus(int(value))
+	case json.Number:
+		if parsed, err := value.Int64(); err == nil {
+			return normalizeHTTPStatus(int(parsed))
+		}
+		return 0, false
+	case string:
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return 0, false
+		}
+		parsed, err := strconv.Atoi(trimmed)
+		if err != nil {
+			return 0, false
+		}
+		return normalizeHTTPStatus(parsed)
+	default:
+		return 0, false
+	}
+}
+
+func normalizeHTTPStatus(status int) (int, bool) {
+	if status < 100 || status > 599 {
+		return 0, false
+	}
+	return status, true
 }
 
 func isTransportFailure(code, message string) bool {
