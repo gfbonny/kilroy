@@ -53,7 +53,7 @@ digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
 
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do the thing"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="do the thing"]
   fix [shape=parallelogram, tool_command="echo fixed > fixed.txt"]
 
   start -> a
@@ -137,7 +137,7 @@ digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
 
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do the thing"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="do the thing"]
 
   start -> a -> exit
 }
@@ -236,7 +236,7 @@ digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
 
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do the thing"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="do the thing"]
   fix [shape=parallelogram, tool_command="echo fixed > fixed.txt"]
 
   start -> a
@@ -343,7 +343,7 @@ digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
 
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do the thing"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="do the thing"]
   fix [shape=parallelogram, tool_command="echo fixed > fixed.txt"]
 
   start -> a
@@ -447,7 +447,7 @@ digraph G {
   graph [goal="status contract prompt preamble"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do the thing"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="do the thing"]
   start -> a -> exit
 }
 `)

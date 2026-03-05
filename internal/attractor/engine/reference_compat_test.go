@@ -18,7 +18,7 @@ func TestPrepare_ReferenceStyleDotfile(t *testing.T) {
 
 		Work [
 			shape=box,
-			llm_provider=openai, llm_model="gpt-5.2",
+			llm_provider=openai, llm_model="gpt-5.3-codex",
 			llm_prompt="Implement the thing. Goal: $goal\nWrite status.json: outcome=success",
 			timeout="300"
 		]

@@ -380,7 +380,7 @@ digraph G {
   graph [goal="preflight smoke"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2-codex, prompt="hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="hi"]
   start -> a -> exit
 }
 DOT

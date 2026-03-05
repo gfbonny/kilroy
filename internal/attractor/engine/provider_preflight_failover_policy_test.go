@@ -10,7 +10,7 @@ import (
 func TestUsedAPIProviders_OmittedFailoverDoesNotIncludeImplicitTargets(t *testing.T) {
 	g, err := dot.Parse([]byte(`digraph G {
   start [shape=Mdiamond]
-  a [shape=box, llm_provider="openai", llm_model="gpt-5.2", prompt="x"]
+  a [shape=box, llm_provider="openai", llm_model="gpt-5.3-codex", prompt="x"]
   exit [shape=Msquare]
   start -> a -> exit
 }`))

@@ -21,8 +21,8 @@ digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
   a [shape=diamond]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  c [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex]
+  c [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex]
   start -> a
   a -> b [condition="outcome=success"]
   a -> c [condition="outcome=fail"]
@@ -79,8 +79,8 @@ digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
   a [shape=diamond]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  c [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex]
+  c [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex]
   start -> a
   a -> b [condition="outcome=success"]
   a -> c [condition="outcome=fail"]

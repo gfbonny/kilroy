@@ -105,7 +105,7 @@ digraph Simple {
   graph [
     goal="Run tests and summarize results",
     model_stylesheet="
-      * { llm_provider: openai; llm_model: gpt-5.2-codex; }
+      * { llm_provider: openai; llm_model: gpt-5.3-codex; }
     "
   ]
 
@@ -420,7 +420,7 @@ kilroy attractor ingest [--output <file.dot>] [--model <model>] [--skill <skill.
 kilroy attractor serve [--addr <host:port>]
 ```
 
-`--force-model` can be passed multiple times (for example, `--force-model openai=gpt-5.2-codex --force-model google=gemini-3-pro-preview`) to override node model selection by provider.
+`--force-model` can be passed multiple times (for example, `--force-model openai=gpt-5.3-codex --force-model google=gemini-3-pro-preview`) to override node model selection by provider.
 Supported providers are `openai`, `anthropic`, `google`, `kimi`, `zai`, and `minimax` (aliases accepted).
 
 Additional ingest flags:

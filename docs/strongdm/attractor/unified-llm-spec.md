@@ -117,7 +117,7 @@ When a request specifies a `provider` field, the Client routes to that adapter. 
 
 #### Model String Convention
 
-Model identifiers are the provider's native string (e.g., `"gpt-5.2"`, `"claude-opus-4-6"`, `"gemini-3-flash-preview"`). The library does not invent its own model namespace. This avoids the maintenance burden of mapping tables and ensures new models work immediately without library updates. If a model string could be ambiguous (multiple providers support it), the `provider` field on the request disambiguates.
+Model identifiers are the provider's native string (e.g., `"gpt-5.3-codex"`, `"claude-opus-4-6"`, `"gemini-3-flash-preview"`). The library does not invent its own model namespace. This avoids the maintenance burden of mapping tables and ensures new models work immediately without library updates. If a model string could be ambiguous (multiple providers support it), the `provider` field on the request disambiguates.
 
 ### 2.3 Middleware / Interceptor Pattern
 
@@ -297,8 +297,8 @@ MODELS = [
 
     ModelInfo(id="gpt-5.3-codex",                 provider="openai",    display_name="GPT-5.3 Codex",     context_window=1047576, supports_tools=true, supports_vision=true, supports_reasoning=true),
     ModelInfo(id="gpt-5.3-codex-spark",           provider="openai",    display_name="GPT-5.3 Codex Spark", context_window=128000,  supports_tools=true, supports_vision=false, supports_reasoning=true),
-    ModelInfo(id="gpt-5.2",                       provider="openai",    display_name="GPT-5.2",           context_window=1047576, supports_tools=true, supports_vision=true, supports_reasoning=true),
-    ModelInfo(id="gpt-5.2-codex",                 provider="openai",    display_name="GPT-5.2 Codex",     context_window=1047576, supports_tools=true, supports_vision=true, supports_reasoning=true),
+    ModelInfo(id="gpt-5.3-codex",                 provider="openai",    display_name="GPT-5.3 Codex",     context_window=1047576, supports_tools=true, supports_vision=true, supports_reasoning=true),
+    ModelInfo(id="gpt-5.3-codex",                 provider="openai",    display_name="GPT-5.3 Codex",     context_window=1047576, supports_tools=true, supports_vision=true, supports_reasoning=true),
 
     -- ==========================================================
     -- Gemini -- prefer Gemini 3 Pro Preview for top quality
@@ -963,7 +963,7 @@ Structured output generation with schema validation:
 
 ```
 result = generate_object(
-    model = "gpt-5.2",
+    model = "gpt-5.3-codex",
     prompt = "Extract the person's name and age from: 'Alice is 30 years old'",
     schema = {
         "type": "object",
@@ -995,7 +995,7 @@ Streaming structured output with partial object updates:
 
 ```
 result = stream_object(
-    model = "gpt-5.2",
+    model = "gpt-5.3-codex",
     prompt = "Generate a list of 5 recipes",
     schema = recipes_schema
 )
@@ -1896,7 +1896,7 @@ PRINT(response.usage)
 
 ```
 result = generate_object(
-    model = "gpt-5.2",
+    model = "gpt-5.3-codex",
     prompt = "Extract the person's name and age from: 'Alice is 30 years old'",
     schema = {
         "type": "object",
@@ -1917,7 +1917,7 @@ PRINT(result.output)    -- { "name": "Alice", "age": 30 }
 TRY:
     result = generate(model = "claude-opus-4-6", prompt = "...")
 CATCH ProviderError:
-    result = generate(model = "gpt-5.2", provider = "openai", prompt = "...")
+    result = generate(model = "gpt-5.3-codex", provider = "openai", prompt = "...")
 ```
 
 ### B.6 Middleware for Logging
@@ -2140,7 +2140,7 @@ ASSERT result.text is not empty
 
 -- 5. Structured output
 result = generate_object(
-    model = "gpt-5.2",
+    model = "gpt-5.3-codex",
     prompt = "Extract: Alice is 30 years old",
     schema = {"type":"object", "properties":{"name":{"type":"string"},"age":{"type":"integer"}}, "required":["name","age"]}
 )

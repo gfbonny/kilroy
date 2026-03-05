@@ -53,7 +53,7 @@ func CatalogCoversProvider(c *Catalog, provider string) bool {
 
 // CatalogHasProviderModel returns true when the catalog contains the given
 // provider/model pair. It accepts either canonical model IDs
-// ("openai/gpt-5.2-codex") or provider-relative IDs ("gpt-5.2-codex").
+// ("openai/gpt-5.3-codex") or provider-relative IDs ("gpt-5.3-codex").
 func CatalogHasProviderModel(c *Catalog, provider, modelID string) bool {
 	if c == nil || c.Models == nil {
 		return false

@@ -50,7 +50,7 @@ digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
 
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="write status"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="write status"]
   start -> a -> exit
 }
 `)

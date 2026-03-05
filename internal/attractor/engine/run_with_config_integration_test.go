@@ -54,7 +54,7 @@ digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="say hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="say hi"]
   start -> a -> exit
 }
 `)
@@ -89,7 +89,7 @@ digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="say hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="say hi"]
   start -> a -> exit
 }
 `)
@@ -135,7 +135,7 @@ digraph G {
   graph [goal="preflight provider checks"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="say hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="say hi"]
   start -> a -> exit
 }
 `)
@@ -326,7 +326,7 @@ digraph G {
   graph [goal="status contract env injected"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="say hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="say hi"]
   start -> a -> exit
 }
 `)
@@ -457,7 +457,7 @@ digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="say hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="say hi"]
   start -> a -> exit
 }
 `)
@@ -677,7 +677,7 @@ func TestRunWithConfig_APIBackend_AgentLoop_WritesAgentEventsAndPassesReasoningE
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
   "id": "resp_1",
-  "model": "gpt-5.2",
+  "model": "gpt-5.3-codex",
   "output": [{"type": "message", "content": [{"type":"output_text", "text":"Hello"}]}],
   "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
 }`))
@@ -703,7 +703,7 @@ digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, reasoning_effort=low, auto_status=true, prompt="say hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, reasoning_effort=low, auto_status=true, prompt="say hi"]
   start -> a -> exit
 }
 `)
@@ -742,7 +742,7 @@ func TestRunWithConfig_APIBackend_OneShot_WritesRequestAndResponseArtifacts(t *t
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
   "id": "resp_1",
-  "model": "gpt-5.2",
+  "model": "gpt-5.3-codex",
   "output": [{"type": "message", "content": [{"type":"output_text", "text":"Hello"}]}],
   "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
 }`))
@@ -768,7 +768,7 @@ digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, codergen_mode=one_shot, auto_status=true, prompt="say hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, codergen_mode=one_shot, auto_status=true, prompt="say hi"]
   start -> a -> exit
 }
 `)
@@ -876,7 +876,7 @@ func TestRunWithConfig_APIBackend_AutoStatusFalse_FailsWhenNoStatusWritten(t *te
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
   "id": "resp_1",
-  "model": "gpt-5.2",
+  "model": "gpt-5.3-codex",
   "output": [{"type": "message", "content": [{"type":"output_text", "text":"Hello"}]}],
   "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
 }`))
@@ -903,7 +903,7 @@ digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
 
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, codergen_mode=one_shot, prompt="say hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, codergen_mode=one_shot, prompt="say hi"]
   fix [shape=parallelogram, tool_command="echo fixed > fixed.txt"]
 
   start -> a
@@ -961,7 +961,7 @@ func initTestRepo(t *testing.T) string {
 func writePinnedCatalog(t *testing.T) string {
 	t.Helper()
 	pinned := filepath.Join(t.TempDir(), "pinned.json")
-	if err := os.WriteFile(pinned, []byte(`{"data":[{"id":"openai/gpt-5.2"}]}`), 0o644); err != nil {
+	if err := os.WriteFile(pinned, []byte(`{"data":[{"id":"openai/gpt-5.3-codex"}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return pinned

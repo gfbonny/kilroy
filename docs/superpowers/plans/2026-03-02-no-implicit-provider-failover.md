@@ -240,7 +240,7 @@ func TestCodergenRouter_WithFailoverText_OmittedFailoverDoesNotFallback(t *testi
     }
     r := NewCodergenRouterWithRuntimes(cfg, nil, runtimes)
     attempted := []string{}
-    _, used, err := r.withFailoverText(context.Background(), nil, &model.Node{ID: "n1"}, llm.NewClient(), "openai", "gpt-5.2-codex", func(provider, model string) (string, error) {
+    _, used, err := r.withFailoverText(context.Background(), nil, &model.Node{ID: "n1"}, llm.NewClient(), "openai", "gpt-5.3-codex", func(provider, model string) (string, error) {
         attempted = append(attempted, provider)
         return "", llm.NewNetworkError(provider, "synthetic outage")
     })
@@ -302,7 +302,7 @@ Add a test that configures only one provider with no `Failover` and asserts pref
 func TestUsedAPIProviders_OmittedFailoverDoesNotIncludeImplicitTargets(t *testing.T) {
     g, err := dot.Parse([]byte(`digraph G {
       start [shape=Mdiamond]
-      a [shape=box, llm_provider="openai", llm_model="gpt-5.2", prompt="x"]
+      a [shape=box, llm_provider="openai", llm_model="gpt-5.3-codex", prompt="x"]
       exit [shape=Msquare]
       start -> a -> exit
     }`))

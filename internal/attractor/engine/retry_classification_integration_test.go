@@ -38,7 +38,7 @@ digraph G {
   graph [goal="test stage retry gate", default_max_retry="3"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider="openai", llm_model="gpt-5.2", prompt="do work", max_retries="3"]
+  a [shape=box, llm_provider="openai", llm_model="gpt-5.3-codex", prompt="do work", max_retries="3"]
   start -> a
   a -> exit [condition="outcome=success"]
   a -> exit
@@ -81,7 +81,7 @@ digraph G {
   graph [goal="test loop restart gate", default_max_retry="3", max_restarts="5"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider="openai", llm_model="gpt-5.2", prompt="do work", max_retries="3"]
+  a [shape=box, llm_provider="openai", llm_model="gpt-5.3-codex", prompt="do work", max_retries="3"]
   check [shape=diamond]
   start -> a
   a -> check

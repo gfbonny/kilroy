@@ -40,7 +40,7 @@ func TestSession_MaxToolRoundsPerInput_StopsLoop(t *testing.T) {
 	}
 	c.Register(f)
 
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.3-codex"), NewLocalExecutionEnvironment(dir), SessionConfig{
 		MaxToolRoundsPerInput: 2,
 	})
 	if err != nil {
@@ -64,7 +64,7 @@ func TestSession_LifecycleEvents_BracketSession(t *testing.T) {
 	c := llm.NewClient()
 	c.Register(&fakeAdapter{name: "openai"})
 
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{})
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.3-codex"), NewLocalExecutionEnvironment(dir), SessionConfig{})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestSession_EventSystem_NaturalCompletion_EmitsUserAndAssistantTextEventsIn
 		},
 	})
 
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{})
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.3-codex"), NewLocalExecutionEnvironment(dir), SessionConfig{})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestSession_EventSystem_ToolCall_EmitsStartDeltaEnd(t *testing.T) {
 		},
 	})
 
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{})
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.3-codex"), NewLocalExecutionEnvironment(dir), SessionConfig{})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestSession_MalformedToolArgs_StillPairsToolResultsByCallID(t *testing.T) {
 	}
 	c.Register(f)
 
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{})
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.3-codex"), NewLocalExecutionEnvironment(dir), SessionConfig{})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestSession_RepeatedMalformedToolCalls_FailsFast(t *testing.T) {
 	}
 	c.Register(f)
 
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.3-codex"), NewLocalExecutionEnvironment(dir), SessionConfig{
 		MaxToolRoundsPerInput:          50,
 		MaxTurns:                       50,
 		RepeatedMalformedToolCallLimit: 2,
@@ -355,7 +355,7 @@ func TestSession_MaxTurns_StopsAcrossRoundsAndEmitsEvent(t *testing.T) {
 	}
 	c.Register(f)
 
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.3-codex"), NewLocalExecutionEnvironment(dir), SessionConfig{
 		MaxTurns: 1,
 	})
 	if err != nil {
@@ -397,7 +397,7 @@ func TestSession_MultipleSequentialInputs_Work(t *testing.T) {
 	}
 	c.Register(f)
 
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{})
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.3-codex"), NewLocalExecutionEnvironment(dir), SessionConfig{})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -452,7 +452,7 @@ func TestSession_Steer_IsInjectedAfterCurrentToolRound(t *testing.T) {
 	}
 	c.Register(f)
 
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{})
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.3-codex"), NewLocalExecutionEnvironment(dir), SessionConfig{})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -568,7 +568,7 @@ func TestSession_ReasoningEffort_PassedThroughAndCanChange(t *testing.T) {
 	}
 	c.Register(f)
 
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.3-codex"), NewLocalExecutionEnvironment(dir), SessionConfig{
 		ReasoningEffort: "low",
 	})
 	if err != nil {
@@ -734,7 +734,7 @@ func TestSession_AbortSignal_ClosesSessionAndEmitsSessionEnd(t *testing.T) {
 	}
 	c.Register(f)
 
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{})
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.3-codex"), NewLocalExecutionEnvironment(dir), SessionConfig{})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -820,7 +820,7 @@ func TestSession_CustomToolRegistration_OverridesExistingTool(t *testing.T) {
 	c := llm.NewClient()
 	c.Register(&fakeAdapter{name: "openai"})
 
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{})
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.3-codex"), NewLocalExecutionEnvironment(dir), SessionConfig{})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -905,7 +905,7 @@ func TestSession_AuthenticationError_ClosesSession(t *testing.T) {
 	a := &errAdapter{name: "openai", err: llm.ErrorFromHTTPStatus("openai", 401, "bad key", nil, nil)}
 	c.Register(a)
 
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{})
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.3-codex"), NewLocalExecutionEnvironment(dir), SessionConfig{})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -943,7 +943,7 @@ func TestSession_ContextLengthError_EmitsWarningAndClosesSession(t *testing.T) {
 	a := &errAdapter{name: "openai", err: llm.ErrorFromHTTPStatus("openai", 413, "too large", nil, nil)}
 	c.Register(a)
 
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{})
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.3-codex"), NewLocalExecutionEnvironment(dir), SessionConfig{})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -981,7 +981,7 @@ func TestSession_LLMError_EmitsErrorEvent(t *testing.T) {
 	c.Register(a)
 
 	policy := llm.RetryPolicy{MaxRetries: 0}
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.3-codex"), NewLocalExecutionEnvironment(dir), SessionConfig{
 		LLMRetryPolicy: &policy,
 	})
 	if err != nil {
@@ -1029,7 +1029,7 @@ func TestSession_LLMTransientErrors_RetryWithBackoff(t *testing.T) {
 		Jitter:            false,
 	}
 
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.3-codex"), NewLocalExecutionEnvironment(dir), SessionConfig{
 		LLMRetryPolicy: &policy,
 		LLMSleep:       sleep,
 	})
@@ -1073,7 +1073,7 @@ func TestSession_Subagents_SpawnWaitClose_AndDepthLimit(t *testing.T) {
 	}
 	c.Register(f)
 
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.3-codex"), NewLocalExecutionEnvironment(dir), SessionConfig{
 		MaxSubagentDepth: 1,
 	})
 	if err != nil {
@@ -1150,7 +1150,7 @@ func TestSession_ShellTool_UsesDefaultTimeoutAndAllowsOverride(t *testing.T) {
 	c.Register(f)
 
 	env := &captureEnv{wd: "/tmp"}
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), env, SessionConfig{})
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.3-codex"), env, SessionConfig{})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -1186,7 +1186,7 @@ func TestSession_ShellTool_UsesDefaultTimeoutAndAllowsOverride(t *testing.T) {
 	}
 	c2 := llm.NewClient()
 	c2.Register(f2)
-	sess2, err := NewSession(c2, NewOpenAIProfile("gpt-5.2"), env2, SessionConfig{})
+	sess2, err := NewSession(c2, NewOpenAIProfile("gpt-5.3-codex"), env2, SessionConfig{})
 	if err != nil {
 		t.Fatalf("NewSession2: %v", err)
 	}
@@ -1222,7 +1222,7 @@ func TestSession_ShellTool_CapsTimeoutToMaxCommandTimeoutMS(t *testing.T) {
 	c.Register(f)
 
 	env := &captureEnv{wd: "/tmp"}
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), env, SessionConfig{
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.3-codex"), env, SessionConfig{
 		MaxCommandTimeoutMS: 5000,
 	})
 	if err != nil {
@@ -1262,7 +1262,7 @@ func TestSession_ShellTool_TimeoutAppendsMessageToToolResult(t *testing.T) {
 	c.Register(f)
 
 	env := &timeoutEnv{wd: dir}
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), env, SessionConfig{})
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.3-codex"), env, SessionConfig{})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}

@@ -68,7 +68,7 @@ func TestCodergenRouter_WithFailoverText_FailsOverToDifferentProvider(t *testing
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	txt, used, err := r.withFailoverText(ctx, nil, node, client, "openai", "gpt-5.2-codex", func(prov string, mid string) (string, error) {
+	txt, used, err := r.withFailoverText(ctx, nil, node, client, "openai", "gpt-5.3-codex", func(prov string, mid string) (string, error) {
 		if prov == "openai" {
 			return "", fmt.Errorf("synthetic openai failure")
 		}
@@ -131,7 +131,7 @@ func TestCodergenRouter_WithFailoverText_AppliesForceModelToFailoverProvider(t *
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	txt, used, err := r.withFailoverText(ctx, execCtx, node, client, "openai", "gpt-5.2-codex", func(prov string, mid string) (string, error) {
+	txt, used, err := r.withFailoverText(ctx, execCtx, node, client, "openai", "gpt-5.3-codex", func(prov string, mid string) (string, error) {
 		if prov == "openai" {
 			return "", fmt.Errorf("synthetic openai failure")
 		}
@@ -220,7 +220,7 @@ func TestCodergenRouter_WithFailoverText_ExplicitEmptyFailoverDoesNotFallback(t 
 	client.Register(&okAdapter{name: "anthropic"})
 
 	attemptedAnthropic := false
-	_, _, err = r.withFailoverText(context.Background(), nil, &model.Node{ID: "n1"}, client, "openai", "gpt-5.2-codex", func(prov string, mid string) (string, error) {
+	_, _, err = r.withFailoverText(context.Background(), nil, &model.Node{ID: "n1"}, client, "openai", "gpt-5.3-codex", func(prov string, mid string) (string, error) {
 		_ = mid
 		if prov == "anthropic" {
 			attemptedAnthropic = true
@@ -248,7 +248,7 @@ func TestCodergenRouter_WithFailoverText_OmittedFailoverDoesNotFallback(t *testi
 	r := NewCodergenRouterWithRuntimes(cfg, nil, runtimes)
 
 	attempted := []string{}
-	_, used, err := r.withFailoverText(context.Background(), nil, &model.Node{ID: "n1"}, llm.NewClient(), "openai", "gpt-5.2-codex", func(provider, model string) (string, error) {
+	_, used, err := r.withFailoverText(context.Background(), nil, &model.Node{ID: "n1"}, llm.NewClient(), "openai", "gpt-5.3-codex", func(provider, model string) (string, error) {
 		_ = model
 		attempted = append(attempted, provider)
 		return "", llm.NewNetworkError(provider, "synthetic outage")
@@ -285,7 +285,7 @@ func TestPickFailoverModelFromRuntime_ZAIDoesNotRotateCatalogVariants(t *testing
 			"z-ai/glm-4.5v":         {Provider: "zai"},
 		},
 	}
-	got := pickFailoverModelFromRuntime("zai", rt, catalog, "gpt-5.2-codex")
+	got := pickFailoverModelFromRuntime("zai", rt, catalog, "gpt-5.3-codex")
 	if got != "glm-4.7" {
 		t.Fatalf("expected stable zai model glm-4.7, got %q", got)
 	}
@@ -305,7 +305,7 @@ func TestPickFailoverModelFromRuntime_KimiPinnedToK2_5(t *testing.T) {
 	rt := map[string]ProviderRuntime{
 		"kimi": {Key: "kimi"},
 	}
-	got := pickFailoverModelFromRuntime("kimi", rt, nil, "gpt-5.2-codex")
+	got := pickFailoverModelFromRuntime("kimi", rt, nil, "gpt-5.3-codex")
 	if got != "kimi-k2.5" {
 		t.Fatalf("expected stable kimi model kimi-k2.5, got %q", got)
 	}

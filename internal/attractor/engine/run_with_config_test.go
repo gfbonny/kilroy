@@ -18,7 +18,7 @@ digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="hi"]
   start -> a -> exit
 }
 `)
@@ -140,7 +140,7 @@ func TestRunWithConfig_RejectsRealProfileWhenProviderPathEnvIsSet(t *testing.T) 
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="hi"]
   start -> a -> exit
 }
 `)
@@ -179,7 +179,7 @@ func TestRunWithConfig_ProfilePolicyFailure_WritesPreflightReport(t *testing.T) 
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="hi"]
   start -> a -> exit
 }
 `)
@@ -345,7 +345,7 @@ func TestPreflightWithConfig_StillEnforcesRunPolicyGates(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="hi"]
   start -> a -> exit
 }
 `)

@@ -53,7 +53,7 @@ digraph G {
   graph [goal="test heartbeat"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="say hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="say hi"]
   start -> a -> exit
 }
 `)
@@ -143,7 +143,7 @@ func TestRunWithConfig_APIBackend_HeartbeatEmitsDuringAgentLoop(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{
   "id": "resp_1",
-  "model": "gpt-5.2",
+  "model": "gpt-5.3-codex",
   "output": [{"type":"function_call","id":"call_1","name":"shell","arguments":"{\"command\":\"sleep 1\"}"}],
   "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
 }`))
@@ -155,7 +155,7 @@ func TestRunWithConfig_APIBackend_HeartbeatEmitsDuringAgentLoop(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
   "id": "resp_2",
-  "model": "gpt-5.2",
+  "model": "gpt-5.3-codex",
   "output": [{"type":"message","content":[{"type":"output_text","text":"done"}]}],
   "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
 }`))
@@ -182,7 +182,7 @@ digraph G {
   graph [goal="test api heartbeat"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, auto_status=true, prompt="run a command"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, auto_status=true, prompt="run a command"]
   start -> a -> exit
 }
 `)
@@ -250,28 +250,28 @@ func TestRunWithConfig_APIBackend_SessionEventsPreventFalseStallWithoutHeartbeat
 		case 1:
 			_, _ = w.Write([]byte(`{
   "id": "resp_1",
-  "model": "gpt-5.2",
+  "model": "gpt-5.3-codex",
   "output": [{"type":"function_call","id":"call_1","name":"shell","arguments":"{\"command\":\"sleep 0.3\"}"}],
   "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
 }`))
 		case 2:
 			_, _ = w.Write([]byte(`{
   "id": "resp_2",
-  "model": "gpt-5.2",
+  "model": "gpt-5.3-codex",
   "output": [{"type":"function_call","id":"call_2","name":"shell","arguments":"{\"command\":\"sleep 0.3\"}"}],
   "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
 }`))
 		case 3:
 			_, _ = w.Write([]byte(`{
   "id": "resp_3",
-  "model": "gpt-5.2",
+  "model": "gpt-5.3-codex",
   "output": [{"type":"function_call","id":"call_3","name":"shell","arguments":"{\"command\":\"sleep 0.3\"}"}],
   "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
 }`))
 		default:
 			_, _ = w.Write([]byte(`{
   "id": "resp_4",
-  "model": "gpt-5.2",
+  "model": "gpt-5.3-codex",
   "output": [{"type":"message","content":[{"type":"output_text","text":"done"}]}],
   "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
 }`))
@@ -307,7 +307,7 @@ digraph G {
   graph [goal="session events should prevent false stall timeout"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, auto_status=true, prompt="run a few commands"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, auto_status=true, prompt="run a few commands"]
   start -> a -> exit
 }
 `)
@@ -397,7 +397,7 @@ digraph G {
   graph [goal="test stall detection with api heartbeat"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, auto_status=true, prompt="do something"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, auto_status=true, prompt="do something"]
   start -> a -> exit
 }
 `)
@@ -455,7 +455,7 @@ digraph G {
   graph [goal="test cli stall detection with heartbeat"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do something"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="do something"]
   start -> a -> exit
 }
 `)

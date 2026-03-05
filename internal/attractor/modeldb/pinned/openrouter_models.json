@@ -10934,6 +10934,61 @@
       "expiration_date": null
     },
     {
+      "id": "openai/gpt-5.3-codex",
+      "canonical_slug": "openai/gpt-5.3-codex-20260303",
+      "hugging_face_id": "",
+      "name": "OpenAI: GPT-5.3-Codex",
+      "created": 1772150400,
+      "description": "GPT-5.3-Codex is the latest agentic coding model in the GPT-5 series, succeeding GPT-5.2-Codex with improved reasoning, steerability, and code quality across interactive and long-running software engineering workflows.",
+      "context_length": 400000,
+      "architecture": {
+        "modality": "text+image->text",
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tokenizer": "GPT",
+        "instruct_type": null
+      },
+      "pricing": {
+        "prompt": "0.00000175",
+        "completion": "0.000014",
+        "web_search": "0.01",
+        "input_cache_read": "0.000000175"
+      },
+      "top_provider": {
+        "context_length": 400000,
+        "max_completion_tokens": 128000,
+        "is_moderated": true
+      },
+      "per_request_limits": null,
+      "supported_parameters": [
+        "frequency_penalty",
+        "include_reasoning",
+        "logit_bias",
+        "logprobs",
+        "max_tokens",
+        "presence_penalty",
+        "reasoning",
+        "response_format",
+        "seed",
+        "stop",
+        "structured_outputs",
+        "tool_choice",
+        "tools",
+        "top_logprobs"
+      ],
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "expiration_date": null
+    },
+    {
       "id": "openai/gpt-5.3-codex-spark",
       "canonical_slug": "openai/gpt-5.3-codex-spark-20260212",
       "hugging_face_id": "",

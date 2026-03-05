@@ -21,7 +21,7 @@ func TestResumeFromCXDB_FindsLogsRootFromTurns(t *testing.T) {
 
 	logsRoot := t.TempDir()
 	pinned := filepath.Join(t.TempDir(), "pinned.json")
-	_ = os.WriteFile(pinned, []byte(`{"data":[{"id":"openai/gpt-5.2"}]}`), 0o644)
+	_ = os.WriteFile(pinned, []byte(`{"data":[{"id":"openai/gpt-5.3-codex"}]}`), 0o644)
 
 	cxdbSrv := newCXDBTestServer(t)
 
@@ -44,7 +44,7 @@ digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="say hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="say hi"]
   start -> a -> exit
 }
 `)

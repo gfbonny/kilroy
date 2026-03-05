@@ -11,7 +11,7 @@ func TestIsCLIOnlyModel(t *testing.T) {
 		{"GPT-5.3-CODEX-SPARK", true},        // case-insensitive
 		{"openai/gpt-5.3-codex-spark", true}, // with provider prefix
 		{"gpt-5.3-codex", false},             // regular codex
-		{"gpt-5.2-codex", false},
+		{"gpt-5.3-codex", false},
 		{"claude-opus-4-6", false},
 		{"", false},
 	}

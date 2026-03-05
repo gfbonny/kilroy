@@ -375,7 +375,7 @@ func writePinnedCatalog(t *testing.T) string {
 	_ = os.WriteFile(path, []byte(`{
   "data": [
     {
-      "id": "openai/gpt-5.2",
+      "id": "openai/gpt-5.3-codex",
       "context_length": 1000,
       "top_provider": {"max_completion_tokens": 1000}
     }
@@ -699,7 +699,7 @@ func TestAttractorRun_PreflightStillEnforcesTestShimGate(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="hi"]
   start -> a -> exit
 }
 `), 0o644)
@@ -850,14 +850,14 @@ func TestAttractorRun_StaleBuildConfirmAllowsProceeding(t *testing.T) {
 
 func TestParseForceModelFlags_NormalizesAndCanonicalizes(t *testing.T) {
 	got, specs, err := parseForceModelFlags([]string{
-		"openai=gpt-5.2-codex",
+		"openai=gpt-5.3-codex",
 		"gemini=gemini-3-pro-preview",
 	})
 	if err != nil {
 		t.Fatalf("parseForceModelFlags: %v", err)
 	}
 	want := map[string]string{
-		"openai": "gpt-5.2-codex",
+		"openai": "gpt-5.3-codex",
 		"google": "gemini-3-pro-preview",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -865,7 +865,7 @@ func TestParseForceModelFlags_NormalizesAndCanonicalizes(t *testing.T) {
 	}
 	wantSpecs := []string{
 		"google=gemini-3-pro-preview",
-		"openai=gpt-5.2-codex",
+		"openai=gpt-5.3-codex",
 	}
 	if !reflect.DeepEqual(specs, wantSpecs) {
 		t.Fatalf("canonical specs: got %#v want %#v", specs, wantSpecs)
@@ -910,8 +910,8 @@ func TestParseForceModelFlags_RejectsUnsupportedProvider(t *testing.T) {
 
 func TestParseForceModelFlags_RejectsDuplicateProvider(t *testing.T) {
 	if _, _, err := parseForceModelFlags([]string{
-		"openai=gpt-5.2-codex",
 		"openai=gpt-5.3-codex",
+		"openai=codex-mini-latest",
 	}); err == nil {
 		t.Fatalf("expected parse error for duplicate provider")
 	}
@@ -934,7 +934,7 @@ func TestAttractorRun_RealProfileRejectsShimOverride(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="hi"]
   start -> a -> exit
 }
 `), 0o644)
@@ -977,7 +977,7 @@ func TestAttractorRun_CLIProviderWarningCanAbortPreflight(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="hi"]
   start -> a -> exit
 }
 `), 0o644)
@@ -1024,7 +1024,7 @@ func TestAttractorRun_CLIProviderWarningDefaultsToProceedOnEnter(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="hi"]
   start -> a -> exit
 }
 `), 0o644)

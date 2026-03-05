@@ -1586,7 +1586,7 @@ Later rules of equal specificity override earlier ones. Explicit node attributes
 
 | Property           | Values                     | Description |
 |--------------------|----------------------------|-------------|
-| `llm_model`        | Any model identifier string | Provider-native model ID (e.g., `gpt-5.2`, `claude-opus-4-6`) |
+| `llm_model`        | Any model identifier string | Provider-native model ID (e.g., `gpt-5.3-codex`, `claude-opus-4-6`) |
 | `llm_provider`     | Provider key string         | `openai`, `anthropic`, `gemini`, etc. |
 | `reasoning_effort`  | `low`, `medium`, `high`    | Controls reasoning/thinking depth for the LLM |
 
@@ -1594,7 +1594,7 @@ Later rules of equal specificity override earlier ones. Explicit node attributes
 
 The resolution order for any model-related property on a node is:
 
-1. Explicit node attribute (e.g., `llm_model="gpt-5.2"` on the node) -- highest precedence
+1. Explicit node attribute (e.g., `llm_model="gpt-5.3-codex"` on the node) -- highest precedence
 2. Stylesheet rule matching by specificity (ID > class > shape > universal)
 3. Graph-level default attribute
 4. Handler/system default
@@ -1611,7 +1611,7 @@ digraph Pipeline {
             * { llm_model: claude-sonnet-4-5; llm_provider: anthropic; }
             box { reasoning_effort: low; }
             .code { llm_model: claude-opus-4-6; llm_provider: anthropic; }
-            #critical_review { llm_model: gpt-5.2; llm_provider: openai; reasoning_effort: high; }
+            #critical_review { llm_model: gpt-5.3-codex; llm_provider: openai; reasoning_effort: high; }
         "
     ]
 
@@ -1629,7 +1629,7 @@ digraph Pipeline {
 In this example:
 - `plan` gets `claude-sonnet-4-5` from the `*` rule (no class match for `.code`), and `reasoning_effort: low` from the `box` shape rule (all task nodes default to `box` shape).
 - `implement` gets `claude-opus-4-6` from the `.code` rule (specificity 2 overrides `*` at 0), and `reasoning_effort: low` from the `box` shape rule.
-- `critical_review` gets `gpt-5.2` and `reasoning_effort: high` from the `#critical_review` rule (specificity 3, overriding both `.code` and `box`).
+- `critical_review` gets `gpt-5.3-codex` and `reasoning_effort: high` from the `#critical_review` rule (specificity 3, overriding both `.code` and `box`).
 
 ---
 

@@ -29,10 +29,10 @@ digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  c [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  d [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex]
+  c [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex]
+  d [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex]
   start -> a
   a -> b
   a -> c
@@ -72,9 +72,9 @@ digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
   a [shape=diamond]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  c [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  d [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex]
+  c [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex]
+  d [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex]
   start -> a
   a -> b [condition="outcome=success"]
   a -> c [condition="outcome=success"]
@@ -104,8 +104,8 @@ digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex]
   start -> a
   a -> b
   b -> exit
@@ -134,9 +134,9 @@ digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  c [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex]
+  c [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex]
   start -> a
   a -> b [label="approve"]
   a -> c [label="reject"]
@@ -293,10 +293,10 @@ digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex]
   join [shape=tripleoctagon]
-  synth [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  synth [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex]
   start -> a
   start -> b
   a -> join
@@ -332,10 +332,10 @@ digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  c [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  synth [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex]
+  c [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex]
+  synth [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex]
   start -> a
   start -> b
   start -> c
@@ -545,11 +545,11 @@ digraph G {
   graph [goal="test implicit fan-out"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  source [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="source", auto_status=true]
-  branch_a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="a"]
-  branch_b [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="b"]
-  branch_c [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="c"]
-  synth [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="synth"]
+  source [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="source", auto_status=true]
+  branch_a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="a"]
+  branch_b [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="b"]
+  branch_c [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="c"]
+  synth [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="synth"]
 
   start -> source
   source -> branch_a
@@ -599,11 +599,11 @@ digraph G {
   graph [goal="test implicit fan-out with tripleoctagon join"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  source [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="source", auto_status=true]
-  branch_a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="a"]
-  branch_b [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="b"]
+  source [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="source", auto_status=true]
+  branch_a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="a"]
+  branch_b [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="b"]
   join [shape=tripleoctagon]
-  synth [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="synth"]
+  synth [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="synth"]
 
   start -> source
   source -> branch_a
@@ -642,10 +642,10 @@ digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
   check [shape=diamond]
-  branch_a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="a"]
-  branch_b [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="b"]
-  fallback [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="fallback"]
-  synth [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="synth"]
+  branch_a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="a"]
+  branch_b [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="b"]
+  fallback [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="fallback"]
+  synth [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="synth"]
 
   start -> check
   check -> branch_a [condition="outcome=success"]
@@ -898,8 +898,8 @@ digraph G {
   graph [goal="test no fan-out"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="a"]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="b"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="a"]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="b"]
   start -> a
   a -> b
   b -> exit
@@ -961,8 +961,8 @@ digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
   check [shape=diamond]
-  pass [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="pass"]
-  fail_path [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="fail_path"]
+  pass [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="pass"]
+  fail_path [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="fail_path"]
 
   start -> check
   check -> pass      [condition="outcome=success"]

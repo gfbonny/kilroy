@@ -314,7 +314,7 @@ func TestValidate_LoopRestartFailureEdgeRequiresTransientInfraGuard(t *testing.T
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="x"]
   check [shape=diamond]
   start -> a -> check
   check -> a [condition="outcome=fail", loop_restart=true]

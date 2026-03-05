@@ -26,8 +26,8 @@ digraph P {
   graph [goal="test"]
   start [shape=Mdiamond]
   par [shape=component]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="a"]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="b"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="a"]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="b"]
   join [shape=tripleoctagon]
   exit [shape=Msquare]
   start -> par

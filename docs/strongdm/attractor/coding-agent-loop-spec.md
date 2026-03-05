@@ -469,7 +469,7 @@ Using a provider's native tool format produces better results than forcing a uni
 ```
 INTERFACE ProviderProfile:
     id              : String            -- "openai", "anthropic", "gemini"
-    model           : String            -- model identifier (e.g., "gpt-5.2-codex")
+    model           : String            -- model identifier (e.g., "gpt-5.3-codex")
     tool_registry   : ToolRegistry      -- all tools available to this profile
 
     FUNCTION build_system_prompt(environment, project_docs) -> String
@@ -663,7 +663,7 @@ For Gemini 3 Flash, Gemini 2.5 Pro/Flash, and other Gemini models. Mirrors the g
 After a provider profile is loaded, additional tools can be registered:
 
 ```
-profile = create_openai_profile(model = "gpt-5.2-codex")
+profile = create_openai_profile(model = "gpt-5.3-codex")
 
 -- Add a custom tool on top of the profile
 profile.tool_registry.register(RegisteredTool(

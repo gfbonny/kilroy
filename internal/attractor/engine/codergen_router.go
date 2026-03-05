@@ -636,14 +636,14 @@ func pickFailoverModel(provider string, catalog *modeldb.Catalog) string {
 	case "openai":
 		// Prefer the repo's pinned default, even if the catalog doesn't contain it yet.
 		if catalog != nil && catalog.Models != nil {
-			if _, ok := catalog.Models["gpt-5.2-codex"]; ok {
-				return "gpt-5.2-codex"
+			if _, ok := catalog.Models["gpt-5.3-codex"]; ok {
+				return "gpt-5.3-codex"
 			}
 			if _, ok := catalog.Models["codex-mini-latest"]; ok {
 				return "codex-mini-latest"
 			}
 		}
-		return "gpt-5.2-codex"
+		return "gpt-5.3-codex"
 	case "kimi":
 		// Keep failover to Kimi pinned to the known stable coding model.
 		return "kimi-k2.5"

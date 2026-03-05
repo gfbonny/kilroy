@@ -26,9 +26,9 @@ digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
 
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, fidelity=full, prompt="a"]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2, fidelity=full, prompt="b"]
-  c [shape=box, llm_provider=openai, llm_model=gpt-5.2, fidelity=full, prompt="c"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, fidelity=full, prompt="a"]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, fidelity=full, prompt="b"]
+  c [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, fidelity=full, prompt="c"]
 
   start -> a -> b -> c -> exit
 }

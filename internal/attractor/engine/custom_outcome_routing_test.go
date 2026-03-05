@@ -66,7 +66,7 @@ digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
 
-  check_dod [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="check dod"]
+  check_dod [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="check dod"]
   dod_gen [shape=parallelogram, tool_command="echo generated dod"]
   plan [shape=parallelogram, tool_command="echo planning"]
 
@@ -173,7 +173,7 @@ digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
 
-  check_dod [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="check dod"]
+  check_dod [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="check dod"]
   dod_gen [shape=parallelogram, tool_command="echo generated dod"]
   plan [shape=parallelogram, tool_command="echo planning"]
 
@@ -246,7 +246,7 @@ digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
 
-  check_dod [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="check dod"]
+  check_dod [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="check dod"]
   dod_a [shape=parallelogram, tool_command="echo dod_a done"]
   dod_b [shape=parallelogram, tool_command="echo dod_b done"]
   merge [shape=parallelogram, tool_command="echo merged"]
@@ -338,7 +338,7 @@ digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
 
-  router [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="route based on context"]
+  router [shape=box, llm_provider=openai, llm_model=gpt-5.3-codex, prompt="route based on context"]
   target_a [shape=parallelogram, tool_command="echo target_a reached"]
   target_b [shape=parallelogram, tool_command="echo target_b reached"]
 
