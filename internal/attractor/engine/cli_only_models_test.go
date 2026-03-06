@@ -7,11 +7,11 @@ func TestIsCLIOnlyModel(t *testing.T) {
 		model string
 		want  bool
 	}{
-		{"gpt-5.3-codex-spark", true},
+		{"gpt-5.4-spark", true},
 		{"GPT-5.3-CODEX-SPARK", true},        // case-insensitive
-		{"openai/gpt-5.3-codex-spark", true}, // with provider prefix
-		{"gpt-5.3-codex", false},             // regular codex
-		{"gpt-5.2-codex", false},
+		{"openai/gpt-5.4-spark", true}, // with provider prefix
+		{"gpt-5.4", false},             // regular codex
+		{"gpt-5.4", false},
 		{"claude-opus-4-6", false},
 		{"", false},
 	}

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/danshapiro/kilroy/internal/attractor/ingest"
+	"github.com/danshapiro/kilroy/internal/modelmeta"
 )
 
 var osExecutable = os.Executable
@@ -29,7 +30,7 @@ type ingestOptions struct {
 
 func parseIngestArgs(args []string) (*ingestOptions, error) {
 	opts := &ingestOptions{
-		model:    "claude-sonnet-4-5",
+		model:    modelmeta.DefaultAnthropicModel,
 		validate: true,
 	}
 
@@ -107,7 +108,7 @@ func attractorIngest(args []string) {
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintln(os.Stderr, "usage: kilroy attractor ingest [flags] <requirements>")
 		fmt.Fprintln(os.Stderr, "  --output, -o    Output .dot file path (default: stdout)")
-		fmt.Fprintln(os.Stderr, "  --model         LLM model (default: claude-sonnet-4-5)")
+		fmt.Fprintf(os.Stderr, "  --model         LLM model (default: %s)\n", modelmeta.DefaultAnthropicModel)
 		fmt.Fprintln(os.Stderr, "  --skill         Path to skill .md file (default: repo/binary auto-detect)")
 		fmt.Fprintln(os.Stderr, "  --repo          Repository root (default: cwd)")
 		fmt.Fprintln(os.Stderr, "  --max-turns     Max agentic turns for Claude (default: 15)")

@@ -13,9 +13,9 @@ func TestSelectNextEdge_ConditionBeatsUnconditionalWeight(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  c [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  c [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   start -> a
   a -> b [condition="outcome=success", weight=0]
   a -> c [weight=100]
@@ -42,9 +42,9 @@ func TestSelectNextEdge_PreferredLabelBeatsWeightAmongUnconditional(t *testing.T
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  c [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  c [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   start -> a
   a -> b [label="[A] Approve", weight=0]
   a -> c [label="[F] Fix", weight=100]
@@ -71,9 +71,9 @@ func TestSelectNextEdge_SuggestedNextIDsBeatsWeightAmongUnconditional(t *testing
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  c [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  c [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   start -> a
   a -> b [weight=100]
   a -> c [weight=0]
@@ -100,10 +100,10 @@ func TestSelectNextEdge_WeightThenLexicalThenOrder(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  c [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  d [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  c [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  d [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   start -> a
   a -> d [weight=2]
   a -> c [weight=2]
@@ -134,10 +134,10 @@ digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  c [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  d [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  c [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  d [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   start -> a
   a -> b
   a -> c
@@ -177,9 +177,9 @@ digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
   a [shape=diamond]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  c [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  d [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  c [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  d [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   start -> a
   a -> b [condition="outcome=success"]
   a -> c [condition="outcome=success"]
@@ -209,8 +209,8 @@ digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   start -> a
   a -> b
   b -> exit
@@ -239,9 +239,9 @@ digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  c [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  c [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   start -> a
   a -> b [label="approve"]
   a -> c [label="reject"]
@@ -277,8 +277,8 @@ digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
   a [shape=diamond]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  c [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  c [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   start -> a
   a -> b [condition="outcome=success"]
   a -> c [condition="outcome=fail"]
@@ -310,8 +310,8 @@ digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
   a [shape=diamond]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  c [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  c [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   start -> a
   a -> c [condition="outcome=success", weight=10]
   a -> b [condition="outcome=fail", weight=5]
@@ -348,9 +348,9 @@ func TestSelectNextEdge_PreferredLabelMatchesConditionalEdge(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  c [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  c [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   start -> a
   a -> b [condition="outcome=fail", label="[A] Approve", weight=0]
   a -> c [condition="outcome=fail", label="[R] Reject", weight=100]
@@ -382,9 +382,9 @@ digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  c [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  c [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   start -> a
   a -> b [condition="outcome=fail", label="approve"]
   a -> c [condition="outcome=fail", label="reject"]
@@ -419,9 +419,9 @@ func TestSelectNextEdge_SuggestedNextIDMatchesConditionalEdge(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  c [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  c [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   start -> a
   a -> b [condition="outcome=fail", weight=100]
   a -> c [condition="outcome=fail", weight=0]
@@ -452,9 +452,9 @@ digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  c [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  c [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   start -> a
   a -> b [condition="outcome=fail"]
   a -> c [condition="outcome=fail"]

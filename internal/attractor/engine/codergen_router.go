@@ -94,7 +94,7 @@ func (r *CodergenRouter) Run(ctx context.Context, exec *Execution, node *model.N
 		return "", nil, fmt.Errorf("no backend configured for provider %s", prov)
 	}
 
-	// CLI-only model override: models like gpt-5.3-codex-spark have no API
+	// CLI-only model override: models like gpt-5.4-spark have no API
 	// endpoint. Force CLI backend regardless of provider configuration.
 	if isCLIOnlyModel(modelID) && backend != BackendCLI {
 		warnEngine(exec, fmt.Sprintf("cli-only model override: node=%s model=%s backend=%s->cli", node.ID, modelID, backend))
@@ -418,9 +418,6 @@ func (r *CodergenRouter) withFailoverText(
 
 	cands := []providerModel{{Provider: primaryProvider, Model: primaryModel}}
 	order, failoverExplicit := failoverOrderFromRuntime(primaryProvider, r.providerRuntimes)
-	if !failoverExplicit && len(order) == 0 {
-		order = failoverOrder(primaryProvider)
-	}
 	for _, p := range order {
 		p = normalizeProviderKey(p)
 		if p == "" || p == primaryProvider {
@@ -595,25 +592,6 @@ func failoverOrderFromRuntime(primary string, runtimes map[string]ProviderRuntim
 	return append([]string{}, rt.Failover...), rt.FailoverExplicit
 }
 
-func failoverOrder(primary string) []string {
-	switch normalizeProviderKey(primary) {
-	case "openai":
-		return []string{"google"}
-	case "anthropic":
-		return []string{"google"}
-	case "google":
-		return []string{"kimi"}
-	case "kimi":
-		return []string{"zai"}
-	case "zai":
-		return []string{"cerebras"}
-	case "cerebras":
-		return []string{"zai"}
-	default:
-		return nil
-	}
-}
-
 func pickFailoverModelFromRuntime(provider string, runtimes map[string]ProviderRuntime, catalog *modeldb.Catalog, fallbackModel string) string {
 	provider = normalizeProviderKey(provider)
 	if provider == "" {
@@ -658,14 +636,14 @@ func pickFailoverModel(provider string, catalog *modeldb.Catalog) string {
 	case "openai":
 		// Prefer the repo's pinned default, even if the catalog doesn't contain it yet.
 		if catalog != nil && catalog.Models != nil {
-			if _, ok := catalog.Models["gpt-5.2-codex"]; ok {
-				return "gpt-5.2-codex"
+			if _, ok := catalog.Models[modelmeta.DefaultOpenAIModel]; ok {
+				return modelmeta.DefaultOpenAIModel
 			}
 			if _, ok := catalog.Models["codex-mini-latest"]; ok {
 				return "codex-mini-latest"
 			}
 		}
-		return "gpt-5.2-codex"
+		return modelmeta.DefaultOpenAIModel
 	case "kimi":
 		// Keep failover to Kimi pinned to the known stable coding model.
 		return "kimi-k2.5"
@@ -680,10 +658,10 @@ func pickFailoverModel(provider string, catalog *modeldb.Catalog) string {
 	case "google":
 		// Prefer a known good "pro" model when present.
 		for _, want := range []string{
-			"gemini/gemini-2.5-pro",
-			"gemini/gemini-2.5-pro-preview-06-05",
-			"gemini/gemini-2.5-pro-preview-05-06",
-			"gemini/gemini-2.5-pro-preview-03-25",
+			"gemini/gemini-3.1-pro-preview",
+			"google/gemini-3.1-pro-preview",
+			"gemini/gemini-3-pro-preview",
+			"google/gemini-3-pro-preview",
 		} {
 			if hasModelID(catalog, "google", want) {
 				return providerModelIDFromCatalogKey("google", want)
@@ -984,6 +962,24 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 	}
 	codexSemantics := usesCodexCLISemantics(providerKey, exe)
 
+	// Disable Codex sandbox for manual box fan-in convergence nodes.
+	// git merge writes to .git/ metadata outside the worktree, which
+	// --sandbox workspace-write blocks. See github.com/danshapiro/kilroy/issues/49.
+	isManualBoxFanIn := false
+	if codexSemantics && execCtx != nil && execCtx.Context != nil {
+		joinNodeID := strings.TrimSpace(execCtx.Context.GetString("parallel.join_node", ""))
+		if joinNodeID != "" && joinNodeID == strings.TrimSpace(node.ID) {
+			mergeMode := strings.TrimSpace(execCtx.Context.GetString(parallelMergeModeContextKey, ""))
+			if mergeMode == "" && execCtx.Graph != nil {
+				mergeMode = classifyJoinMergeMode(execCtx.Graph, joinNodeID)
+			}
+			if mergeMode == parallelMergeModeManualBox {
+				isManualBoxFanIn = true
+				args = stripSandboxFlag(args)
+			}
+		}
+	}
+
 	// Build the base env once — used by codex initial + retries and non-codex paths.
 	baseEnv := buildBaseNodeEnv(artifactPolicyFromExecution(execCtx))
 
@@ -1064,6 +1060,10 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 	}
 	if structuredSchemaPath != "" {
 		inv["structured_output_schema_path"] = structuredSchemaPath
+	}
+	if isManualBoxFanIn {
+		inv["sandbox_disabled"] = true
+		inv["sandbox_disabled_reason"] = "manual_box_fan_in_convergence"
 	}
 	if err := writeJSON(filepath.Join(stageDir, "cli_invocation.json"), inv); err != nil {
 		return "", classifiedFailure(err, ""), nil
@@ -1910,6 +1910,19 @@ func hasArg(args []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// stripSandboxFlag removes "--sandbox <value>" from a Codex CLI arg slice.
+func stripSandboxFlag(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--sandbox" && i+1 < len(args) {
+			i++ // skip --sandbox and its value
+			continue
+		}
+		out = append(out, args[i])
+	}
+	return out
 }
 
 const defaultCodexOutputSchema = `{

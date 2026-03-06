@@ -27,7 +27,7 @@
 #   verify  — verification/test-runner nodes (class="verify")
 #   review  — final review nodes (class="review")
 #
-# Example values: "gpt-5.3-codex", "claude-opus-4-6", "gemini/gemini-3-pro-preview"
+# Example values: "gpt-5.4", "claude-opus-4-6", "gemini/gemini-3-pro-preview"
 
 defaults:
   models:

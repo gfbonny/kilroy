@@ -154,4 +154,4 @@ Shows the final formatted post with proper footnotes — each citation rendered 
 
 ### UI Diagram (Graphviz)
 
-See [substack-spec-v01-ui.dot](./substack-spec-v01-ui.dot).
+See [substack-spec-v01-ui.gv](./substack-spec-v01-ui.gv).

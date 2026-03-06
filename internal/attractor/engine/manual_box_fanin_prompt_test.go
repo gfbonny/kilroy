@@ -45,9 +45,9 @@ digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
   par [shape=component]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, auto_status=true, prompt="branch a"]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2, auto_status=true, prompt="branch b"]
-  merge [shape=box, llm_provider=openai, llm_model=gpt-5.2, auto_status=true, prompt="merge branch outputs"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, auto_status=true, prompt="branch a"]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4, auto_status=true, prompt="branch b"]
+  merge [shape=box, llm_provider=openai, llm_model=gpt-5.4, auto_status=true, prompt="merge branch outputs"]
 
   start -> par
   par -> a

@@ -91,7 +91,7 @@ func runProviderCLIPreflight(ctx context.Context, g *model.Graph, runtimes map[s
 	}()
 
 	// Validate CLI-only models: fail early if a CLI-only model (e.g.,
-	// gpt-5.3-codex-spark) is used but its provider is not configured with
+	// gpt-5.4-spark) is used but its provider is not configured with
 	// backend=cli.
 	if err := validateCLIOnlyModels(g, runtimes, opts.ForceModels, report); err != nil {
 		return report, err

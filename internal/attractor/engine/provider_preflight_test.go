@@ -139,7 +139,7 @@ func TestRunWithConfig_WarnsWhenAPIModelNotInCatalogForProvider(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
   "data": [
-    {"id": "openai/gpt-5.2"},
+    {"id": "openai/gpt-5.4"},
     {"id": "anthropic/claude-opus-4-6"}
   ]
 }`)
@@ -147,7 +147,8 @@ func TestRunWithConfig_WarnsWhenAPIModelNotInCatalogForProvider(t *testing.T) {
 	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
 		"openai": BackendAPI,
 	})
-	dot := singleProviderDot("openai", "gpt-5.3-codex")
+	// Use a model NOT in the catalog to trigger a catalog-miss warning.
+	dot := singleProviderDot("openai", "gpt-nonexistent-model")
 
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -175,7 +176,7 @@ func TestRunWithConfig_WarnsAndContinues_WhenProviderNotInCatalog(t *testing.T) 
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
   "data": [
-    {"id": "openai/gpt-5.2"}
+    {"id": "openai/gpt-5.4"}
   ]
 }`)
 
@@ -220,7 +221,7 @@ func TestRunWithConfig_ForceModel_BypassesCatalogGate(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
   "data": [
-    {"id": "openai/gpt-5.2"}
+    {"id": "openai/gpt-5.4"}
   ]
 }`)
 
@@ -236,7 +237,7 @@ func TestRunWithConfig_ForceModel_BypassesCatalogGate(t *testing.T) {
 	cfg.ModelDB.OpenRouterModelInfoUpdatePolicy = "pinned"
 	cfg.Git.RunBranchPrefix = "attractor/run"
 
-	dot := singleProviderDot("openai", "gpt-5.3-codex")
+	dot := singleProviderDot("openai", "gpt-5.4")
 
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -244,12 +245,12 @@ func TestRunWithConfig_ForceModel_BypassesCatalogGate(t *testing.T) {
 	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{
 		RunID:       "preflight-force-model-bypass",
 		LogsRoot:    logsRoot,
-		ForceModels: map[string]string{"openai": "gpt-5.3-codex"},
+		ForceModels: map[string]string{"openai": "gpt-5.4"},
 	})
 	if err == nil {
 		t.Fatalf("expected downstream cxdb error, got nil")
 	}
-	if strings.Contains(err.Error(), "preflight: llm_provider=openai backend=api model=gpt-5.3-codex not present in run catalog") {
+	if strings.Contains(err.Error(), "preflight: llm_provider=openai backend=api model=gpt-5.4 not present in run catalog") {
 		t.Fatalf("force-model should bypass provider/model catalog gate, got %v", err)
 	}
 	report := mustReadPreflightReport(t, logsRoot)
@@ -641,7 +642,7 @@ func TestRunWithConfig_PreflightPromptProbe_UsesOnlyAPIProvidersInGraph(t *testi
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
   "data": [
-    {"id": "openai/gpt-5.2"},
+    {"id": "openai/gpt-5.4"},
     {"id": "anthropic/claude-sonnet-4-20250514"}
   ]
 }`)
@@ -662,7 +663,7 @@ func TestRunWithConfig_PreflightPromptProbe_UsesOnlyAPIProvidersInGraph(t *testi
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
   "id": "resp_preflight",
-  "model": "gpt-5.2",
+  "model": "gpt-5.4",
   "output": [{"type": "message", "content": [{"type":"output_text", "text":"OK"}]}],
   "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
 }`))
@@ -685,7 +686,7 @@ func TestRunWithConfig_PreflightPromptProbe_UsesOnlyAPIProvidersInGraph(t *testi
 	cfg.ModelDB.OpenRouterModelInfoUpdatePolicy = "pinned"
 	cfg.Git.RunBranchPrefix = "attractor/run"
 
-	dot := singleProviderDot("openai", "gpt-5.2")
+	dot := singleProviderDot("openai", "gpt-5.4")
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -725,7 +726,7 @@ func TestRunWithConfig_PreflightPromptProbe_APIAgentLoopShape_UsesTools(t *testi
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
   "data": [
-    {"id": "openai/gpt-5.2"}
+    {"id": "openai/gpt-5.4"}
   ]
 }`)
 
@@ -751,7 +752,7 @@ func TestRunWithConfig_PreflightPromptProbe_APIAgentLoopShape_UsesTools(t *testi
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
   "id": "resp_preflight",
-  "model": "gpt-5.2",
+  "model": "gpt-5.4",
   "output": [{"type": "message", "content": [{"type":"output_text", "text":"OK"}]}],
   "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
 }`))
@@ -773,7 +774,7 @@ func TestRunWithConfig_PreflightPromptProbe_APIAgentLoopShape_UsesTools(t *testi
 	cfg.ModelDB.OpenRouterModelInfoUpdatePolicy = "pinned"
 	cfg.Git.RunBranchPrefix = "attractor/run"
 
-	dot := singleProviderDot("openai", "gpt-5.2")
+	dot := singleProviderDot("openai", "gpt-5.4")
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -781,7 +782,7 @@ func TestRunWithConfig_PreflightPromptProbe_APIAgentLoopShape_UsesTools(t *testi
 	if err == nil {
 		t.Fatalf("expected preflight failure, got nil")
 	}
-	if !strings.Contains(err.Error(), "preflight: provider openai api prompt probe failed for model gpt-5.2") {
+	if !strings.Contains(err.Error(), "preflight: provider openai api prompt probe failed for model gpt-5.4") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got := openaiCalls.Load(); got == 0 {
@@ -818,7 +819,7 @@ func TestRunWithConfig_PreflightPromptProbe_APIOneShotShape_DoesNotUseTools(t *t
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
   "data": [
-    {"id": "openai/gpt-5.2"}
+    {"id": "openai/gpt-5.4"}
   ]
 }`)
 
@@ -844,7 +845,7 @@ func TestRunWithConfig_PreflightPromptProbe_APIOneShotShape_DoesNotUseTools(t *t
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
   "id": "resp_preflight",
-  "model": "gpt-5.2",
+  "model": "gpt-5.4",
   "output": [{"type": "message", "content": [{"type":"output_text", "text":"OK"}]}],
   "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
 }`))
@@ -870,7 +871,7 @@ func TestRunWithConfig_PreflightPromptProbe_APIOneShotShape_DoesNotUseTools(t *t
 digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
-  a [shape=box, llm_provider="openai", llm_model="gpt-5.2", codergen_mode="one_shot", prompt="x"]
+  a [shape=box, llm_provider="openai", llm_model="gpt-5.4", codergen_mode="one_shot", prompt="x"]
   exit [shape=Msquare]
   start -> a -> exit
 }
@@ -977,7 +978,7 @@ func TestRunWithConfig_PreflightPromptProbe_CLIStdinMode(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
   "data": [
-    {"id": "openai/gpt-5.2"}
+    {"id": "openai/gpt-5.4"}
   ]
 }`)
 
@@ -1022,7 +1023,7 @@ echo "ok"
 		"openai": BackendCLI,
 	})
 	cfg.LLM.Providers["openai"] = ProviderConfig{Backend: BackendCLI, Executable: codexCLI}
-	dot := singleProviderDot("openai", "gpt-5.2")
+	dot := singleProviderDot("openai", "gpt-5.4")
 
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1045,7 +1046,7 @@ func TestRunWithConfig_PreflightPromptProbe_CLIUsesProductionRetryPath(t *testin
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
   "data": [
-    {"id": "openai/gpt-5.2"}
+    {"id": "openai/gpt-5.4"}
   ]
 }`)
 
@@ -1102,7 +1103,7 @@ EOF
 		"openai": BackendCLI,
 	})
 	cfg.LLM.Providers["openai"] = ProviderConfig{Backend: BackendCLI, Executable: codexCLI}
-	dot := singleProviderDot("openai", "gpt-5.2")
+	dot := singleProviderDot("openai", "gpt-5.4")
 
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -1139,7 +1140,7 @@ EOF
 		t.Fatalf("expected provider_prompt_probe pass check for openai")
 	}
 
-	invPath := filepath.Join(logsRoot, "preflight", "prompt-probe", "openai", "gpt-5.2", "cli", "cli_invocation.json")
+	invPath := filepath.Join(logsRoot, "preflight", "prompt-probe", "openai", "gpt-5.4", "cli", "cli_invocation.json")
 	invRaw, readErr := os.ReadFile(invPath)
 	if readErr != nil {
 		t.Fatalf("read cli_invocation artifact %s: %v", invPath, readErr)
@@ -1159,7 +1160,7 @@ func TestRunWithConfig_PreflightPromptProbe_AllProvidersWhenGraphUsesAll(t *test
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
   "data": [
-    {"id": "openai/gpt-5.2"},
+    {"id": "openai/gpt-5.4"},
     {"id": "anthropic/claude-sonnet-4-20250514"},
     {"id": "google/gemini-3-pro-preview"},
     {"id": "kimi/kimi-k2.5"},
@@ -1194,7 +1195,7 @@ func TestRunWithConfig_PreflightPromptProbe_AllProvidersWhenGraphUsesAll(t *test
 		if r.URL.Path == "/v1/responses" {
 			_, _ = w.Write([]byte(`{
   "id":"resp_preflight",
-  "model":"gpt-5.2",
+  "model":"gpt-5.4",
   "output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}],
   "usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}
 }`))
@@ -1271,7 +1272,7 @@ func TestRunWithConfig_PreflightPromptProbe_AllProvidersWhenGraphUsesAll(t *test
 digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
-  n1 [shape=box, llm_provider="openai", llm_model="gpt-5.2", prompt="x"]
+  n1 [shape=box, llm_provider="openai", llm_model="gpt-5.4", prompt="x"]
   n2 [shape=box, llm_provider="anthropic", llm_model="claude-sonnet-4-20250514", prompt="x"]
   n3 [shape=box, llm_provider="google", llm_model="gemini-3-pro-preview", prompt="x"]
   n4 [shape=box, llm_provider="kimi", llm_model="kimi-k2.5", prompt="x"]
@@ -1491,7 +1492,7 @@ func TestProviderPreflight_PromptProbe_FailoverModelSelectionMatchesRuntime(t *t
 	n := model.NewNode("impl")
 	n.Attrs["shape"] = "box"
 	n.Attrs["llm_provider"] = "openai"
-	n.Attrs["llm_model"] = "gpt-5.2-codex"
+	n.Attrs["llm_model"] = "gpt-5.4"
 	n.Attrs["codergen_mode"] = "one_shot"
 	if err := g.AddNode(n); err != nil {
 		t.Fatalf("AddNode: %v", err)
@@ -1519,7 +1520,7 @@ func TestProviderPreflight_PromptProbe_FailoverModelSelectionMatchesRuntime(t *t
 		},
 	}
 
-	expectedModel := pickFailoverModelFromRuntime("anthropic", runtimes, catalog, "gpt-5.2-codex")
+	expectedModel := pickFailoverModelFromRuntime("anthropic", runtimes, catalog, "gpt-5.4")
 	targets, err := usedAPIPromptProbeTargetsForProvider(
 		g,
 		runtimes,
@@ -1695,7 +1696,7 @@ func TestRunWithConfig_PreflightPromptProbe_SkipsCodexWhenNoAPIKey(t *testing.T)
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
   "data": [
-    {"id": "openai/gpt-5.2-codex"}
+    {"id": "openai/gpt-5.4"}
   ]
 }`)
 
@@ -1728,7 +1729,7 @@ exit 1
 	})
 	// Use "real" profile — the chatgpt auth skip only applies in real mode.
 	cfg.LLM.CLIProfile = "real"
-	dot := singleProviderDot("openai", "gpt-5.2-codex")
+	dot := singleProviderDot("openai", "gpt-5.4")
 
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1768,14 +1769,14 @@ func TestProviderPreflight_CLIOnlyModelWithAPIBackend_Fails(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
   "data": [
-    {"id": "openai/gpt-5.3-codex-spark"}
+    {"id": "openai/gpt-5.4-spark"}
   ]
 }`)
 	// openai configured as API backend — should fail for CLI-only model.
 	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
 		"openai": BackendAPI,
 	})
-	dot := singleProviderDot("openai", "gpt-5.3-codex-spark")
+	dot := singleProviderDot("openai", "gpt-5.4-spark")
 
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1809,14 +1810,14 @@ func TestProviderPreflight_CLIOnlyModelWithCLIBackend_Passes(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
   "data": [
-    {"id": "openai/gpt-5.3-codex-spark"}
+    {"id": "openai/gpt-5.4-spark"}
   ]
 }`)
 	// openai configured as CLI backend — should pass the CLI-only check.
 	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
 		"openai": BackendCLI,
 	})
-	dot := singleProviderDot("openai", "gpt-5.3-codex-spark")
+	dot := singleProviderDot("openai", "gpt-5.4-spark")
 
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1845,8 +1846,8 @@ func TestProviderPreflight_CLIOnlyModel_ForceModelOverridesToRegular_NoFail(t *t
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
   "data": [
-    {"id": "openai/gpt-5.3-codex-spark"},
-    {"id": "openai/gpt-5.2-codex"}
+    {"id": "openai/gpt-5.4-spark"},
+    {"id": "openai/gpt-5.4"}
   ]
 }`)
 	// openai configured as API backend with a CLI-only model in the graph,
@@ -1854,7 +1855,7 @@ func TestProviderPreflight_CLIOnlyModel_ForceModelOverridesToRegular_NoFail(t *t
 	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
 		"openai": BackendAPI,
 	})
-	dot := singleProviderDot("openai", "gpt-5.3-codex-spark")
+	dot := singleProviderDot("openai", "gpt-5.4-spark")
 
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1863,7 +1864,7 @@ func TestProviderPreflight_CLIOnlyModel_ForceModelOverridesToRegular_NoFail(t *t
 		RunID:         "cli-only-force-regular",
 		LogsRoot:      logsRoot,
 		AllowTestShim: true,
-		ForceModels:   map[string]string{"openai": "gpt-5.2-codex"},
+		ForceModels:   map[string]string{"openai": "gpt-5.4"},
 	})
 	// Should NOT fail with CLI-only error — force-model replaces Spark with
 	// a regular model.
@@ -1877,8 +1878,8 @@ func TestProviderPreflight_ForceModelInjectsCLIOnly_WithAPIBackend_Fails(t *test
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
   "data": [
-    {"id": "openai/gpt-5.2-codex"},
-    {"id": "openai/gpt-5.3-codex-spark"}
+    {"id": "openai/gpt-5.4"},
+    {"id": "openai/gpt-5.4-spark"}
   ]
 }`)
 	// openai configured as API backend, graph uses a regular model, but
@@ -1886,7 +1887,7 @@ func TestProviderPreflight_ForceModelInjectsCLIOnly_WithAPIBackend_Fails(t *test
 	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
 		"openai": BackendAPI,
 	})
-	dot := singleProviderDot("openai", "gpt-5.2-codex")
+	dot := singleProviderDot("openai", "gpt-5.4")
 
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1895,7 +1896,7 @@ func TestProviderPreflight_ForceModelInjectsCLIOnly_WithAPIBackend_Fails(t *test
 		RunID:         "force-cli-only-api-fail",
 		LogsRoot:      logsRoot,
 		AllowTestShim: true,
-		ForceModels:   map[string]string{"openai": "gpt-5.3-codex-spark"},
+		ForceModels:   map[string]string{"openai": "gpt-5.4-spark"},
 	})
 	if err == nil {
 		t.Fatal("expected preflight error when force-model injects CLI-only model with API backend, got nil")

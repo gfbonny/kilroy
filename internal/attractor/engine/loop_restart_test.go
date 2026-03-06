@@ -35,7 +35,7 @@ digraph G {
   graph [goal="test loop restart", default_max_retry=0]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  work  [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do work"]
+  work  [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="do work"]
   check [shape=diamond]
   start -> work
   work -> check
@@ -132,7 +132,7 @@ digraph G {
   graph [goal="test retry budget reset", max_restarts="3"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  work  [shape=box, llm_provider=openai, llm_model=gpt-5.2, max_retries="1", prompt="do work"]
+  work  [shape=box, llm_provider=openai, llm_model=gpt-5.4, max_retries="1", prompt="do work"]
   check [shape=diamond]
   start -> work
   work -> check
@@ -237,7 +237,7 @@ digraph G {
   graph [goal="test limit", max_restarts="2", loop_restart_signature_limit="99"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  work  [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do work"]
+  work  [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="do work"]
   check [shape=diamond]
   start -> work
   work -> check
@@ -297,7 +297,7 @@ digraph G {
   graph [goal="test terminal final", max_restarts="1"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  work  [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do work"]
+  work  [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="do work"]
   check [shape=diamond]
   start -> work
   work -> check
@@ -386,7 +386,7 @@ digraph G {
   graph [goal="test deterministic block", max_restarts="10"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  work  [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do work"]
+  work  [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="do work"]
   check [shape=diamond]
   start -> work
   work -> check
@@ -464,7 +464,7 @@ digraph G {
   graph [goal="test circuit breaker", max_restarts="20", loop_restart_signature_limit="2"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  work  [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do work"]
+  work  [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="do work"]
   check [shape=diamond]
   start -> work
   work -> check
@@ -572,8 +572,8 @@ digraph G {
   graph [goal="test stuck cycle", max_node_visits="5"]
   start  [shape=Mdiamond]
   exit   [shape=Msquare]
-  impl   [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="implement"]
-  verify [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="verify"]
+  impl   [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="implement"]
+  verify [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="verify"]
   check  [shape=diamond]
   start -> impl -> verify -> check
   check -> exit [condition="outcome=success"]
@@ -763,7 +763,7 @@ digraph G {
   graph [goal="test context persistence", default_max_retry=0, loop_restart_persist_keys="completed_features,skipped_features"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  work  [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do work"]
+  work  [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="do work"]
   check [shape=diamond]
   start -> work
   work -> check
@@ -867,7 +867,7 @@ digraph G {
   graph [goal="test persist keys in progress", default_max_retry=0, loop_restart_persist_keys="my_key"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  work  [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do work"]
+  work  [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="do work"]
   check [shape=diamond]
   start -> work
   work -> check

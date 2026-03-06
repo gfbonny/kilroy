@@ -84,7 +84,7 @@ digraph G {
   graph [goal="test push on restart"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  work  [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do work"]
+  work  [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="do work"]
   check [shape=diamond]
   start -> work
   work -> check

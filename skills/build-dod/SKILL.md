@@ -86,9 +86,9 @@ Each scenario becomes a named automated test in the DoD, with `test exits 0` as 
 
 Every DoD must define deterministic, reviewable test artifacts for each integration scenario.
 
-- Canonical root: `.ai/test-evidence/latest/`
-- Per-scenario folder: `.ai/test-evidence/latest/IT-<id>/`
-- Manifest file: `.ai/test-evidence/latest/manifest.json`
+- Canonical root: `.ai/runs/$KILROY_RUN_ID/test-evidence/latest/`
+- Per-scenario folder: `.ai/runs/$KILROY_RUN_ID/test-evidence/latest/IT-<id>/`
+- Manifest file: `.ai/runs/$KILROY_RUN_ID/test-evidence/latest/manifest.json`
 
 Manifest entries must map each scenario ID to:
 - scenario status (`pass`/`fail`)
@@ -104,7 +104,7 @@ Example manifest shape:
       "id": "IT-1",
       "status": "pass",
       "artifacts": [
-        { "type": "log", "path": ".ai/test-evidence/latest/IT-1/test.log" }
+        { "type": "log", "path": ".ai/runs/$KILROY_RUN_ID/test-evidence/latest/IT-1/test.log" }
       ],
       "notes": []
     }
@@ -133,7 +133,7 @@ Before finalizing each scenario, confirm:
 - **Proportional** — effort to implement the test is proportional to the confidence it provides (testing 3 representative cases from a category provides nearly as much confidence as testing all 50)
 - **Independent** — the scenario produces the same result regardless of execution order or environment state
 - **Intent-complete** — collectively, scenarios prove the intended user journeys and outcomes described by the spec (and digraph, if present)
-- **Evidence-complete** — scenario defines deterministic artifact paths and required artifact types under `.ai/test-evidence/latest/IT-<id>/`
+- **Evidence-complete** — scenario defines deterministic artifact paths and required artifact types under `.ai/runs/$KILROY_RUN_ID/test-evidence/latest/IT-<id>/`
 
 ## The Crosscheck
 
@@ -153,7 +153,7 @@ After writing all ACs and integration scenarios, review:
 7. Confirm at least one scenario tests the deliverable in its delivery form
 8. Confirm every user-facing message from the inventory is triggered and validated by at least one scenario
 9. Confirm the scenarios collectively cover every AC group
-10. Confirm `.ai/test-evidence/latest/manifest.json` covers every scenario ID with at least one artifact path
+10. Confirm `.ai/runs/$KILROY_RUN_ID/test-evidence/latest/manifest.json` covers every scenario ID with at least one artifact path
 11. If a digraph exists, confirm no required intent path is missing or unreachable
 
 ## Output Format
@@ -196,9 +196,9 @@ After writing all ACs and integration scenarios, review:
 
 | Item | Requirement |
 |------|-------------|
-| Evidence root | `.ai/test-evidence/latest/` |
-| Scenario folder pattern | `.ai/test-evidence/latest/IT-<id>/` |
-| Manifest | `.ai/test-evidence/latest/manifest.json` |
+| Evidence root | `.ai/runs/$KILROY_RUN_ID/test-evidence/latest/` |
+| Scenario folder pattern | `.ai/runs/$KILROY_RUN_ID/test-evidence/latest/IT-<id>/` |
+| Manifest | `.ai/runs/$KILROY_RUN_ID/test-evidence/latest/manifest.json` |
 | UI scenarios (`surface=ui` or `surface=mixed`) | Include screenshot evidence proving key states |
 | Non-UI scenarios (`surface=non_ui`) | Include text/structured evidence (log/stdout/json) |
 | Failure behavior | Emit best-effort artifacts and manifest entry; record missing artifacts explicitly |

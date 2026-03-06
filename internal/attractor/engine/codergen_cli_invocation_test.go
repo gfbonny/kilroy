@@ -105,7 +105,7 @@ func TestDefaultCLIInvocation_AnthropicSkipsPermissions(t *testing.T) {
 }
 
 func TestDefaultCLIInvocation_OpenAI_DoesNotUseDeprecatedAskForApproval(t *testing.T) {
-	exe, args := defaultCLIInvocation("openai", "gpt-5.3-codex", "/tmp/worktree")
+	exe, args := defaultCLIInvocation("openai", "gpt-5.4", "/tmp/worktree")
 	if exe == "" {
 		t.Fatalf("expected non-empty executable for openai")
 	}

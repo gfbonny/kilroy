@@ -32,8 +32,8 @@ func TestValidate_ReachabilityAndEdgeTargets(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  orphan [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  orphan [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   start -> a -> exit
   a -> missing
 }
@@ -69,7 +69,7 @@ func TestValidate_StartNoIncomingAndExitNoOutgoing(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   start -> a -> exit
   a -> start
   exit -> a
@@ -86,10 +86,10 @@ digraph G {
 func TestValidate_ConditionAndStylesheetSyntax(t *testing.T) {
 	g, err := dot.Parse([]byte(`
 digraph G {
-  graph [model_stylesheet="* { llm_provider: openai; } box { llm_model: gpt-5.2; }"]
+  graph [model_stylesheet="* { llm_provider: openai; } box { llm_model: gpt-5.4; }"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   start -> a -> exit
   a -> exit [condition="outcome>success"]
 }
@@ -106,7 +106,7 @@ func TestValidate_LLMProviderRequired_Metaspec(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_model=gpt-5.2]
+  a [shape=box, llm_model=gpt-5.4]
   start -> a -> exit
 }
 `))
@@ -170,7 +170,7 @@ func TestValidate_PromptOnCodergenNodes_WarnsWhenMissingPrompt(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   start -> a -> exit
 }
 `))
@@ -194,7 +194,7 @@ func TestValidate_LoopRestartFailureEdgeRequiresTransientInfraGuard(t *testing.T
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   check [shape=diamond]
   start -> a -> check
   check -> a [condition="outcome=fail", loop_restart=true]
@@ -213,9 +213,9 @@ func TestValidate_LoopRestartFailureEdgeWithTransientInfraGuard_NoWarning(t *tes
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   check [shape=diamond]
-  pm [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="postmortem"]
+  pm [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="postmortem"]
   start -> a -> check
   check -> a [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
   check -> pm [condition="outcome=fail && context.failure_class!=transient_infra"]
@@ -238,8 +238,8 @@ func TestValidate_LoopRestartOnUnconditionalEdge_Warns(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="y"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="y"]
   start -> a -> b
   b -> a [loop_restart=true]
   a -> exit [condition="outcome=success"]
@@ -257,7 +257,7 @@ func TestValidate_LoopRestartTransientGuardWithoutDeterministicFallback_Warns(t 
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   check [shape=diamond]
   start -> a -> check
   check -> a [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
@@ -278,9 +278,9 @@ func TestValidate_LoopRestartTransientCompanionIsNotDeterministicFallback_Warns(
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   check [shape=diamond]
-  pm [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="postmortem"]
+  pm [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="postmortem"]
   start -> a -> check
   check -> a [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
   check -> pm [condition="outcome=fail && context.failure_class=transient_infra"]
@@ -301,9 +301,9 @@ func TestValidate_LoopRestartPartialSuccessCompanionIsNotDeterministicFallback_W
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   check [shape=diamond]
-  pm [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="postmortem"]
+  pm [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="postmortem"]
   start -> a -> check
   check -> a [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
   check -> pm [condition="outcome=partial_success"]
@@ -322,7 +322,7 @@ func TestValidate_FailLoopFailureClassGuard_WarnsWhenBackEdgeUnguarded(t *testin
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  impl [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  impl [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   check [shape=diamond]
   start -> impl -> check
   check -> impl [condition="outcome=fail"]
@@ -341,12 +341,12 @@ func TestValidate_FailLoopFailureClassGuard_NoWarningWhenFailureClassGuarded(t *
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  impl [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  impl [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   check [shape=diamond]
   start -> impl -> check
   check -> impl [condition="outcome=fail && context.failure_class=transient_infra"]
   check -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
-  postmortem [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="p"]
+  postmortem [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="p"]
   check -> exit [condition="outcome=success"]
 }
 `))
@@ -366,7 +366,7 @@ func TestValidate_EscalationModelsSyntax_Valid_NoWarning(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x", escalation_models="kimi:kimi-k2.5, anthropic:claude-opus-4-6"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x", escalation_models="kimi:kimi-k2.5, anthropic:claude-opus-4-6"]
   start -> a -> exit
 }
 `))
@@ -386,7 +386,7 @@ func TestValidate_EscalationModelsSyntax_MissingColon(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x", escalation_models="kimi-kimi-k2.5"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x", escalation_models="kimi-kimi-k2.5"]
   start -> a -> exit
 }
 `))
@@ -402,7 +402,7 @@ func TestValidate_EscalationModelsSyntax_EmptyProvider(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x", escalation_models=":some-model"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x", escalation_models=":some-model"]
   start -> a -> exit
 }
 `))
@@ -420,7 +420,7 @@ func TestValidate_ShapeAliases_DownstreamLintsFireForCircleAndDoublecircle(t *te
 digraph G {
   s [shape=circle]
   e [shape=doublecircle]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   s -> a -> e
   a -> s
   e -> a
@@ -448,12 +448,12 @@ digraph G {
   graph [retry_target=implement]
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  implement [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  implement [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   review_consensus [
     shape=box,
     goal_gate=true,
     llm_provider=openai,
-    llm_model=gpt-5.2,
+    llm_model=gpt-5.4,
     prompt="Review and decide outcome.\nWrite status JSON with outcome=pass when approved."
   ]
   start -> review_consensus
@@ -495,12 +495,12 @@ digraph G {
   graph [retry_target=implement]
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  implement [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  implement [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   review_consensus [
     shape=box,
     goal_gate=true,
     llm_provider=openai,
-    llm_model=gpt-5.2,
+    llm_model=gpt-5.4,
     prompt="Review and decide outcome.\nWrite status JSON with outcome=` + tc.promptStatus + ` when approved."
   ]
   start -> review_consensus
@@ -526,12 +526,12 @@ digraph G {
   graph [retry_target=implement]
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  implement [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  implement [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   review_consensus [
     shape=box,
     goal_gate=true,
     llm_provider=openai,
-    llm_model=gpt-5.2,
+    llm_model=gpt-5.4,
     prompt="Review and decide outcome.\nWrite status JSON with outcome=success when approved."
   ]
   review_router [shape=diamond]
@@ -556,9 +556,9 @@ digraph G {
   graph [provenance_version="1"]
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  postmortem [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="pm"]
-  implement [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="impl"]
-  debate_consolidate [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="debate"]
+  postmortem [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="pm"]
+  implement [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="impl"]
+  debate_consolidate [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="debate"]
   start -> postmortem
   postmortem -> debate_consolidate [condition="outcome=needs_replan"]
   postmortem -> implement
@@ -577,9 +577,9 @@ func TestValidate_TemplateProvenancePostmortemRouting_NoWarningWithoutProvenance
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  postmortem [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="pm"]
-  implement [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="impl"]
-  debate_consolidate [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="debate"]
+  postmortem [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="pm"]
+  implement [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="impl"]
+  debate_consolidate [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="debate"]
   check_toolchain [shape=parallelogram, tool_command="echo ok"]
   start -> postmortem
   postmortem -> debate_consolidate [condition="outcome=needs_replan"]
@@ -603,9 +603,9 @@ digraph G {
   graph [provenance_version="1"]
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  postmortem [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="pm"]
-  implement [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="impl"]
-  plan_fanout [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="plan"]
+  postmortem [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="pm"]
+  implement [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="impl"]
+  plan_fanout [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="plan"]
   check_toolchain [shape=parallelogram, tool_command="echo ok"]
   start -> postmortem
   postmortem -> plan_fanout [condition="outcome=needs_replan"]
@@ -630,8 +630,8 @@ digraph G {
   graph [provenance_version="1"]
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  postmortem [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="pm"]
-  implement [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="impl"]
+  postmortem [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="pm"]
+  implement [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="impl"]
   start -> postmortem
   postmortem -> implement [condition="outcome=impl_repair"]
   postmortem -> implement
@@ -668,7 +668,7 @@ func TestLintConditionSyntax_ValidConditions(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   start -> a
   a -> exit [condition="` + cond + `"]
 }
@@ -698,7 +698,7 @@ func TestLintConditionSyntax_SyntaxRejectsGreaterThanOperator(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   start -> a
   a -> exit [condition="outcome>success"]
 }
@@ -714,7 +714,7 @@ digraph G {
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   start -> a
   a -> exit [condition="outcome=success"]
 }
@@ -792,7 +792,7 @@ func TestValidate_TypeKnownRule_RecognizedType_NoWarning(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, type=codergen, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  a [shape=box, type=codergen, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   start -> a -> exit
 }
 `))
@@ -809,7 +809,7 @@ func TestValidate_TypeKnownRule_UnrecognizedType_Warning(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, type=unknown_handler, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  a [shape=box, type=unknown_handler, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   start -> a -> exit
 }
 `))
@@ -826,7 +826,7 @@ func TestValidate_TypeKnownRule_NoTypeOverride_NoWarning(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   start -> a -> exit
 }
 `))
@@ -853,7 +853,7 @@ func TestValidate_ExtraRules_AreAppendedToBuiltInRules(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   start -> a -> exit
 }
 `))
@@ -873,7 +873,7 @@ func TestValidate_ExtraRules_NilRulesIgnored(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   start -> a -> exit
 }
 `))
@@ -890,7 +890,7 @@ func TestValidateOrError_CollectsAllErrors(t *testing.T) {
 	// Graph with multiple validation errors: no start, no exit, edge to missing node.
 	g, err := dot.Parse([]byte(`
 digraph G {
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   a -> missing
 }
 `))
@@ -922,7 +922,7 @@ digraph G {
   start [shape=Mdiamond]
   success_exit [shape=Msquare]
   error_exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   start -> a
   a -> success_exit [condition="outcome=success"]
   a -> error_exit [condition="outcome=fail"]
@@ -939,7 +939,7 @@ func TestValidate_ZeroExitNodes_Error(t *testing.T) {
 	g, err := dot.Parse([]byte(`
 digraph G {
   start [shape=Mdiamond]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   start -> a
 }
 `))
@@ -956,7 +956,7 @@ digraph G {
   start [shape=Mdiamond]
   exit1 [shape=Msquare]
   exit2 [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   start -> a
   a -> exit1 [condition="outcome=success"]
   a -> exit2 [condition="outcome=fail"]
@@ -1095,8 +1095,8 @@ func TestValidate_OrphanCustomOutcomeHint_CustomOutcomeNoFallback_Warns(t *testi
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  review [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="review"]
-  implement [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="impl"]
+  review [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="review"]
+  implement [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="impl"]
   start -> review
   review -> exit [condition="outcome=approved"]
   review -> implement [condition="outcome=retry"]
@@ -1124,8 +1124,8 @@ func TestValidate_OrphanCustomOutcomeHint_CustomOutcomeWithFallback_NoWarn(t *te
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  review [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="review"]
-  implement [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="impl"]
+  review [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="review"]
+  implement [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="impl"]
   start -> review
   review -> exit [condition="outcome=approved"]
   review -> implement
@@ -1145,8 +1145,8 @@ func TestValidate_OrphanCustomOutcomeHint_ReservedOutcomeOnly_NoWarn(t *testing.
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
-  postmortem [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="pm"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
+  postmortem [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="pm"]
   start -> a
   a -> exit [condition="outcome=success"]
   a -> postmortem [condition="outcome=fail"]
@@ -1166,8 +1166,8 @@ func TestValidate_OrphanCustomOutcomeHint_NoConditionalEdges_NoWarn(t *testing.T
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="y"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="y"]
   start -> a -> b -> exit
 }
 `))
@@ -1191,7 +1191,7 @@ digraph G {
   a [
     shape=box,
     llm_provider=openai,
-    llm_model=gpt-5.2,
+    llm_model=gpt-5.4,
     prompt="Write your result to $KILROY_STAGE_STATUS_PATH when done."
   ]
   start -> a -> exit
@@ -1222,7 +1222,7 @@ digraph G {
   a [
     shape=box,
     llm_provider=openai,
-    llm_model=gpt-5.2,
+    llm_model=gpt-5.4,
     prompt="Write your result to $KILROY_STAGE_STATUS_PATH; fallback is $KILROY_STAGE_STATUS_FALLBACK_PATH."
   ]
   start -> a -> exit
@@ -1245,7 +1245,7 @@ digraph G {
   a [
     shape=box,
     llm_provider=openai,
-    llm_model=gpt-5.2,
+    llm_model=gpt-5.4,
     prompt="Do some work and report your findings."
   ]
   start -> a -> exit
@@ -1268,7 +1268,7 @@ digraph G {
   a [
     shape=box,
     llm_provider=openai,
-    llm_model=gpt-5.2,
+    llm_model=gpt-5.4,
     auto_status=true,
     prompt="Write your result to $KILROY_STAGE_STATUS_PATH when done."
   ]
@@ -1290,7 +1290,7 @@ func buildTestCatalog() *modeldb.Catalog {
 		Models: map[string]modeldb.ModelEntry{
 			"anthropic/claude-opus-4.6":   {Provider: "anthropic"},
 			"anthropic/claude-sonnet-4.5": {Provider: "anthropic"},
-			"openai/gpt-5.2":              {Provider: "openai"},
+			"openai/gpt-5.4":              {Provider: "openai"},
 		},
 		CoveredProviders: map[string]bool{
 			"anthropic": true,
@@ -1305,7 +1305,7 @@ func minimalGraphWithStylesheet(stylesheet string) []byte {
   graph [model_stylesheet="` + stylesheet + `"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   start -> a -> exit
 }`)
 }
@@ -1357,7 +1357,7 @@ func TestValidate_G12_NoStylesheet_NoWarning(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   start -> a -> exit
 }
 `))
@@ -1409,7 +1409,7 @@ func TestPromptFile_ConflictLintRule_FiresWhenBothSet(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="inline text", prompt_file="prompts/some.md"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="inline text", prompt_file="prompts/some.md"]
   start -> a -> exit
 }
 `))
@@ -1443,7 +1443,7 @@ func TestPromptFile_ConflictLintRule_DoesNotFireWhenOnlyPromptFile(t *testing.T)
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt_file="prompts/some.md"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt_file="prompts/some.md"]
   start -> a -> exit
 }
 `))
@@ -1471,7 +1471,7 @@ func TestPromptFile_LlmPromptConflict_FiresWithLlmPromptAttr(t *testing.T) {
 	a := model.NewNode("a")
 	a.Attrs["shape"] = "box"
 	a.Attrs["llm_provider"] = "openai"
-	a.Attrs["llm_model"] = "gpt-5.2"
+	a.Attrs["llm_model"] = "gpt-5.4"
 	a.Attrs["llm_prompt"] = "legacy inline text"
 	a.Attrs["prompt_file"] = "prompts/some.md"
 
@@ -1500,7 +1500,7 @@ func TestValidate_AllConditionalEdges_ErrorWhenAllConditional(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   start -> a
   a -> exit [condition="outcome=success"]
   a -> exit [condition="outcome=fail"]
@@ -1518,7 +1518,7 @@ func TestValidate_AllConditionalEdges_PassesWithUnconditionalFallback(t *testing
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   start -> a
   a -> exit [condition="outcome=success"]
   a -> exit [condition="outcome=fail"]
@@ -1611,7 +1611,7 @@ func TestValidate_ReservedKeywordNodeID_WarnsOnIfKeyword(t *testing.T) {
 	n := model.NewNode("if")
 	n.Attrs["shape"] = "box"
 	n.Attrs["llm_provider"] = "openai"
-	n.Attrs["llm_model"] = "gpt-5.2"
+	n.Attrs["llm_model"] = "gpt-5.4"
 	_ = g.AddNode(n)
 
 	diags := lintReservedKeywordNodeID(g)
@@ -1638,7 +1638,7 @@ func TestValidate_ReservedKeywordNodeID_PassesOnNormalID(t *testing.T) {
 	n := model.NewNode("check_toolchain")
 	n.Attrs["shape"] = "box"
 	n.Attrs["llm_provider"] = "openai"
-	n.Attrs["llm_model"] = "gpt-5.2"
+	n.Attrs["llm_model"] = "gpt-5.4"
 	_ = g.AddNode(n)
 
 	diags := lintReservedKeywordNodeID(g)

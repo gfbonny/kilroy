@@ -98,7 +98,7 @@ digraph G {
   graph [goal="test schema fallback"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="say hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="say hi"]
   start -> a -> exit
 }
 `)
@@ -189,7 +189,7 @@ digraph G {
   graph [goal="test state db fallback"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="say hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="say hi"]
   start -> a -> exit
 }
 `)
@@ -288,7 +288,7 @@ digraph G {
   graph [goal="test codex timeout retry success"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="say hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="say hi"]
   start -> a -> exit
 }
 `)
@@ -378,7 +378,7 @@ digraph G {
   graph [goal="test codex timeout retry cap"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="say hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="say hi"]
   start -> a -> exit
 }
 `)
@@ -554,7 +554,7 @@ digraph G {
   graph [goal="test structured unknown-key fallback"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="say hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="say hi"]
   start -> a -> exit
 }
 `)

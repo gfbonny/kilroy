@@ -83,31 +83,9 @@ merge_analysis verifies all design docs exist and are cross-module consistent.
 Only after merge_analysis succeeds does the pipeline proceed to implement_* nodes.
 See `skills/create-dotfile/reference_template.dot` OPTIONAL comments for stub examples.
 
-**Worker pool (for 5+ discrete deliverable files requiring idempotent resumability):**
-When the task produces many independent files (e.g. 6 service modules, 8 API handlers), use a worker pool
-instead of a simple fan-out to get per-file idempotency and stall detection:
-
-```
-plan_work (shape=box, auto_status=true)
-  → work_pool (shape=component)
-  → worker_0 / worker_1 / worker_2 (shape=box, auto_status=true)
-  → check_work_complete (shape=box, auto_status=true)
-  → [loop back to work_pool if outcome=more_work, else merge_implementation]
-```
-
-plan_work writes `.ai/runs/$KILROY_RUN_ID/work_queue.json` once (skips if already exists).
-Each worker_N claims items where `item.id % N == N_index`, skips files already on disk.
-check_work_complete reads `.ai/runs/$KILROY_RUN_ID/work_pass.txt` (pass counter); routes:
-- `outcome=more_work` → work_pool (files remain)
-- `outcome=all_done`  → merge_implementation
-- `outcome=fail`      → postmortem (pass count > 5, stall guard)
-
-Required properties: (1) idempotent — skip existing files; (2) modulo item assignment;
-(3) pass-counter stall guard capping retries; (4) explicit all_done completion edge.
-
 **auto_status=true assignment rules:**
 - MUST: synthesis nodes — consolidate_*, merge_*, debate_*, review_consensus, postmortem
-- SHOULD: all implement_*, worker_N, analyze_* nodes in fan-outs — their primary
+- SHOULD: all implement_*, analyze_* nodes in fan-outs — their primary
   completion signal is the deliverable file; auto_status removes redundant success writes
 - NEVER on shape=diamond routing nodes or shape=parallelogram tool nodes
 
@@ -172,7 +150,7 @@ Required properties: (1) idempotent — skip existing files; (2) modulo item ass
   ```
   Use these IDs in the failure_signature field so postmortem can reference failing ACs precisely and the next verify pass can re-check only those criteria.
 - **Verify nodes must call runtime-authored scripts, not hardcode tool invocations.** Any `shape=parallelogram` verify node whose pass/fail depends on decisions made by implementation nodes — package manager, build system, directory layout, language runtime — MUST use `tool_command="sh scripts/validate-{stage}.sh"` rather than inline tool calls. The implementation node responsible for project scaffolding MUST write `scripts/validate-build.sh`, `scripts/validate-fmt.sh`, and `scripts/validate-test.sh` as committed deliverables. Scripts MUST open with `#!/bin/sh` and MUST NOT assume any runtime beyond what `check_toolchain` confirmed. Rationale: ingest-time `tool_command` strings embed assumptions about structure the implementation loop has not yet made; when the loop's choices diverge — different directory names, package managers, or build systems — the verify node fails deterministically and no postmortem routing can repair it.
-- **Test evidence contract (required when DoD defines integration scenarios):** `scripts/validate-test.sh` MUST write deterministic evidence artifacts under `.ai/test-evidence/latest/` and produce `.ai/test-evidence/latest/manifest.json` mapping each `IT-*` scenario ID to artifact paths/types and pass/fail status. UI scenarios require screenshot evidence; non-UI scenarios require text/structured evidence. Do not require a specific test framework — require artifact outcomes.
+- **Test evidence contract (required when DoD defines integration scenarios):** `scripts/validate-test.sh` MUST write deterministic evidence artifacts under `.ai/runs/$KILROY_RUN_ID/test-evidence/latest/` and produce `.ai/runs/$KILROY_RUN_ID/test-evidence/latest/manifest.json` mapping each `IT-*` scenario ID to artifact paths/types and pass/fail status. UI scenarios require screenshot evidence; non-UI scenarios require text/structured evidence. Do not require a specific test framework — require artifact outcomes.
 - **Failure-path evidence durability:** `scripts/validate-test.sh` MUST emit best-effort evidence and a manifest entry even when tests fail (for example command exits non-zero). Missing evidence must be explicit in manifest fields so postmortem can diagnose incomplete capture as a finding.
 - **Artifact verification gate:** ensure `verify_artifacts` checks that manifest scenario IDs match the DoD integration scenarios and that each scenario satisfies required artifact types (for example screenshots for UI scenarios) before semantic review proceeds.
 
@@ -185,7 +163,7 @@ Required properties: (1) idempotent — skip existing files; (2) modulo item ass
 - The unconditional fallback from `postmortem` MUST come last among its outbound edges.
 - **Postmortem progress detection (required):** The `postmortem` prompt MUST compare the current failing AC set against the previous iteration's failing AC set (stored in context key `last_failing_acs`). If the sets are identical — zero progress — the postmortem MUST route `needs_replan`, not `impl_repair`. The default `impl_repair` applies ONLY on the first occurrence of a failure. Identical repeated failures are a signal that the implementation approach is wrong, not that another repair pass will help. Add `loop_restart_persist_keys="last_failing_acs"` to the graph attrs so this key survives loop restarts.
 - **Implement pre-exit verification (required on repair passes):** The `implement` prompt MUST require that on any repair pass (when `.ai/runs/$KILROY_RUN_ID/postmortem_latest.md` or `.ai/runs/$KILROY_RUN_ID/review_consensus.md` exists), the node runs `./scripts/validate-build.sh` and re-reads each targeted file to confirm the fix is present before exiting. Silent exit (auto-success) on a repair pass without self-verification is the primary cause of no-progress cycles.
-- **Postmortem evidence usage (required):** The `postmortem` prompt MUST read `.ai/test-evidence/latest/manifest.json` when present. For each failed or suspicious `IT-*` scenario, it MUST read listed artifacts that can materially improve diagnosis and cite artifact file paths in `.ai/runs/$KILROY_RUN_ID/postmortem_latest.md`. It may skip an artifact only with an explicit reason (missing/unreadable/not produced), which becomes a finding.
+- **Postmortem evidence usage (required):** The `postmortem` prompt MUST read `.ai/runs/$KILROY_RUN_ID/test-evidence/latest/manifest.json` when present. For each failed or suspicious `IT-*` scenario, it MUST read listed artifacts that can materially improve diagnosis and cite artifact file paths in `.ai/runs/$KILROY_RUN_ID/postmortem_latest.md`. It may skip an artifact only with an explicit reason (missing/unreadable/not produced), which becomes a finding.
 
 ## Cycle Detection Contract (Required)
 
@@ -274,7 +252,7 @@ The default is 3. For pipelines with a multi-pass repair loop (implement → ver
   trap - EXIT
   ```
   The `KILROY_VALIDATE_FAILURE:` prefix is the linter-enforced token. The validator rule `validate_script_failure_contract` fires a warning when `sh scripts/validate-*.sh` appears in `tool_command` without this token.
-- **Never treat `verify_artifacts` as optional when a DoD defines test evidence.** If `.ai/test-evidence/latest/manifest.json` is missing, scenario IDs are incomplete, or required artifact types are absent, route to failure/postmortem with a stable `failure_signature` (for example `missing_test_evidence`) instead of proceeding.
+- **Never treat `verify_artifacts` as optional when a DoD defines test evidence.** If `.ai/runs/$KILROY_RUN_ID/test-evidence/latest/manifest.json` is missing, scenario IDs are incomplete, or required artifact types are absent, route to failure/postmortem with a stable `failure_signature` (for example `missing_test_evidence`) instead of proceeding.
 
 ## References
 

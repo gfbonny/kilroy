@@ -115,7 +115,7 @@ func TestCatalogHasProviderModel_AcceptsOpenRouterProviderPrefixes(t *testing.T)
 func TestCatalogHasProviderModel_SparkEntry(t *testing.T) {
 	path := t.TempDir() + "/catalog.json"
 	data := `{"data":[{
-		"id": "openai/gpt-5.3-codex-spark",
+		"id": "openai/gpt-5.4-spark",
 		"context_length": 128000,
 		"architecture": {
 			"input_modalities": ["text"],
@@ -132,10 +132,10 @@ func TestCatalogHasProviderModel_SparkEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCatalogFromOpenRouterJSON: %v", err)
 	}
-	if !CatalogHasProviderModel(c, "openai", "gpt-5.3-codex-spark") {
-		t.Fatal("expected catalog to contain openai/gpt-5.3-codex-spark")
+	if !CatalogHasProviderModel(c, "openai", "gpt-5.4-spark") {
+		t.Fatal("expected catalog to contain openai/gpt-5.4-spark")
 	}
-	entry := c.Models["openai/gpt-5.3-codex-spark"]
+	entry := c.Models["openai/gpt-5.4-spark"]
 	if entry.ContextWindow != 128000 {
 		t.Errorf("context_window: got %d, want 128000", entry.ContextWindow)
 	}

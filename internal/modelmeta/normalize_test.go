@@ -45,7 +45,7 @@ func TestNativeModelID(t *testing.T) {
 		// OpenAI: prefix stripped, dots in version numbers preserved
 		{"openai", "gpt-4.1", "gpt-4.1"},
 		{"openai", "openai/gpt-4.1", "gpt-4.1"},
-		{"openai", "gpt-5.3-codex-spark", "gpt-5.3-codex-spark"},
+		{"openai", "gpt-5.4-spark", "gpt-5.4-spark"},
 		// Kimi (openai-compat): prefix stripped, native ID unchanged
 		{"kimi", "moonshot-v1-8k", "moonshot-v1-8k"},
 		{"kimi", "kimi/moonshot-v1-8k", "moonshot-v1-8k"},

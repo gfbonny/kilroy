@@ -87,7 +87,7 @@ digraph G {
   graph [goal="status ingestion fixture"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="write status"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="write status"]
   fix [shape=parallelogram, tool_command="echo fixed > fixed.txt"]
   start -> a
   a -> fix [condition="outcome=fail"]
@@ -171,7 +171,7 @@ digraph G {
   graph [goal="heartbeat fixture"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="heartbeat test"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="heartbeat test"]
   start -> a -> exit
 }
 `)

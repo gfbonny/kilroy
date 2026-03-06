@@ -50,8 +50,8 @@ func TestResume_ParallelBranchNamesUseConfiguredPrefix(t *testing.T) {
 	  graph [goal="test"]
 	  start [shape=Mdiamond]
 	  par [shape=component]
-	  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="a"]
-	  b [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="b"]
+	  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="a"]
+	  b [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="b"]
 	  join [shape=tripleoctagon]
 	  exit [shape=Msquare]
 	  start -> par

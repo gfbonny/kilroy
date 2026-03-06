@@ -34,9 +34,8 @@ func (a *okAdapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, er
 func TestCodergenRouter_WithFailoverText_FailsOverToDifferentProvider(t *testing.T) {
 	cfg := &RunConfigFile{Version: 1}
 	cfg.LLM.Providers = map[string]ProviderConfig{
-		"openai":      {Backend: BackendAPI},
+		"openai":      {Backend: BackendAPI, Failover: []string{"google"}},
 		"google":      {Backend: BackendAPI},
-		"gemini":      {Backend: BackendAPI}, // alias should be normalized away
 		"unsupported": {Backend: BackendAPI},
 	}
 	// Only builtin providers are recognized by normalizeProviderKey; others are ignored by withFailoverText.
@@ -44,11 +43,15 @@ func TestCodergenRouter_WithFailoverText_FailsOverToDifferentProvider(t *testing
 	catalog := &modeldb.Catalog{
 		Models: map[string]modeldb.ModelEntry{
 			// Include a provider-prefixed model key to validate providerModelIDFromCatalogKey stripping.
-			"gemini/gemini-2.5-pro": {Provider: "google", Mode: "chat"},
+			"gemini/gemini-3.1-pro-preview": {Provider: "google", Mode: "chat"},
 		},
 	}
 
-	r := NewCodergenRouter(cfg, catalog)
+	runtimes, err := resolveProviderRuntimes(cfg)
+	if err != nil {
+		t.Fatalf("resolveProviderRuntimes: %v", err)
+	}
+	r := NewCodergenRouterWithRuntimes(cfg, catalog, runtimes)
 
 	client := llm.NewClient()
 	client.Register(&okAdapter{name: "openai"})
@@ -65,12 +68,12 @@ func TestCodergenRouter_WithFailoverText_FailsOverToDifferentProvider(t *testing
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	txt, used, err := r.withFailoverText(ctx, nil, node, client, "openai", "gpt-5.2-codex", func(prov string, mid string) (string, error) {
+	txt, used, err := r.withFailoverText(ctx, nil, node, client, "openai", "gpt-5.4", func(prov string, mid string) (string, error) {
 		if prov == "openai" {
 			return "", fmt.Errorf("synthetic openai failure")
 		}
 		if prov == "google" {
-			if mid != "gemini-2.5-pro" {
+			if mid != "gemini-3.1-pro-preview" {
 				return "", fmt.Errorf("unexpected fallback model: %q", mid)
 			}
 			return "ok-from-google", nil
@@ -90,24 +93,28 @@ func TestCodergenRouter_WithFailoverText_FailsOverToDifferentProvider(t *testing
 	if used.Provider != "google" {
 		t.Fatalf("used provider: got %q want %q", used.Provider, "google")
 	}
-	if used.Model != "gemini-2.5-pro" {
-		t.Fatalf("used model: got %q want %q", used.Model, "gemini-2.5-pro")
+	if used.Model != "gemini-3.1-pro-preview" {
+		t.Fatalf("used model: got %q want %q", used.Model, "gemini-3.1-pro-preview")
 	}
 }
 
 func TestCodergenRouter_WithFailoverText_AppliesForceModelToFailoverProvider(t *testing.T) {
 	cfg := &RunConfigFile{Version: 1}
 	cfg.LLM.Providers = map[string]ProviderConfig{
-		"openai": {Backend: BackendAPI},
+		"openai": {Backend: BackendAPI, Failover: []string{"google"}},
 		"google": {Backend: BackendAPI},
 	}
 	catalog := &modeldb.Catalog{
 		Models: map[string]modeldb.ModelEntry{
-			"gemini/gemini-2.5-pro": {Provider: "google", Mode: "chat"},
+			"gemini/gemini-3.1-pro-preview": {Provider: "google", Mode: "chat"},
 		},
 	}
 
-	r := NewCodergenRouter(cfg, catalog)
+	runtimes, err := resolveProviderRuntimes(cfg)
+	if err != nil {
+		t.Fatalf("resolveProviderRuntimes: %v", err)
+	}
+	r := NewCodergenRouterWithRuntimes(cfg, catalog, runtimes)
 	client := llm.NewClient()
 	client.Register(&okAdapter{name: "openai"})
 	client.Register(&okAdapter{name: "google"})
@@ -124,7 +131,7 @@ func TestCodergenRouter_WithFailoverText_AppliesForceModelToFailoverProvider(t *
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	txt, used, err := r.withFailoverText(ctx, execCtx, node, client, "openai", "gpt-5.2-codex", func(prov string, mid string) (string, error) {
+	txt, used, err := r.withFailoverText(ctx, execCtx, node, client, "openai", "gpt-5.4", func(prov string, mid string) (string, error) {
 		if prov == "openai" {
 			return "", fmt.Errorf("synthetic openai failure")
 		}
@@ -191,26 +198,6 @@ func TestFailoverOrder_ExplicitEmptyFailoverPreserved(t *testing.T) {
 	}
 }
 
-func TestFailoverOrder_DefaultsAreSingleHop(t *testing.T) {
-	cases := []struct {
-		provider string
-		want     string
-	}{
-		{provider: "openai", want: "google"},
-		{provider: "anthropic", want: "google"},
-		{provider: "google", want: "kimi"},
-		{provider: "kimi", want: "zai"},
-		{provider: "zai", want: "cerebras"},
-		{provider: "cerebras", want: "zai"},
-	}
-	for _, tc := range cases {
-		got := failoverOrder(tc.provider)
-		if len(got) != 1 || got[0] != tc.want {
-			t.Fatalf("%s failover=%v want [%s]", tc.provider, got, tc.want)
-		}
-	}
-}
-
 func TestCodergenRouter_WithFailoverText_ExplicitEmptyFailoverDoesNotFallback(t *testing.T) {
 	cfg := &RunConfigFile{Version: 1}
 	cfg.LLM.Providers = map[string]ProviderConfig{
@@ -233,7 +220,7 @@ func TestCodergenRouter_WithFailoverText_ExplicitEmptyFailoverDoesNotFallback(t 
 	client.Register(&okAdapter{name: "anthropic"})
 
 	attemptedAnthropic := false
-	_, _, err = r.withFailoverText(context.Background(), nil, &model.Node{ID: "n1"}, client, "openai", "gpt-5.2-codex", func(prov string, mid string) (string, error) {
+	_, _, err = r.withFailoverText(context.Background(), nil, &model.Node{ID: "n1"}, client, "openai", "gpt-5.4", func(prov string, mid string) (string, error) {
 		_ = mid
 		if prov == "anthropic" {
 			attemptedAnthropic = true
@@ -245,6 +232,35 @@ func TestCodergenRouter_WithFailoverText_ExplicitEmptyFailoverDoesNotFallback(t 
 	}
 	if attemptedAnthropic {
 		t.Fatalf("unexpected failover attempt when failover=[] is explicit")
+	}
+}
+
+func TestCodergenRouter_WithFailoverText_OmittedFailoverDoesNotFallback(t *testing.T) {
+	cfg := &RunConfigFile{Version: 1}
+	cfg.LLM.Providers = map[string]ProviderConfig{
+		"openai": {Backend: BackendAPI},
+		"google": {Backend: BackendAPI},
+	}
+	runtimes, err := resolveProviderRuntimes(cfg)
+	if err != nil {
+		t.Fatalf("resolveProviderRuntimes: %v", err)
+	}
+	r := NewCodergenRouterWithRuntimes(cfg, nil, runtimes)
+
+	attempted := []string{}
+	_, used, err := r.withFailoverText(context.Background(), nil, &model.Node{ID: "n1"}, llm.NewClient(), "openai", "gpt-5.4", func(provider, model string) (string, error) {
+		_ = model
+		attempted = append(attempted, provider)
+		return "", llm.NewNetworkError(provider, "synthetic outage")
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if used.Provider != "openai" {
+		t.Fatalf("unexpected fallback provider: %q", used.Provider)
+	}
+	if len(attempted) != 1 || attempted[0] != "openai" {
+		t.Fatalf("unexpected fallback attempts: %v", attempted)
 	}
 }
 
@@ -269,7 +285,7 @@ func TestPickFailoverModelFromRuntime_ZAIDoesNotRotateCatalogVariants(t *testing
 			"z-ai/glm-4.5v":         {Provider: "zai"},
 		},
 	}
-	got := pickFailoverModelFromRuntime("zai", rt, catalog, "gpt-5.2-codex")
+	got := pickFailoverModelFromRuntime("zai", rt, catalog, "gpt-5.4")
 	if got != "glm-4.7" {
 		t.Fatalf("expected stable zai model glm-4.7, got %q", got)
 	}
@@ -289,7 +305,7 @@ func TestPickFailoverModelFromRuntime_KimiPinnedToK2_5(t *testing.T) {
 	rt := map[string]ProviderRuntime{
 		"kimi": {Key: "kimi"},
 	}
-	got := pickFailoverModelFromRuntime("kimi", rt, nil, "gpt-5.2-codex")
+	got := pickFailoverModelFromRuntime("kimi", rt, nil, "gpt-5.4")
 	if got != "kimi-k2.5" {
 		t.Fatalf("expected stable kimi model kimi-k2.5, got %q", got)
 	}

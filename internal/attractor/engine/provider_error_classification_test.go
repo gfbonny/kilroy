@@ -29,7 +29,7 @@ func TestClassifyProviderCLIError_AnthropicStreamJSONRequiresVerbose(t *testing.
 func TestClassifyProviderCLIError_GeminiModelNotFound(t *testing.T) {
 	got := classifyProviderCLIError(
 		"google",
-		"Error: model gemini-2.5-pro was not found",
+		"Error: model gemini-3.1-pro-preview was not found",
 		errors.New("exit status 1"),
 	)
 
@@ -115,7 +115,7 @@ func TestClassifyProviderCLIErrorWithContract_ExecutableMissing(t *testing.T) {
 
 func TestClassifyProviderCLIErrorWithContract_CapabilityMissing(t *testing.T) {
 	spec := &providerspec.CLISpec{
-		CapabilityAll: []string{"--json", "--sandbox"},
+		CapabilityAll: []string{"--json"},
 	}
 	got := classifyProviderCLIErrorWithContract(
 		"openai",

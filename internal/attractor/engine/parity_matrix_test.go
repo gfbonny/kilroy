@@ -43,8 +43,8 @@ func TestParityMatrix_Row01_ParseLinearPipeline(t *testing.T) {
 	g, err := dot.Parse([]byte(`
 digraph G {
   start [shape=Mdiamond]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   done [shape=Msquare]
   start -> a -> b -> done
 }
@@ -72,7 +72,7 @@ digraph G {
   graph [goal="Build a CLI tool", label="My Pipeline"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   start -> a -> exit
 }
 `))
@@ -96,7 +96,7 @@ digraph G {
   worker [
     shape=box,
     llm_provider=openai,
-    llm_model=gpt-5.2,
+    llm_model=gpt-5.4,
     prompt="Build the feature",
     max_retries=3
   ]
@@ -116,8 +116,8 @@ digraph G {
 	if got := n.Attrs["llm_provider"]; got != "openai" {
 		t.Fatalf("llm_provider: got %q want %q", got, "openai")
 	}
-	if got := n.Attrs["llm_model"]; got != "gpt-5.2" {
-		t.Fatalf("llm_model: got %q want %q", got, "gpt-5.2")
+	if got := n.Attrs["llm_model"]; got != "gpt-5.4" {
+		t.Fatalf("llm_model: got %q want %q", got, "gpt-5.4")
 	}
 	if got := n.Attrs["prompt"]; got != "Build the feature" {
 		t.Fatalf("prompt: got %q want %q", got, "Build the feature")
@@ -132,7 +132,7 @@ func TestParityMatrix_Row04_ValidateMissingStartNode(t *testing.T) {
 	_, _, err := Prepare([]byte(`
 digraph G {
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   a -> exit
 }
 `))
@@ -149,7 +149,7 @@ func TestParityMatrix_Row05_ValidateMissingExitNode(t *testing.T) {
 	_, _, err := Prepare([]byte(`
 digraph G {
   start [shape=Mdiamond]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   start -> a
 }
 `))
@@ -170,8 +170,8 @@ func TestParityMatrix_Row06_ValidateOrphanNodeDiagnostic(t *testing.T) {
 digraph G {
   start  [shape=Mdiamond]
   exit   [shape=Msquare]
-  a      [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  orphan [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a      [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  orphan [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   start -> a -> exit
 }
 `))
@@ -199,7 +199,7 @@ digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do task a"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="do task a"]
   start -> a -> exit
 }
 `)
@@ -408,9 +408,9 @@ func TestParityMatrix_Row13_EdgeConditionBeatsWeight(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  c [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  c [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   start -> a
   a -> b [condition="outcome=success", weight=0]
   a -> c [weight=100]
@@ -438,9 +438,9 @@ func TestParityMatrix_Row14_EdgeWeightBreaksTies(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  high [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  low  [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  high [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  low  [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   start -> a
   a -> low  [weight=1]
   a -> high [weight=100]
@@ -468,9 +468,9 @@ func TestParityMatrix_Row15_EdgeLexicalTiebreak(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  beta  [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  alpha [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  beta  [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  alpha [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   start -> a
   a -> beta  [weight=5]
   a -> alpha [weight=5]
@@ -553,7 +553,7 @@ digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do a"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="do a"]
   start -> a -> exit
 }
 `)
@@ -660,7 +660,7 @@ digraph G {
   graph [goal="Build a REST API"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="Implement: $goal"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="Implement: $goal"]
   start -> a -> exit
 }
 `))
@@ -680,8 +680,8 @@ digraph P {
   graph [goal="test"]
   start [shape=Mdiamond]
   par [shape=component]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="branch a"]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="branch b"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="branch a"]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="branch b"]
   join [shape=tripleoctagon]
   exit [shape=Msquare]
 
@@ -839,9 +839,9 @@ digraph test_pipeline {
     graph [goal="Create a hello world Python script"]
 
     start       [shape=Mdiamond]
-    plan        [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="Plan how to create a hello world script for: $goal"]
-    implement   [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="Write the code based on the plan", goal_gate=true]
-    review      [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="Review the code for correctness"]
+    plan        [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="Plan how to create a hello world script for: $goal"]
+    implement   [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="Write the code based on the plan", goal_gate=true]
+    review      [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="Review the code for correctness"]
     done        [shape=Msquare]
 
     start -> plan

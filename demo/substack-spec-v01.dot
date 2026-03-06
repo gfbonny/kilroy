@@ -1,535 +1,175 @@
 digraph substack_spec_v01 {
     graph [
-        goal="Build the Substack Creator Newsletter Engine v01 from demo/substack-spec-v01.md and demo/substack-dod-v01.md, including UI flow constraints in demo/substack-spec-v01-ui.dot.",
+        goal="Build the Substack Creator Newsletter Engine — a pure React frontend (no backend) for brand-driven Substack content creation. Client-side Gemini LLM integration (gemini-3-flash-preview for fast tasks, gemini-3.1-pro-preview with extended thinking for important tasks, gemini-2.5-flash-lite for tests). IndexedDB persistence via idb library. Setup flow with API key, company identity, voice definition, and guardrails — each confirmed by gemini-3.1-pro-preview. Dashboard with post history, draft management, New Post and Trending Topics access. Trending Topics uses gemini-3-flash-preview with search grounding for research, gemini-3.1-pro-preview synthesizes 3 writing prompts. New Post pipeline: Topic (rich input) then Research (gemini-3-flash-preview search grounding, source metadata) then Outline (gemini-3.1-pro-preview one-shot) then Write/Edit/Guardrails (3 automatic gemini-3.1-pro-preview cycles) then Complete (serif footnoted citations with attribution lineage). Demo mode replays recorded sessions through production code path with fade-in prefills; ships with one bundled P&G session; cache miss shows error, no API fallback. Visual design matches Substack (serif fonts, horizontal dot step indicators, card primitives, accent progress bars, numbered footnotes). Test infrastructure: integration tests with canned data, smoke tests with live gemini-2.5-flash-lite, manual test option with real models. Deployment readiness for GitHub to Railway validated by code review only — no live deployment execution.",
         rankdir=LR,
         default_max_retry=3,
-        retry_target="debate_consolidate",
+        retry_target="plan_fanout",
         fallback_retry_target="plan_fanout",
-        loop_restart_signature_limit=5,
-        loop_restart_persist_keys="last_failing_acs",
         provenance_version="1",
+        loop_restart_persist_keys="last_failing_acs",
+        loop_restart_signature_limit=5,
         model_stylesheet="
-            * { llm_model: gemini-3-flash-preview; llm_provider: google; }
-            .hard { llm_model: gemini-2.5-pro; llm_provider: google; }
-            .verify { llm_model: gemini-2.5-flash; llm_provider: google; }
-            .review { llm_model: claude-sonnet-4.5; llm_provider: anthropic; }
-            .branch-a { llm_model: gemini-3-pro-preview; llm_provider: google; }
-            .branch-b { llm_model: claude-sonnet-4.5; llm_provider: anthropic; }
-            .branch-c { llm_model: gpt-5.2-codex; llm_provider: openai; }
+            * { llm_model: claude-opus-4.6; llm_provider: anthropic; }
+            .hard { llm_model: gpt-5.4; llm_provider: openai; }
+            .verify { llm_model: claude-opus-4.6; llm_provider: anthropic; }
+            .branch-a { llm_model: claude-opus-4.6; llm_provider: anthropic; }
+            .branch-b { llm_model: gemini-3-flash-preview; llm_provider: google; }
         "
     ]
 
-    start [shape=Mdiamond, label="Start"]
-    exit  [shape=Msquare, label="Exit"]
+    exit [shape=Msquare, label="Exit"]
+
+    // =========================================================================
+    // Bootstrap
+    // =========================================================================
 
     subgraph cluster_bootstrap {
         label="Bootstrap"
+        start [shape=Mdiamond, label="Start"]
 
         check_toolchain [
             shape=parallelogram,
             max_retries=0,
-            tool_command="sh -c 'set -e; command -v node >/dev/null; command -v npm >/dev/null; command -v git >/dev/null; echo toolchain_ok'"
+            tool_command="command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 && node --version && npm --version"
         ]
 
         expand_spec [
             shape=box,
             auto_status=true,
-            prompt="Goal: $goal
-
-Read these authoritative project sources:
-- demo/substack-spec-v01.md
-- demo/substack-dod-v01.md
-- demo/substack-spec-v01-ui.dot
-
-Create .ai/spec.md with these sections:
-1) Source Contract: copy the key constraints from the three source files without weakening meaning, and include the exact file paths.
-2) Product Scope and Non-Goals: pure React frontend, no backend, no live deployment during acceptance.
-3) Runtime Behavior Contract: setup flow, dashboard, trending topics, new post pipeline, demo replay behavior, reset behavior.
-4) Data and LLM Contract: IndexedDB persistence, structured JSON outputs, retry/backoff, production-vs-test model intent.
-5) Test and Evidence Contract: IT-1 through IT-12 plus manifest requirements under .ai/test-evidence/latest/.
-6) File/Module Targets: concrete implementation modules to guide planning and fan-out implementation.
-
-Include this verbatim user request block in .ai/spec.md:
-BEGIN_USER_REQUEST
-Use the create-dotfile skill to create a dotfile from the substack spec and DoD, including the UI spec dotfile.
-END_USER_REQUEST
-
-Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
-{\"status\":\"fail\",\"failure_reason\":\"Unable to produce .ai/spec.md from provided Substack sources\",\"failure_signature\":\"expand_spec_io\",\"failure_class\":\"deterministic_agent_bug\"}"
+            prompt="Goal: $goal\n\nThe project specification is at substack-spec-v01.md and the Definition of Done is at substack-dod-v01.md. The UI flow diagram is at substack-spec-v01-ui.gv.\n\nRead all three files. Scratch artifacts are run-scoped under .ai/runs/$KILROY_RUN_ID/. Root .ai is not implicitly ingested.\n\nIf .ai/runs/$KILROY_RUN_ID/spec.md does not exist or is a placeholder, copy the spec verbatim to .ai/runs/$KILROY_RUN_ID/spec.md, appending a reference to the UI flow diagram. If .ai/runs/$KILROY_RUN_ID/definition_of_done.md does not exist or is a placeholder, copy the DoD verbatim to .ai/runs/$KILROY_RUN_ID/definition_of_done.md. If both already exist and are adequate, skip.\n\nWrite to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure: status=fail with failure_reason, failure_class, and failure_signature=expand_spec_fail."
         ]
 
-        check_dod [
-            shape=box,
-            label="DoD exists?",
-            prompt="Read .ai/definition_of_done.md if present and demo/substack-dod-v01.md.
-
-If demo/substack-dod-v01.md exists and is non-empty:
-- Ensure .ai/definition_of_done.md exists and is adequate.
-- If .ai/definition_of_done.md is missing or weaker, copy demo/substack-dod-v01.md into .ai/definition_of_done.md.
-- Write status JSON: {\"status\":\"has_dod\"}
-
-If demo/substack-dod-v01.md is missing/unreadable, write status JSON:
-{\"status\":\"needs_dod\"}
-
-Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH). For operational failure write:
-{\"status\":\"fail\",\"failure_reason\":\"Could not read or prepare DoD artifacts\",\"failure_signature\":\"dod_check_error\",\"failure_class\":\"deterministic_agent_bug\"}"
-        ]
     }
 
-    subgraph cluster_dod {
-        label="DoD Fanout"
-
-        dod_fanout [shape=component, label="DoD Fan-Out"]
-
-        dod_a [
-            shape=box,
-            class="branch-a",
-            auto_status=true,
-            prompt="Read .ai/spec.md and draft a DoD at .ai/dod_a.md only if a canonical DoD is missing.
-
-The draft must include:
-- Scope, non-goals, and deliverables
-- Acceptance criteria mapped to IT scenarios
-- Explicit evidence requirements under .ai/test-evidence/latest/
-- Browser evidence expectations (screenshots + console/trace artifacts)
-
-If demo/substack-dod-v01.md already exists and is adequate, write .ai/dod_a.md as a short justification for reusing it unchanged.
-
-Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
-{\"status\":\"fail\",\"failure_reason\":\"DoD branch A failed\",\"failure_signature\":\"dod_branch_a_error\",\"failure_class\":\"deterministic_agent_bug\"}"
-        ]
-
-        dod_b [
-            shape=box,
-            class="branch-b",
-            auto_status=true,
-            prompt="Read .ai/spec.md and draft a DoD at .ai/dod_b.md only if a canonical DoD is missing.
-
-The draft must include:
-- Scope, non-goals, and deliverables
-- Acceptance criteria mapped to IT scenarios
-- Explicit evidence requirements under .ai/test-evidence/latest/
-- Browser evidence expectations (screenshots + console/trace artifacts)
-
-If demo/substack-dod-v01.md already exists and is adequate, write .ai/dod_b.md as a short justification for reusing it unchanged.
-
-Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
-{\"status\":\"fail\",\"failure_reason\":\"DoD branch B failed\",\"failure_signature\":\"dod_branch_b_error\",\"failure_class\":\"deterministic_agent_bug\"}"
-        ]
-
-        dod_c [
-            shape=box,
-            class="branch-c",
-            auto_status=true,
-            prompt="Read .ai/spec.md and draft a DoD at .ai/dod_c.md only if a canonical DoD is missing.
-
-The draft must include:
-- Scope, non-goals, and deliverables
-- Acceptance criteria mapped to IT scenarios
-- Explicit evidence requirements under .ai/test-evidence/latest/
-- Browser evidence expectations (screenshots + console/trace artifacts)
-
-If demo/substack-dod-v01.md already exists and is adequate, write .ai/dod_c.md as a short justification for reusing it unchanged.
-
-Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
-{\"status\":\"fail\",\"failure_reason\":\"DoD branch C failed\",\"failure_signature\":\"dod_branch_c_error\",\"failure_class\":\"deterministic_agent_bug\"}"
-        ]
-
-        consolidate_dod [
-            shape=box,
-            auto_status=true,
-            prompt="Read .ai/dod_a.md, .ai/dod_b.md, .ai/dod_c.md when present, plus demo/substack-dod-v01.md.
-
-Produce .ai/definition_of_done.md:
-- If demo/substack-dod-v01.md exists, preserve it as canonical unless a branch found objective gaps.
-- If gaps exist, add only minimal corrective sections and keep original constraints intact.
-- Ensure acceptance criteria and test evidence expectations include IT-1 through IT-12 and screenshot/trace requirements.
-
-Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
-{\"status\":\"fail\",\"failure_reason\":\"Unable to consolidate DoD artifacts\",\"failure_signature\":\"missing_dod_files\",\"failure_class\":\"deterministic_agent_bug\"}"
-        ]
-    }
+    // =========================================================================
+    // Planning Fanout
+    // =========================================================================
 
     subgraph cluster_planning {
         label="Planning Fanout"
+        node [shape=box]
 
         plan_fanout [shape=component, label="Plan Fan-Out"]
 
         plan_a [
-            shape=box,
             class="branch-a",
-            auto_status=true,
-            prompt="Read .ai/spec.md, .ai/definition_of_done.md, and .ai/postmortem_latest.md if present.
-
-Write .ai/plan_a.md with a concrete implementation plan for:
-- Foundation/state/routing and IndexedDB
-- Content workflow (trending + topic/research/outline/write cycles/complete)
-- Demo replay/session recording/reset
-- Test harness and evidence scripts
-
-Include explicit file targets and script ownership for:
-- scripts/validate-fmt.sh
-- scripts/validate-build.sh
-- scripts/validate-test.sh
-- scripts/validate-browser.sh
-- scripts/validate-artifacts.sh
-
-Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
-{\"status\":\"fail\",\"failure_reason\":\"Plan branch A failed\",\"failure_signature\":\"plan_branch_a_error\",\"failure_class\":\"deterministic_agent_bug\"}"
+            prompt="Goal: $goal\n\nRead .ai/runs/$KILROY_RUN_ID/spec.md and .ai/runs/$KILROY_RUN_ID/definition_of_done.md. If those files do not exist, fall back to reading substack-spec-v01.md and substack-dod-v01.md directly. If .ai/runs/$KILROY_RUN_ID/postmortem_latest.md exists, incorporate its lessons.\n\nCreate an implementation plan for the Substack Creator Newsletter Engine covering all deliverables and acceptance criteria from the DoD. Be specific about:\n- React project setup (Vite + TypeScript + idb + @google/generative-ai SDK)\n- Module decomposition with file paths and estimated sizes (~200-500 lines each)\n- Core infrastructure: LLM client with structured JSON output and retry/backoff, IndexedDB persistence layer, shared UI components (rich input, card, progress bar, step indicators)\n- Feature modules: Setup flow, Dashboard, Trending Topics, New Post pipeline, Demo mode\n- Test infrastructure: integration (canned data), smoke (gemini-2.5-flash-lite), manual (real models)\n- Deployment config: Railway config, validation scripts\n- Build/validate scripts: validate-build.sh, validate-fmt.sh, validate-test.sh, validate-browser.sh, fix-fmt.sh, validate-artifacts.sh\n- Visual design: Substack-like serif styling, no spinners\n\nSpecify dependency ordering between modules.\n\nWrite to .ai/runs/$KILROY_RUN_ID/plan_a.md.\n\nWrite to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH): On success: status=success. On failure: status=fail with failure_reason and failure_class."
         ]
 
         plan_b [
-            shape=box,
             class="branch-b",
-            auto_status=true,
-            prompt="Read .ai/spec.md, .ai/definition_of_done.md, and .ai/postmortem_latest.md if present.
-
-Write .ai/plan_b.md with a concrete implementation plan for:
-- Foundation/state/routing and IndexedDB
-- Content workflow (trending + topic/research/outline/write cycles/complete)
-- Demo replay/session recording/reset
-- Test harness and evidence scripts
-
-Include explicit file targets and script ownership for:
-- scripts/validate-fmt.sh
-- scripts/validate-build.sh
-- scripts/validate-test.sh
-- scripts/validate-browser.sh
-- scripts/validate-artifacts.sh
-
-Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
-{\"status\":\"fail\",\"failure_reason\":\"Plan branch B failed\",\"failure_signature\":\"plan_branch_b_error\",\"failure_class\":\"deterministic_agent_bug\"}"
-        ]
-
-        plan_c [
-            shape=box,
-            class="branch-c",
-            auto_status=true,
-            prompt="Read .ai/spec.md, .ai/definition_of_done.md, and .ai/postmortem_latest.md if present.
-
-Write .ai/plan_c.md with a concrete implementation plan for:
-- Foundation/state/routing and IndexedDB
-- Content workflow (trending + topic/research/outline/write cycles/complete)
-- Demo replay/session recording/reset
-- Test harness and evidence scripts
-
-Include explicit file targets and script ownership for:
-- scripts/validate-fmt.sh
-- scripts/validate-build.sh
-- scripts/validate-test.sh
-- scripts/validate-browser.sh
-- scripts/validate-artifacts.sh
-
-Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
-{\"status\":\"fail\",\"failure_reason\":\"Plan branch C failed\",\"failure_signature\":\"plan_branch_c_error\",\"failure_class\":\"deterministic_agent_bug\"}"
+            prompt="Goal: $goal\n\nRead .ai/runs/$KILROY_RUN_ID/spec.md and .ai/runs/$KILROY_RUN_ID/definition_of_done.md. If those files do not exist, fall back to reading substack-spec-v01.md and substack-dod-v01.md directly. If .ai/runs/$KILROY_RUN_ID/postmortem_latest.md exists, incorporate its lessons.\n\nCreate an implementation plan for the Substack Creator Newsletter Engine covering all deliverables and acceptance criteria from the DoD. Be specific about:\n- React project setup (Vite + TypeScript + idb + @google/generative-ai SDK)\n- Module decomposition with file paths and estimated sizes (~200-500 lines each)\n- Core infrastructure: LLM client with structured JSON output and retry/backoff, IndexedDB persistence layer, shared UI components (rich input, card, progress bar, step indicators)\n- Feature modules: Setup flow, Dashboard, Trending Topics, New Post pipeline, Demo mode\n- Test infrastructure: integration (canned data), smoke (gemini-2.5-flash-lite), manual (real models)\n- Deployment config: Railway config, validation scripts\n- Build/validate scripts: validate-build.sh, validate-fmt.sh, validate-test.sh, validate-browser.sh, fix-fmt.sh, validate-artifacts.sh\n- Visual design: Substack-like serif styling, no spinners\n\nSpecify dependency ordering between modules.\n\nWrite to .ai/runs/$KILROY_RUN_ID/plan_b.md.\n\nWrite to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH): On success: status=success. On failure: status=fail with failure_reason and failure_class."
         ]
 
         debate_consolidate [
-            shape=box,
             auto_status=true,
-            prompt="Read .ai/plan_a.md, .ai/plan_b.md, .ai/plan_c.md, .ai/spec.md, and .ai/definition_of_done.md.
-If .ai/postmortem_latest.md exists, ensure every unresolved issue is addressed.
-
-Write a single execution plan to .ai/plan_final.md that includes:
-- Module fan-out boundaries and merge expectations
-- Script contracts for validate-fmt/build/test/browser/artifacts
-- Mapping IT-1..IT-12 to deterministic evidence artifacts
-- Recovery expectations for repair passes
-
-Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
-{\"status\":\"fail\",\"failure_reason\":\"Unable to consolidate planning branches\",\"failure_signature\":\"plan_consolidation_error\",\"failure_class\":\"deterministic_agent_bug\"}"
+            prompt="Synthesize the two implementation plans into a single best-of-breed final plan.\n\nRead branch outputs via parallel_results.json + worktree_dir. If parallel_results.json is missing, fall back to reading .ai/runs/$KILROY_RUN_ID/plan_a.md, .ai/runs/$KILROY_RUN_ID/plan_b.md in the current worktree.\n\nIf .ai/runs/$KILROY_RUN_ID/postmortem_latest.md exists, read it FIRST. The postmortem contains root-cause analysis and concrete fixes from the previous iteration. The final plan MUST be adjusted to address every issue identified in the postmortem — add new steps, change approaches, or reorder work as needed. Do not simply re-emit the same plan that failed.\n\nAlso read .ai/runs/$KILROY_RUN_ID/implementation_log.md and .ai/runs/$KILROY_RUN_ID/verify_fidelity.md if they exist, to understand what worked and what failed in the previous iteration.\n\nRead .ai/runs/$KILROY_RUN_ID/spec.md and .ai/runs/$KILROY_RUN_ID/definition_of_done.md for context. If those files do not exist, fall back to reading substack-spec-v01.md and substack-dod-v01.md directly. Resolve conflicts between plans. Ensure dependency order is correct. Pick the most detailed and actionable approach for each module. The final plan must produce a work queue of bounded modules (~200-500 lines each), ordered so core infrastructure items come first (lower IDs), features next, and tests/deployment last.\n\nWrite the final plan to .ai/runs/$KILROY_RUN_ID/plan_final.md.\n\nWrite to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure: status=fail with failure_reason, failure_class, and failure_signature=debate_consolidate_fail."
         ]
     }
 
-    subgraph cluster_implement_verify {
-        label="Implement and Verify"
+    // =========================================================================
+    // Implement
+    // =========================================================================
 
-        implement_fanout [shape=component, label="Implementation Fan-Out"]
+    subgraph cluster_implement {
+        label="Implement"
 
-        implement_foundation [
+        implement [
             shape=box,
             class="hard",
             auto_status=true,
-            max_agent_turns=320,
+            max_agent_turns=300,
             max_tokens=32768,
-            prompt="Goal: $goal
-
-Read .ai/plan_final.md, .ai/spec.md, .ai/definition_of_done.md, and demo/substack-spec-v01-ui.dot.
-
-Implement foundation deliverables:
-- React app shell and route gates (first run -> Settings, otherwise Dashboard).
-- IndexedDB persistence layer using idb for settings, drafts, sessions, and post history.
-- Settings hub with parallel setup options, rich input control, confirm/back loops, and reset-everything action.
-- Shared client-side LLM utility with schema-enforced structured output, retry/backoff, and model-intent routing:
-  production intent: Gemini 3.1 Flash + Gemini 3.1 Pro, test intent: Gemini 2.5 Flash Lite.
-- Ensure no backend service is introduced.
-
-Write progress to .ai/module_foundation_impl.md.
-
-Repair-pass rule: if .ai/postmortem_latest.md or .ai/review_consensus.md exists, read it first, target only listed gaps, run sh scripts/validate-build.sh, and re-read each touched file before exit.
-
-Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
-{\"status\":\"fail\",\"failure_reason\":\"Foundation module implementation failed\",\"failure_signature\":\"implement_foundation_failure\",\"failure_class\":\"deterministic_agent_bug\"}"
+            label="Implement",
+            prompt="Goal: $goal\n\nRead .ai/runs/$KILROY_RUN_ID/plan_final.md, .ai/runs/$KILROY_RUN_ID/spec.md, and .ai/runs/$KILROY_RUN_ID/definition_of_done.md. If the spec or DoD files do not exist at those paths, fall back to reading substack-spec-v01.md and substack-dod-v01.md directly.\n\nBEFORE ANYTHING ELSE: check if .ai/verify_errors.log exists. If it does, read it — it contains the exact commands that failed and their error output from the verify chain. Fix every error listed in that file, then delete .ai/verify_errors.log when all fixes are applied. Do NOT regenerate working code — only fix the specific errors.\n\nAlso check if .ai/runs/$KILROY_RUN_ID/verify_fidelity.md exists. If it does, read it — it contains per-AC pass/fail verdicts from the fidelity check. Fix every failing AC listed in that file.\n\nIf .ai/runs/$KILROY_RUN_ID/postmortem_latest.md exists, read it and fix ONLY identified gaps — do NOT regenerate working code. On repair passes, read and fix existing files rather than skipping them.\n\nImplement the complete Substack Creator Newsletter Engine as a single pass. On a fresh pass (no postmortem), check if target files already exist on disk and are non-empty — if so, skip those files. Implement each module with complete, functional code — no stubs, no placeholders, no TODO comments. Follow the plan and spec precisely.\n\nImplementation order (core infrastructure first, then features, then tests/deploy):\n\n1. Project scaffold — package.json, vite.config.ts, tsconfig.json, index.html, src/main.tsx, src/App.tsx. Install dependencies: react, react-dom, react-router-dom, idb, @google/generative-ai. Write ALL validation scripts:\n   - scripts/validate-build.sh: runs npm run build, checks dist/ exists\n   - scripts/validate-fmt.sh: runs npx prettier --check src/\n   - scripts/validate-test.sh: runs integration scenarios first, then smoke, writes evidence + .ai/test-evidence/latest/manifest.json even on failure\n   - scripts/validate-browser.sh: runs browser verification and captures artifacts\n   - scripts/fix-fmt.sh: runs npx prettier --write src/\n   - scripts/validate-artifacts.sh: verifies manifest scenario IDs match DoD integration scenarios\n   All scripts: #!/bin/sh, set -e, POSIX sh failure trap.\n\n2. LLM client — src/lib/llm.ts, src/lib/llm-schemas.ts: structured JSON output with schema enforcement, retry with error feedback and intelligent backoff, model switching (gemini-3-flash-preview/gemini-3.1-pro-preview/gemini-2.5-flash-lite), client-side API key.\n\n3. Persistence — src/lib/db.ts, src/lib/types.ts: IndexedDB via idb with stores for configuration (API key, company, voice, guardrails), drafts, sessions (all inputs/LLM responses/intermediate state), post history (Markdown + attribution). All data persists unless user resets.\n\n4. Shared UI — src/components/RichInput.tsx, Card.tsx, ProgressBar.tsx, StepIndicator.tsx, src/styles/global.css.\n\n5. Setup flow — src/pages/Settings.tsx and step components: API key, company (rich input + gemini-3.1-pro-preview confirm + back), voice, guardrails. Parallel completion, status icons. Reset everything with confirmation.\n\n6. Dashboard — src/pages/Dashboard.tsx: New Post button, Trending Topics button, Settings link, post history, draft resume.\n\n7. Trending Topics — src/pages/TrendingTopics.tsx: parallel gemini-3-flash-preview search grounding queries, trend visualization, 3 gemini-3.1-pro-preview writing prompts, navigate to New Post prefilled.\n\n8. New Post — src/pages/NewPost.tsx with step components: Topic (rich input), Research (gemini-3-flash-preview search grounding, source cards with URL/title/author/date, highlight/delete), Outline (gemini-3.1-pro-preview one-shot, accept/back), Write (3 automatic gemini-3.1-pro-preview cycles: Write with citations, Edit for style, Guardrails-only), Complete (serif post with numbered footnotes, linked sources, attribution lineage).\n\n9. Demo mode — src/lib/demo.ts, src/pages/DemoMode.tsx, src/demo/bundled-session.json: session recording, replay through production path (fade-in prefills, highlight next button), bundled P&G session, cache-miss error with no API fallback.\n\n10. Test infrastructure — src/__tests__/: integration with canned data, smoke with gemini-2.5-flash-lite, manual mode option.\n\n11. Deploy config — railway.json or equivalent, deployment docs.\n\nEnsure App.tsx routing includes all pages. Verify imports/exports are consistent. Run npm install. Fix TypeScript errors.\n\nLog progress to .ai/runs/$KILROY_RUN_ID/implementation_log.md.\n\nPRE-EXIT VERIFICATION: if .ai/runs/$KILROY_RUN_ID/postmortem_latest.md exists, run sh scripts/validate-build.sh and re-read targeted files to confirm fixes.\n\nWrite to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure: status=fail with failure_reason, failure_class, and failure_signature=implement_fail."
         ]
+    }
 
-        implement_content_flow [
-            shape=box,
-            class="hard",
-            auto_status=true,
-            max_agent_turns=320,
-            max_tokens=32768,
-            prompt="Goal: $goal
+    // =========================================================================
+    // Verify Chain
+    // =========================================================================
 
-Read .ai/plan_final.md, .ai/spec.md, .ai/definition_of_done.md, and demo/substack-spec-v01-ui.dot.
-
-Implement content workflow deliverables:
-- Dashboard: New Post, Trending Topics, settings entry, post/draft listing and resume/view actions.
-- Trending Topics: parallel grounded research calls, deterministic trend visualization, 3 synthesized prompts, prefill jump to Topic.
-- New Post pipeline: Topic -> Research -> Outline -> Write/Edit/Guardrails (automatic 3-cycle) -> Complete.
-- Research metadata and citation lineage persistence (URL, title, author, publication date) through final Markdown footnotes.
-- Visual behavior contract: step dots, card primitive reuse, horizontal progress bars only, Substack-like final post preview.
-
-Write progress to .ai/module_content_flow_impl.md.
-
-Repair-pass rule: if .ai/postmortem_latest.md or .ai/review_consensus.md exists, read it first, target only listed gaps, run sh scripts/validate-build.sh, and re-read each touched file before exit.
-
-Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
-{\"status\":\"fail\",\"failure_reason\":\"Content workflow implementation failed\",\"failure_signature\":\"implement_content_flow_failure\",\"failure_class\":\"deterministic_agent_bug\"}"
-        ]
-
-        implement_demo_mode [
-            shape=box,
-            class="hard",
-            auto_status=true,
-            max_agent_turns=320,
-            max_tokens=32768,
-            prompt="Goal: $goal
-
-Read .ai/plan_final.md, .ai/spec.md, .ai/definition_of_done.md, and demo/substack-spec-v01-ui.dot.
-
-Implement demo and session lifecycle deliverables:
-- Production-mode session recording of inputs, model outputs, and intermediate state.
-- Demo session picker over recorded sessions.
-- Demo replay through production code path with subtle text fade-in, delayed attachment rendering, and highlighted next-button behavior.
-- Cache-miss behavior: explicit error and no live API fallback.
-- Ship one bundled P&G session including cached first-run configuration.
-- Ensure reset-everything wipes all IndexedDB stores and returns to first-run state.
-
-Write progress to .ai/module_demo_mode_impl.md.
-
-Repair-pass rule: if .ai/postmortem_latest.md or .ai/review_consensus.md exists, read it first, target only listed gaps, run sh scripts/validate-build.sh, and re-read each touched file before exit.
-
-Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
-{\"status\":\"fail\",\"failure_reason\":\"Demo/session module implementation failed\",\"failure_signature\":\"implement_demo_mode_failure\",\"failure_class\":\"deterministic_agent_bug\"}"
-        ]
-
-        implement_validation [
-            shape=box,
-            class="hard",
-            auto_status=true,
-            max_agent_turns=320,
-            max_tokens=32768,
-            prompt="Goal: $goal
-
-Read .ai/plan_final.md, .ai/spec.md, and .ai/definition_of_done.md.
-
-Implement test and validation deliverables:
-- Create/repair scripts:
-  scripts/validate-fmt.sh
-  scripts/validate-build.sh
-  scripts/validate-test.sh
-  scripts/validate-browser.sh
-  scripts/validate-artifacts.sh
-- Each script must start with:
-  #!/bin/sh
-  set -e
-  trap 'echo \"KILROY_VALIDATE_FAILURE: <script-name> crashed at line $LINENO - postmortem must repair <script-name>\"' EXIT
-  ...
-  trap - EXIT
-- validate-test.sh must run integration tests before smoke tests, support manual real-model option, and write deterministic evidence under .ai/test-evidence/latest/.
-- validate-test.sh must always write .ai/test-evidence/latest/manifest.json with IT-1..IT-12 status + artifact metadata even when failing.
-- UI scenarios (IT-2..IT-8, IT-11, IT-12) must include screenshot evidence; browser scenarios must include console/unhandled summaries and trace/log artifacts or explicit none markers.
-- validate-artifacts.sh must verify manifest coverage, required artifact types, and DoD scenario-ID parity.
-
-Write progress to .ai/module_validation_impl.md.
-
-Repair-pass rule: if .ai/postmortem_latest.md or .ai/review_consensus.md exists, read it first, target only listed gaps, run sh scripts/validate-build.sh, and re-read each touched file before exit.
-
-Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
-{\"status\":\"fail\",\"failure_reason\":\"Validation and evidence harness implementation failed\",\"failure_signature\":\"implement_validation_failure\",\"failure_class\":\"deterministic_agent_bug\"}"
-        ]
-
-        merge_implementation [
-            shape=box,
-            class="hard",
-            auto_status=true,
-            max_agent_turns=220,
-            max_tokens=32768,
-            prompt="Read .ai/module_foundation_impl.md, .ai/module_content_flow_impl.md, .ai/module_demo_mode_impl.md, .ai/module_validation_impl.md, plus .ai/spec.md and .ai/definition_of_done.md.
-
-Synthesize modules into one coherent implementation:
-- Resolve cross-module conflicts without discarding passing behavior.
-- Ensure scripts/validate-fmt.sh, scripts/validate-build.sh, scripts/validate-test.sh, scripts/validate-browser.sh, and scripts/validate-artifacts.sh exist and are executable.
-- Ensure each validate script starts with #!/bin/sh, set -e, and a KILROY_VALIDATE_FAILURE trap.
-- Ensure evidence contract paths are consistent with .ai/test-evidence/latest/manifest.json.
-
-Write .ai/merge_implementation.md summarizing merged decisions and touched files.
-
-Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
-{\"status\":\"fail\",\"failure_reason\":\"Module merge failed due to missing deliverables or unresolved conflicts\",\"failure_signature\":\"missing_module_outputs\",\"failure_class\":\"deterministic_agent_bug\"}"
-        ]
-
-        check_implement [shape=diamond, label="Implement OK?"]
+    subgraph cluster_verify {
+        label="Verify"
 
         fix_fmt [
             shape=parallelogram,
             max_retries=0,
-            tool_command="sh scripts/validate-fmt.sh --fix || { echo 'KILROY_VALIDATE_FAILURE: validate-fmt.sh missing or failed - postmortem must write scripts/validate-fmt.sh'; exit 1; }"
+            tool_command="sh scripts/fix-fmt.sh 2>&1 || { printf '\\n=== VERIFY FAILURE: sh scripts/fix-fmt.sh ===\\n%s\\n' \"$(cat /tmp/fix-fmt.log 2>/dev/null || echo 'script missing or produced no output')\" >> .ai/verify_errors.log; exit 1; }"
         ]
 
         verify_fmt [
             shape=parallelogram,
             max_retries=0,
-            tool_command="sh scripts/validate-fmt.sh || { echo 'KILROY_VALIDATE_FAILURE: validate-fmt.sh missing or failed - postmortem must write scripts/validate-fmt.sh'; exit 1; }"
+            tool_command="sh scripts/validate-fmt.sh 2>&1 | tee /tmp/validate-fmt.log; test ${PIPESTATUS[0]} -eq 0 || { printf '\\n=== VERIFY FAILURE: sh scripts/validate-fmt.sh ===\\n%s\\n' \"$(tail -30 /tmp/validate-fmt.log)\" >> .ai/verify_errors.log; exit 1; }"
         ]
         check_fmt [shape=diamond, label="Fmt OK?"]
 
         verify_build [
             shape=parallelogram,
-            tool_command="sh scripts/validate-build.sh || { echo 'KILROY_VALIDATE_FAILURE: validate-build.sh missing or failed - postmortem must write scripts/validate-build.sh'; exit 1; }"
+            tool_command="sh scripts/validate-build.sh 2>&1 | tee /tmp/validate-build.log; test ${PIPESTATUS[0]} -eq 0 || { printf '\\n=== VERIFY FAILURE: sh scripts/validate-build.sh ===\\n%s\\n' \"$(tail -50 /tmp/validate-build.log)\" >> .ai/verify_errors.log; exit 1; }"
         ]
         check_build [shape=diamond, label="Build OK?"]
 
         verify_test [
             shape=parallelogram,
-            tool_command="sh scripts/validate-test.sh || { echo 'KILROY_VALIDATE_FAILURE: validate-test.sh missing or failed - postmortem must write scripts/validate-test.sh'; exit 1; }"
+            tool_command="sh scripts/validate-test.sh 2>&1 | tee /tmp/validate-test.log; test ${PIPESTATUS[0]} -eq 0 || { printf '\\n=== VERIFY FAILURE: sh scripts/validate-test.sh ===\\n%s\\n' \"$(tail -50 /tmp/validate-test.log)\" >> .ai/verify_errors.log; exit 1; }"
         ]
         check_test [shape=diamond, label="Tests OK?"]
 
         verify_browser [
             shape=parallelogram,
             collect_browser_artifacts=true,
-            tool_command="sh scripts/validate-browser.sh || { echo 'KILROY_VALIDATE_FAILURE: validate-browser.sh missing or failed - postmortem must write scripts/validate-browser.sh'; exit 1; }"
+            tool_command="sh scripts/validate-browser.sh 2>&1 | tee /tmp/validate-browser.log; test ${PIPESTATUS[0]} -eq 0 || { printf '\\n=== VERIFY FAILURE: sh scripts/validate-browser.sh ===\\n%s\\n' \"$(tail -50 /tmp/validate-browser.log)\" >> .ai/verify_errors.log; exit 1; }"
         ]
         check_browser [shape=diamond, label="Browser OK?"]
 
         verify_artifacts [
             shape=parallelogram,
             max_retries=0,
-            tool_command="sh scripts/validate-artifacts.sh || { echo 'KILROY_VALIDATE_FAILURE: validate-artifacts.sh missing or failed - postmortem must write scripts/validate-artifacts.sh'; exit 1; }"
+            tool_command="sh scripts/validate-artifacts.sh 2>&1 | tee /tmp/validate-artifacts.log; test ${PIPESTATUS[0]} -eq 0 || { printf '\\n=== VERIFY FAILURE: sh scripts/validate-artifacts.sh ===\\n%s\\n' \"$(tail -30 /tmp/validate-artifacts.log)\" >> .ai/verify_errors.log; exit 1; }"
         ]
         check_artifacts [shape=diamond, label="Artifacts OK?"]
 
         verify_fidelity [
             shape=box,
             class="verify",
-            prompt="Read .ai/spec.md, .ai/definition_of_done.md, .ai/verify_fidelity.md (if present), .ai/test-evidence/latest/manifest.json, and relevant implementation files.
-
-Evaluate these grouped acceptance checks and map each to concrete file paths:
-AC1: src/**/settings* and src/**/router* and src/**/indexeddb* - first-run routing, setup flow, persistence.
-AC2: src/**/dashboard* and src/**/history* and src/**/draft* - dashboard actions and resume/view flows.
-AC3: src/**/trending* and src/**/research* - grounded research, deterministic trends, prompt handoff.
-AC4: src/**/new-post* and src/**/outline* and src/**/write* and src/**/complete* - full Topic->Complete pipeline with automatic write cycles.
-AC5: src/**/citation* and src/**/markdown* - citation lineage, footnote rendering, attribution persistence.
-AC6: src/**/demo* and src/demo/** - session picker/replay, bundled P&G demo, cache-miss no-fallback behavior.
-AC7: src/**/llm* and src/**/schema* - structured outputs, retry/backoff, production/test model intent.
-AC8: scripts/validate-build.sh and railway.json/Procfile/README* - build/deploy-readiness by static review only, no live deployment execution.
-AC9: scripts/validate-test.sh and scripts/validate-browser.sh and test sources - integration before smoke, manual mode option, browser evidence capture.
-AC10: .ai/test-evidence/latest/manifest.json and .ai/test-evidence/latest/** - IT-1..IT-12 manifest coverage and required artifact types.
-AC11: src/**/style* and src/**/card* and src/**/progress* - Substack-like visual contract including bars, cards, and serif post preview.
-
-Write .ai/verify_fidelity.md with pass/fail verdict and evidence per AC1..AC11.
-If all checks pass, write:
-{\"status\":\"success\"}
-
-If any check fails, write:
-{\"status\":\"fail\",\"failure_reason\":\"List failed AC IDs and concise evidence\",\"failure_signature\":\"ACx,ACy (sorted IDs only)\",\"failure_class\":\"deterministic_agent_bug\"}
-Use sorted comma-separated AC IDs for failure_signature (example: AC2,AC10).
-
-Write status to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH)."
+            prompt="Read .ai/runs/$KILROY_RUN_ID/spec.md, .ai/runs/$KILROY_RUN_ID/definition_of_done.md, .ai/runs/$KILROY_RUN_ID/verify_fidelity.md (if present), .ai/runs/$KILROY_RUN_ID/test-evidence/latest/manifest.json, and relevant implementation files.\n\nEvaluate these grouped acceptance checks and map each to concrete file paths:\nAC1: src/**/settings* and src/**/router* and src/**/indexeddb* - first-run routing, setup flow, persistence.\nAC2: src/**/dashboard* and src/**/history* and src/**/draft* - dashboard actions and resume/view flows.\nAC3: src/**/trending* and src/**/research* - grounded research, deterministic trends, prompt handoff.\nAC4: src/**/new-post* and src/**/outline* and src/**/write* and src/**/complete* - full Topic->Complete pipeline with automatic write cycles.\nAC5: src/**/citation* and src/**/markdown* - citation lineage, footnote rendering, attribution persistence.\nAC6: src/**/demo* and src/demo/** - session picker/replay, bundled P&G demo, cache-miss no-fallback behavior.\nAC7: src/**/llm* and src/**/schema* - structured outputs, retry/backoff, production/test model intent.\nAC8: scripts/validate-build.sh and railway.json/Procfile/README* - build/deploy-readiness by static review only, no live deployment execution.\nAC9: scripts/validate-test.sh and scripts/validate-browser.sh and test sources - integration before smoke, manual mode option, browser evidence capture.\nAC10: .ai/runs/$KILROY_RUN_ID/test-evidence/latest/manifest.json and .ai/runs/$KILROY_RUN_ID/test-evidence/latest/** - IT-1..IT-12 manifest coverage and required artifact types.\nAC11: src/**/style* and src/**/card* and src/**/progress* - Substack-like visual contract including bars, cards, and serif post preview.\n\nWrite .ai/runs/$KILROY_RUN_ID/verify_fidelity.md with pass/fail verdict and evidence per AC1..AC11.\n\nOn ANY failure: also append to .ai/verify_errors.log with the header '=== VERIFY FAILURE: verify_fidelity ===' followed by the list of failing ACs and their specific issues, so the implement node can read the consolidated error log.\n\nWrite to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH):\nAll pass: status=success.\nAny fail: status=fail with failure_reason listing failing ACs, failure_class=deterministic_agent_bug, failure_signature as sorted comma-separated failing AC IDs (e.g. AC1,AC10)."
         ]
         check_impl [shape=diamond, label="Impl OK?"]
     }
 
+    // =========================================================================
+    // Review Fanout
+    // =========================================================================
+
     subgraph cluster_review {
         label="Review Fanout"
+        node [shape=box]
 
         review_fanout [shape=component, label="Review Fan-Out"]
 
         review_a [
-            shape=box,
             class="branch-a",
-            auto_status=true,
-            prompt="Read .ai/spec.md, .ai/definition_of_done.md, .ai/verify_fidelity.md, .ai/test-evidence/latest/manifest.json, and implementation files.
-
-Write .ai/review_a.md with:
-- APPROVED or REJECTED verdict
-- Explicit AC IDs and IT scenario IDs supporting the verdict
-- High/medium/low findings with concrete file evidence
-
-Do not write status fail for a rejection verdict; keep verdict in the review file.
-Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on operational failure:
-{\"status\":\"fail\",\"failure_reason\":\"Review branch A could not complete analysis\",\"failure_signature\":\"review_branch_a_error\",\"failure_class\":\"deterministic_agent_bug\"}"
+            prompt="Review the Substack Creator Newsletter Engine implementation against .ai/runs/$KILROY_RUN_ID/definition_of_done.md.\n\nRead the DoD for acceptance criteria. Read all implementation source files and .ai/runs/$KILROY_RUN_ID/test-evidence/latest/manifest.json.\n\n## MANDATORY: Browser verification\nYou MUST verify the app works in a real browser. Do not trust code reading alone.\n1. Run: npm run build (must exit 0)\n2. Start the preview server: npx vite preview --port 4567 &\n3. Wait 2 seconds, then use curl to fetch http://localhost:4567/ and verify it returns HTML with a root div\n4. Check that the HTML references JS and CSS bundles\n5. Kill the preview server when done\n6. Check browser artifacts in .ai/test-evidence/latest/ — screenshots must be real rendered pages (not 1x1 placeholders). If screenshot files are under 5KB, they are fake. REJECT.\n7. Check that playwright-report or equivalent browser test output exists and shows real test execution\n\nIf browser verification fails or artifacts are fake, REJECT immediately.\n\n## Code and AC verification\nCheck every AC group (AC1 through AC11):\n\nAC1: Build exits 0, static assets produced, deployment config present and coherent (review only, no live deploy)\nAC2: IndexedDB persistence for API key, config, posts, drafts, sessions, attribution mappings across reloads\nAC3: Structured JSON output with retry/backoff, correct model routing (gemini-3-flash-preview/gemini-3.1-pro-preview/gemini-2.5-flash-lite), client-side key\nAC4: Parallel setup (any order), status icons, rich input (text/upload/link), gemini-3.1-pro-preview confirmation, back button\nAC5: Dashboard with New Post and Trending Topics buttons, Settings link, post history, draft resume\nAC6: Trending Topics: parallel gemini-3-flash-preview search research, trend visualization, 3 gemini-3.1-pro-preview writing prompts, navigate to New Post\nAC7: Full post pipeline with source metadata, highlight/delete, one-shot outline, 3 automatic write cycles, citations with attribution lineage\nAC8: Demo replay through production path, fade-in/highlight, bundled P&G session, cache-miss error\nAC9: Validation scripts and runtime evidence contract for build/test/browser checks\nAC10: IT-1..IT-12 evidence manifest coverage and artifact completeness\nAC11: Substack visual design: serif fonts, step dots, card primitive, accent progress bars, no spinners, footnoted post\n\nVerdict: APPROVED (all criteria met with evidence) or REJECTED (specific gaps by AC ID).\nWrite to .ai/runs/$KILROY_RUN_ID/review_a.md.\n\nWrite to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH): On success: status=success. On failure: status=fail with failure_reason and failure_class."
         ]
 
         review_b [
-            shape=box,
             class="branch-b",
-            auto_status=true,
-            prompt="Read .ai/spec.md, .ai/definition_of_done.md, .ai/verify_fidelity.md, .ai/test-evidence/latest/manifest.json, and implementation files.
-
-Write .ai/review_b.md with:
-- APPROVED or REJECTED verdict
-- Explicit AC IDs and IT scenario IDs supporting the verdict
-- High/medium/low findings with concrete file evidence
-
-Do not write status fail for a rejection verdict; keep verdict in the review file.
-Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on operational failure:
-{\"status\":\"fail\",\"failure_reason\":\"Review branch B could not complete analysis\",\"failure_signature\":\"review_branch_b_error\",\"failure_class\":\"deterministic_agent_bug\"}"
-        ]
-
-        review_c [
-            shape=box,
-            class="branch-c",
-            auto_status=true,
-            prompt="Read .ai/spec.md, .ai/definition_of_done.md, .ai/verify_fidelity.md, .ai/test-evidence/latest/manifest.json, and implementation files.
-
-Write .ai/review_c.md with:
-- APPROVED or REJECTED verdict
-- Explicit AC IDs and IT scenario IDs supporting the verdict
-- High/medium/low findings with concrete file evidence
-
-Do not write status fail for a rejection verdict; keep verdict in the review file.
-Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on operational failure:
-{\"status\":\"fail\",\"failure_reason\":\"Review branch C could not complete analysis\",\"failure_signature\":\"review_branch_c_error\",\"failure_class\":\"deterministic_agent_bug\"}"
+            prompt="Review the Substack Creator Newsletter Engine implementation against .ai/runs/$KILROY_RUN_ID/definition_of_done.md.\n\nRead the DoD for acceptance criteria. Read all implementation source files and .ai/runs/$KILROY_RUN_ID/test-evidence/latest/manifest.json.\n\n## MANDATORY: Browser verification\nYou MUST verify the app works in a real browser. Do not trust code reading alone.\n1. Run: npm run build (must exit 0)\n2. Start the preview server: npx vite preview --port 4568 &\n3. Wait 2 seconds, then use curl to fetch http://localhost:4568/ and verify it returns HTML with a root div\n4. Check that the HTML references JS and CSS bundles\n5. Kill the preview server when done\n6. Check browser artifacts in .ai/test-evidence/latest/ — screenshots must be real rendered pages (not 1x1 placeholders). If screenshot files are under 5KB, they are fake. REJECT.\n7. Check that playwright-report or equivalent browser test output exists and shows real test execution\n\nIf browser verification fails or artifacts are fake, REJECT immediately.\n\n## Code and AC verification\nCheck every AC group (AC1 through AC11):\n\nAC1: Build exits 0, static assets produced, deployment config present and coherent (review only, no live deploy)\nAC2: IndexedDB persistence for API key, config, posts, drafts, sessions, attribution mappings across reloads\nAC3: Structured JSON output with retry/backoff, correct model routing (gemini-3-flash-preview/gemini-3.1-pro-preview/gemini-2.5-flash-lite), client-side key\nAC4: Parallel setup (any order), status icons, rich input (text/upload/link), gemini-3.1-pro-preview confirmation, back button\nAC5: Dashboard with New Post and Trending Topics buttons, Settings link, post history, draft resume\nAC6: Trending Topics: parallel gemini-3-flash-preview search research, trend visualization, 3 gemini-3.1-pro-preview writing prompts, navigate to New Post\nAC7: Full post pipeline with source metadata, highlight/delete, one-shot outline, 3 automatic write cycles, citations with attribution lineage\nAC8: Demo replay through production path, fade-in/highlight, bundled P&G session, cache-miss error\nAC9: Validation scripts and runtime evidence contract for build/test/browser checks\nAC10: IT-1..IT-12 evidence manifest coverage and artifact completeness\nAC11: Substack visual design: serif fonts, step dots, card primitive, accent progress bars, no spinners, footnoted post\n\nVerdict: APPROVED (all criteria met with evidence) or REJECTED (specific gaps by AC ID).\nWrite to .ai/runs/$KILROY_RUN_ID/review_b.md.\n\nWrite to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH): On success: status=success. On failure: status=fail with failure_reason and failure_class."
         ]
 
         review_consensus [
-            shape=box,
-            class="review",
             auto_status=true,
             goal_gate=true,
             retry_target="postmortem",
-            prompt="Read .ai/review_a.md, .ai/review_b.md, .ai/review_c.md, .ai/verify_fidelity.md, and .ai/definition_of_done.md.
-
-Write .ai/review_consensus.md with:
-- Consensus verdict
-- Failed AC IDs (if any)
-- Concrete fix directives grouped by module/file
-
-Routing status rules:
-- If at least two reviews are APPROVED and no unresolved high-severity AC gaps remain, write:
-  {\"status\":\"success\"}
-- Otherwise write:
-  {\"status\":\"rejected\"}
-
-Do NOT use {\"status\":\"fail\"} for a rejection verdict.
-Use fail only for operational inability to read required artifacts:
-{\"status\":\"fail\",\"failure_reason\":\"Consensus review could not read required review artifacts\",\"failure_signature\":\"review_consensus_io\",\"failure_class\":\"deterministic_agent_bug\"}
-
-Write status to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH)."
+            prompt="Synthesize the two reviews into a consensus verdict.\n\nRead branch outputs via parallel_results.json + worktree_dir. If parallel_results.json is missing, fall back to reading .ai/runs/$KILROY_RUN_ID/review_a.md, .ai/runs/$KILROY_RUN_ID/review_b.md in the current worktree.\n\nRead .ai/runs/$KILROY_RUN_ID/definition_of_done.md for acceptance criteria reference.\n\nConsensus rules:\n- Both APPROVED with no critical gaps: the implementation passes\n- Any critical gap identified by either reviewer: rejected with specific AC IDs\n- Mixed verdicts: rejected with gaps enumerated\n\nIMPORTANT: Do NOT write status=fail for a rejection — use status=rejected instead.\n\nWrite to .ai/runs/$KILROY_RUN_ID/review_consensus.md.\n\nWrite to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH):\nApproved: status=success.\nRejected: status=rejected with failure_reason listing failing ACs."
         ]
     }
+
+    // =========================================================================
+    // Postmortem
+    // =========================================================================
 
     subgraph cluster_postmortem {
         label="Postmortem"
@@ -537,137 +177,68 @@ Write status to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBA
         postmortem [
             shape=box,
             auto_status=true,
-            prompt="Read these artifacts when present:
-- .ai/review_consensus.md
-- .ai/verify_fidelity.md
-- .ai/implementation_log.md
-- .ai/module_foundation_impl.md
-- .ai/module_content_flow_impl.md
-- .ai/module_demo_mode_impl.md
-- .ai/module_validation_impl.md
-- .ai/test-evidence/latest/manifest.json
-- Evidence files referenced by manifest entries for failed/suspicious IT scenarios
-
-Write .ai/postmortem_latest.md with:
-- Root causes (not symptoms)
-- Passing areas to preserve
-- Targeted repair actions by file
-- Evidence file paths actually read (or explicit reason each was skipped)
-
-Progress detection contract:
-- Extract current failing AC set from .ai/verify_fidelity.md and .ai/review_consensus.md.
-- Read prior context key last_failing_acs.
-- If current set is identical to last_failing_acs, route needs_replan.
-- If this is first failure or AC set changed/smaller, route impl_repair.
-- If primary failure is missing tools/scripts/runtime prerequisites, route needs_toolchain.
-- Include context_updates in status:
-  {\"context_updates\":{\"last_failing_acs\":\"AC1,AC7\"}}
-
-Write one of these statuses to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH):
-- {\"status\":\"impl_repair\",\"context_updates\":{\"last_failing_acs\":\"...\"}}
-- {\"status\":\"needs_replan\",\"context_updates\":{\"last_failing_acs\":\"...\"}}
-- {\"status\":\"needs_toolchain\",\"context_updates\":{\"last_failing_acs\":\"...\"}}
-
-If postmortem itself cannot complete, write:
-{\"status\":\"fail\",\"failure_reason\":\"Postmortem could not classify failure for recovery routing\",\"failure_signature\":\"postmortem_internal_error\",\"failure_class\":\"deterministic_agent_bug\"}"
+            prompt="Analyze the failure and guide the next repair iteration.\n\nRead (if they exist):\n- .ai/runs/$KILROY_RUN_ID/review_consensus.md\n- .ai/runs/$KILROY_RUN_ID/verify_fidelity.md\n- .ai/runs/$KILROY_RUN_ID/implementation_log.md\n- .ai/runs/$KILROY_RUN_ID/test-evidence/latest/manifest.json\n- Evidence files referenced by manifest entries for failed or suspicious IT scenarios\n- Branch review outputs via parallel_results.json + worktree_dir (if available)\n\nOutput to .ai/runs/$KILROY_RUN_ID/postmortem_latest.md (overwrite previous):\n- Root causes of failure\n- What works and must be preserved\n- What failed and must be fixed\n- Concrete next changes (specific files, specific fixes)\n- Evidence file paths read (or explicit reason each was skipped)\n- Do NOT direct from-scratch restart — preserve working code\n\nPROGRESS DETECTION (required):\nExtract current failing AC IDs from verify_fidelity.md or review outputs. Read context key last_failing_acs (from previous postmortem iteration). Compare and note whether progress was made (fewer/different failing ACs) or zero progress (identical set).\n\nOUTCOME CLASSIFICATION:\n- replan: default — always routes back through planning so the plan can be adjusted based on this postmortem\n- needs_toolchain: environment/bootstrap/toolchain issue detected (routes to check_toolchain)\n\nWrite to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH).\nAlways write one of:\n- {\"status\":\"replan\",\"context_updates\":{\"last_failing_acs\":\"AC1,AC7\"}}\n- {\"status\":\"needs_toolchain\",\"context_updates\":{\"last_failing_acs\":\"AC1,AC7\"}}\nOn analysis failure: {\"status\":\"fail\",\"failure_reason\":\"Postmortem could not classify failure for recovery routing\",\"failure_class\":\"deterministic_agent_bug\",\"failure_signature\":\"postmortem_analysis\"}."
         ]
     }
 
+    // =========================================================================
+    // Edges
+    // =========================================================================
+
+    // Bootstrap
     start -> check_toolchain
     check_toolchain -> expand_spec [condition="outcome=success"]
     check_toolchain -> check_toolchain [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
     check_toolchain -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
     check_toolchain -> postmortem
-    expand_spec -> check_dod
 
-    check_dod -> plan_fanout [condition="outcome=has_dod"]
-    check_dod -> dod_fanout [condition="outcome=needs_dod"]
-    check_dod -> check_dod [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
-    check_dod -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
-    check_dod -> dod_fanout
+    expand_spec -> plan_fanout
 
-    dod_fanout -> dod_a
-    dod_fanout -> dod_b
-    dod_fanout -> dod_c
-    dod_a -> consolidate_dod
-    dod_b -> consolidate_dod
-    dod_c -> consolidate_dod
-    consolidate_dod -> plan_fanout
-
+    // Planning
     plan_fanout -> plan_a
     plan_fanout -> plan_b
-    plan_fanout -> plan_c
     plan_a -> debate_consolidate
     plan_b -> debate_consolidate
-    plan_c -> debate_consolidate
+    debate_consolidate -> implement
 
-    debate_consolidate -> implement_fanout
-    implement_fanout -> implement_foundation
-    implement_fanout -> implement_content_flow
-    implement_fanout -> implement_demo_mode
-    implement_fanout -> implement_validation
-    implement_foundation -> merge_implementation
-    implement_content_flow -> merge_implementation
-    implement_demo_mode -> merge_implementation
-    implement_validation -> merge_implementation
+    // Implement -> Verify chain
+    implement -> fix_fmt
 
-    merge_implementation -> check_implement
-    check_implement -> fix_fmt [condition="outcome=success"]
-    check_implement -> implement_fanout [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
-    check_implement -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
-    check_implement -> postmortem
-
+    // Verify chain — failures go directly back to implement (errors logged to .ai/verify_errors.log)
     fix_fmt -> verify_fmt
     verify_fmt -> check_fmt
     check_fmt -> verify_build [condition="outcome=success"]
-    check_fmt -> implement_fanout [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
-    check_fmt -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
-    check_fmt -> postmortem
+    check_fmt -> implement
 
     verify_build -> check_build
     check_build -> verify_test [condition="outcome=success"]
-    check_build -> implement_fanout [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
-    check_build -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
-    check_build -> postmortem
+    check_build -> implement
 
     verify_test -> check_test
     check_test -> verify_browser [condition="outcome=success"]
-    check_test -> implement_fanout [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
-    check_test -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
-    check_test -> postmortem
+    check_test -> implement
 
     verify_browser -> check_browser
     check_browser -> verify_artifacts [condition="outcome=success"]
-    check_browser -> implement_fanout [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
-    check_browser -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
-    check_browser -> postmortem
+    check_browser -> implement
 
     verify_artifacts -> check_artifacts
     check_artifacts -> verify_fidelity [condition="outcome=success"]
-    check_artifacts -> implement_fanout [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
-    check_artifacts -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
-    check_artifacts -> postmortem
+    check_artifacts -> implement
 
     verify_fidelity -> check_impl
     check_impl -> review_fanout [condition="outcome=success"]
-    check_impl -> implement_fanout [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
-    check_impl -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
-    check_impl -> postmortem
+    check_impl -> implement
 
+    // Review
     review_fanout -> review_a
     review_fanout -> review_b
-    review_fanout -> review_c
     review_a -> review_consensus
     review_b -> review_consensus
-    review_c -> review_consensus
-
     review_consensus -> exit [condition="outcome=success"]
-    review_consensus -> postmortem [condition="outcome=rejected"]
     review_consensus -> postmortem
 
-    postmortem -> check_toolchain [condition="outcome=fail && context.failure_class=transient_infra"]
-    postmortem -> implement_fanout [condition="outcome=impl_repair"]
-    postmortem -> plan_fanout [condition="outcome=needs_replan"]
+    // Postmortem recovery routing — always replan
     postmortem -> check_toolchain [condition="outcome=needs_toolchain"]
-    postmortem -> implement_fanout
+    postmortem -> plan_fanout
 }

@@ -7,7 +7,7 @@ import (
 )
 
 func TestProviderProfiles_ToolsetsAndDocSelection(t *testing.T) {
-	openai := NewOpenAIProfile("gpt-5.2")
+	openai := NewOpenAIProfile("gpt-5.4")
 	if openai.ID() != "openai" {
 		t.Fatalf("openai id: %q", openai.ID())
 	}
@@ -45,7 +45,7 @@ func TestProviderProfiles_ToolsetsAndDocSelection(t *testing.T) {
 
 func TestProviderProfiles_ToolLists_MatchSpec(t *testing.T) {
 	t.Run("openai", func(t *testing.T) {
-		p := NewOpenAIProfile("gpt-5.2")
+		p := NewOpenAIProfile("gpt-5.4")
 		assertToolListExact(t, p, []string{
 			"read_file",
 			"apply_patch",
@@ -103,7 +103,7 @@ func TestProviderProfiles_BuildSystemPrompt_IncludesProviderSpecificBaseInstruct
 		KnowledgeCutoff: "2024-06-01",
 	}
 
-	openai := NewOpenAIProfile("gpt-5.2")
+	openai := NewOpenAIProfile("gpt-5.4")
 	sysO := openai.BuildSystemPrompt(env, nil)
 	if !strings.Contains(sysO, "OpenAI profile") || !strings.Contains(sysO, "apply_patch") {
 		t.Fatalf("openai system prompt missing expected base instructions:\n%s", sysO)

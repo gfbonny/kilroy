@@ -346,9 +346,9 @@ git commit -m "refactor(engine): switch runtime modeldb snapshot flow to OpenRou
 ```go
 func TestCatalogHasProviderModel_OpenRouterCanonicalIDs(t *testing.T) {
 	c := &modeldb.Catalog{Models: map[string]modeldb.ModelEntry{
-		"openai/gpt-5.2-codex": {Provider: "openai"},
+		"openai/gpt-5.4": {Provider: "openai"},
 	}}
-	if !modeldb.CatalogHasProviderModel(c, "openai", "gpt-5.2-codex") {
+	if !modeldb.CatalogHasProviderModel(c, "openai", "gpt-5.4") {
 		t.Fatalf("expected openrouter canonical id mapping")
 	}
 }

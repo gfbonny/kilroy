@@ -24,7 +24,7 @@ func TestCLIOnlyModelOverride_SwitchesBackendAndWarns(t *testing.T) {
 	// Create a node using the CLI-only model.
 	node := model.NewNode("spark-test")
 	node.Attrs["llm_provider"] = "openai"
-	node.Attrs["llm_model"] = "gpt-5.3-codex-spark"
+	node.Attrs["llm_model"] = "gpt-5.4-spark"
 	node.Attrs["shape"] = "box"
 
 	// Create an execution with temp dirs to isolate artifacts and an Engine
@@ -69,7 +69,7 @@ func TestCLIOnlyModelOverride_RegularModelNoOverride(t *testing.T) {
 	// Create a node using a regular (non-CLI-only) model.
 	node := model.NewNode("regular-test")
 	node.Attrs["llm_provider"] = "openai"
-	node.Attrs["llm_model"] = "gpt-5.3-codex"
+	node.Attrs["llm_model"] = "gpt-5.4"
 	node.Attrs["shape"] = "box"
 
 	eng := &Engine{}

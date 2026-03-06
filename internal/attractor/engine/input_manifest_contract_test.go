@@ -24,7 +24,7 @@ digraph G {
   graph [goal="manifest contract"]
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="check inputs"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="check inputs"]
   start -> a -> exit
 }
 `)
@@ -85,7 +85,7 @@ digraph G {
   graph [goal="manifest contract disabled"]
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="check inputs"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="check inputs"]
   start -> a -> exit
 }
 `)

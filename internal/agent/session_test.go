@@ -75,7 +75,7 @@ func TestSession_NaturalCompletion_LoadsOnlyProfileDocs(t *testing.T) {
 	}
 	c.Register(f)
 
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{})
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.4"), NewLocalExecutionEnvironment(dir), SessionConfig{})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestSession_ToolLoop_ExecutesToolsAndContinues(t *testing.T) {
 	}
 	c.Register(f)
 
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{})
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.4"), NewLocalExecutionEnvironment(dir), SessionConfig{})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -280,7 +280,7 @@ func TestSession_ToolOutputTruncation_OverridesLimitsAndKeepsFullOutputInEvents(
 	}
 	c.Register(f)
 
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.4"), NewLocalExecutionEnvironment(dir), SessionConfig{
 		ToolOutputLimits: map[string]ToolOutputLimit{
 			"shell": {MaxChars: 800, Strategy: TruncHeadTail},
 		},
@@ -364,7 +364,7 @@ func TestSession_ToolOutputTruncation_CanOverrideLineLimitViaSessionConfig(t *te
 	}
 	c.Register(f)
 
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.4"), NewLocalExecutionEnvironment(dir), SessionConfig{
 		ToolOutputLimits: map[string]ToolOutputLimit{
 			"shell": {MaxChars: 100_000, MaxLines: 4, Strategy: TruncHeadTail},
 		},
@@ -503,7 +503,7 @@ func TestSession_SystemPrompt_IncludesGitSnapshot_WhenInGitRepo(t *testing.T) {
 	}
 	c.Register(f)
 
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{})
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.4"), NewLocalExecutionEnvironment(dir), SessionConfig{})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -555,7 +555,7 @@ func TestSession_UserInstructionOverride_AppendedLastToSystemPrompt(t *testing.T
 	c.Register(f)
 
 	override := "OVERRIDE: highest priority"
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.4"), NewLocalExecutionEnvironment(dir), SessionConfig{
 		UserInstructionOverride: override,
 	})
 	if err != nil {
@@ -595,7 +595,7 @@ func TestSession_FollowUp_ProcessesAfterCompletion(t *testing.T) {
 	}
 	c.Register(f)
 
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{})
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.4"), NewLocalExecutionEnvironment(dir), SessionConfig{})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -638,7 +638,7 @@ func TestSession_LoopDetection_EmitsEventAndInjectsSteering(t *testing.T) {
 	c.Register(f)
 
 	cfg := SessionConfig{LoopDetectionWindow: 3}
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), cfg)
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.4"), NewLocalExecutionEnvironment(dir), cfg)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -737,7 +737,7 @@ func TestSession_RepeatedErrorToolCalls_ErrorsAtLimit(t *testing.T) {
 	c.Register(f)
 
 	// Register a fake close_agent tool that always errors with a stable message.
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.4"), NewLocalExecutionEnvironment(dir), SessionConfig{
 		RepeatedErrorToolCallLimit: 3,
 	})
 	if err != nil {

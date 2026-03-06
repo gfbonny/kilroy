@@ -1,6 +1,6 @@
 # Browser Smoke Demo
 
-Minimal end-to-end browser verification smoke test using OpenAI CLI + `gpt-5.3-codex-spark`.
+Minimal end-to-end browser verification smoke test using OpenAI CLI + `gpt-5.4-spark`.
 
 ## Validate
 
