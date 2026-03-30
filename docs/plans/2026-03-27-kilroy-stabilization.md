@@ -192,6 +192,64 @@ architecture to even start. Most of this has one reasonable default.
 
 ---
 
+## Phase 0.8: CLI-Only Agent Backend (Deprecate API)
+
+Goal: Simplify the agent backend to CLI-only. Use the appropriate CLI tool for each provider
+instead of maintaining both API and CLI execution paths.
+
+### Design Context
+
+Team feedback: use `opencode` for all providers that don't have a dedicated CLI agent.
+The provider mapping becomes:
+
+- Claude → `claude` CLI (with `--dangerously-skip-permissions`)
+- OpenAI → `codex` CLI (with `--sandbox workspace-write`)
+- Google → `gemini` CLI (with `--yolo`)
+- Everything else → `opencode` CLI (multi-provider, open-source)
+
+This eliminates the entire API backend: the `internal/agent/` package (session management,
+tool registry, profiles, output truncation), the `internal/llm/` package (provider adapters,
+unified client), and the complexity of maintaining two fundamentally different execution
+models. The codergen handler becomes: "invoke a CLI binary with a prompt, capture output."
+
+This also resolves the CLI-vs-API convergence gap — CLI converges better for structural
+reasons (purpose-built agents with native tools), so going all-CLI means convergence
+improves everywhere. It sidesteps Anthropic ToS concerns since we're using official/community
+CLI tooling as intended.
+
+### 0.8.1 Add opencode as a Provider Backend
+
+**What:** Add opencode CLI support alongside the existing claude/codex/gemini CLI backends.
+opencode becomes the default backend for any provider that doesn't have a dedicated CLI.
+
+**Context:** `internal/providerspec/builtin.go` defines CLI invocation templates per provider.
+Adding opencode follows the same pattern. opencode supports multiple LLM providers through
+its own configuration.
+
+**Done when:**
+- opencode is a recognized provider backend in the provider spec system
+- Graphs can specify `llm_provider=opencode` or have it selected as default
+- The invocation template handles opencode's flags for headless/non-interactive mode
+- A test graph using opencode validates the integration
+- opencode availability is checked in preflight
+
+### 0.8.2 Deprecate API Backend
+
+**What:** Mark the API backend as deprecated. New graphs should use CLI backends only.
+The API codepath remains functional but is no longer the recommended path.
+
+**Context:** The API backend lives in `internal/agent/` (session, tool registry, profiles)
+and `internal/llm/` (provider adapters). Deprecation means: warning when API backend is
+selected, documentation updated, no new features added to the API path.
+
+**Done when:**
+- Using `backend: api` in config produces a deprecation warning
+- Documentation recommends CLI backends for all providers
+- The warning names the recommended CLI alternative for the provider
+- Existing API-backend graphs continue to work (no breaking change)
+
+---
+
 ## Phase 1: Run Database
 
 Goal: Introduce SQLite as the single source of truth for run-level operational state. Replace
@@ -303,22 +361,25 @@ per-node git commits (node.after), CXDB event emission (node.after), checkpoint 
 - Multiple hooks can be registered and fire in order
 - Hook errors are logged but don't crash the engine (configurable: warn vs fail)
 
-### 2.2 Extract Git Operations into Hooks
+### 2.2 Remove Git from Engine Core
 
-**What:** Move git branch creation, worktree management, per-node commits, and SHA tracking
-out of the engine core and into a git lifecycle hook.
+**What:** Remove all git operations from the engine. Kilroy does not understand worktrees,
+branches, or commits. The caller creates the worktree and launches kilroy inside it.
 
-**Context:** Git operations are spread across engine.go (~15 callsites), parallel_handlers.go
-(branch isolation), and resume.go (SHA validation). This is the largest extraction and the
-most impactful — it makes git optional.
+**Context:** Team feedback: "Don't make kilroy understand worktrees — always start kilroy
+into a worktree." This is cleaner than extracting git into hooks. The caller (user, supervisor,
+script) creates the worktree and launches kilroy in that directory. Kilroy works in whatever
+directory it's given. If you want git checkpointing, your graph has command nodes that run
+`git commit`. Git operations are spread across engine.go (~15 callsites),
+parallel_handlers.go (branch isolation), and resume.go (SHA validation).
 
 **Done when:**
 - The engine core has zero direct gitutil imports
-- A GitHook implements the hook interface and provides all current git behavior
-- Runs WITH the GitHook behave identically to current behavior
-- Runs WITHOUT the GitHook succeed (no git branches, worktrees, or commits)
-- The test graph suite from Phase 0 works both with and without the GitHook
-- Parallel execution works without git (using temp directories or similar isolation)
+- No git branches are created, no worktrees made, no per-node commits by the engine
+- The engine accepts a working directory and operates within it
+- Parallel branch isolation uses temp directories, not git worktrees
+- The test graph suite from Phase 0 works in a plain directory (no git repo required)
+- If git operations are needed, they're command nodes in the graph, not engine behavior
 
 ### 2.3 Extract CXDB into Hooks
 
@@ -446,7 +507,31 @@ context.
   and surfaces prerequisite failures (auth, missing resources) within the first few minutes
 - Test graphs exercise the blocked detection (e.g., a node that requires a file that doesn't exist)
 
-### 2.5.3 Supervisor Intervention Policies
+### 2.5.3 Self-Introspection
+
+**What:** The system should be able to explain its own state, decisions, and plan in
+human-readable terms. Not just "what happened" but "what is the system's model of what's
+happening and why."
+
+**Context:** Team feedback: "needs to introspect itself." This means the supervisor can
+answer questions like:
+- "Why are you stuck?" → "Node X has failed 3 times with the same build error. The failure
+  is deterministic — retrying won't help."
+- "What's your plan?" → "I'm on node 4 of 7. Next is verify, then review."
+- "What have you tried?" → "Attempt 1: error A. Attempt 2: same. Attempt 3: different error B."
+
+This is built on the run DB (Phase 1) for data and the supervisor for interpretation.
+
+**Done when:**
+- `kilroy attractor status --run <id> --explain` produces a human-readable narrative of
+  the run's current state, recent decisions, and what's expected next
+- The explanation includes: current node, progress through graph, recent failures with
+  reasons, what the system plans to do next
+- For stuck/failed runs: the explanation diagnoses why (deterministic failure, missing
+  resource, repeated error) and suggests what the user can do
+- The explanation is generated from run DB data, not from parsing log files
+
+### 2.5.4 Supervisor Intervention Policies
 
 **What:** Allow the supervisor to take corrective action based on configurable policies, using
 lifecycle hooks as the intervention mechanism.
@@ -706,10 +791,13 @@ the engine plumbing is proven solid with deterministic graphs.
 
 This plan is designed to build while the plane is flying:
 
-- **Phase 0** (7 tasks) — each independently shippable, immediately improves the current system
+- **Phase 0** (8 tasks) — each independently shippable, immediately improves the current system;
+  includes CLI-only backend shift (opencode for non-claude/codex providers, deprecate API)
 - **Phase 1** (3 tasks) — additive; the DB writes alongside existing files, nothing breaks
-- **Phase 2** (6 tasks) — extracts concerns; existing behavior preserved via hooks, just decoupled
-- **Phase 2.5** (3 tasks) — adds the supervisor; run monitoring, blocker detection, user notification
+- **Phase 2** (6 tasks) — decouples concerns; git removed from engine (caller manages worktrees),
+  CXDB/artifacts into hooks, checkpoint optional
+- **Phase 2.5** (4 tasks) — adds the supervisor; run monitoring, blocker detection,
+  self-introspection, intervention policies
 - **Phase 3** (6 tasks) — changes graph semantics and authoring model; requires graph migration
 - **Phase 4** (3 tasks) — cleans interfaces; handler contract, status reform, parallel boundary
 
@@ -722,30 +810,12 @@ strictly better than before.
 
 These are known gaps that this plan doesn't address but should be tackled eventually:
 
-### Close the CLI vs API Convergence Gap
+### Remove API Backend Entirely
 
-The CLI backend (invoking `claude`, `codex`, `gemini` as subprocesses) converges substantially
-better than the API backend. The structural reason: CLI tools are purpose-built agents with
-native tools, session management, and coding-workflow training. The API path reinvents this
-from primitives with JSON tool definitions and explicit message history.
-
-Closing this gap requires understanding what makes CLI agents effective and replicating the
-important parts in the API path — better tool definitions, better system prompts, better
-context management. This work should happen after the handler interface is clean (Phase 4)
-so improvements to the API agent path don't require changes to the engine.
-
-### Anthropic ToS Awareness
-
-Anthropic's Consumer Terms prohibit using OAuth tokens from Free/Pro/Max plans in any tool
-other than Claude Code and claude.ai. Using the `claude` CLI as a subprocess with
-`--dangerously-skip-permissions` is likely permitted (it's the official binary with a flag
-designed for headless use), but relying on it as a core architectural assumption carries risk
-if terms tighten.
-
-The safe path for production/commercial use is API keys via the API, which makes closing the
-convergence gap (above) strategically important. This plan's architectural changes (clean
-handler interface, handler-owned LLM concerns) make it easier to improve the API path
-without engine changes.
+Phase 0.8 deprecates the API backend in favor of CLI-only (claude, codex, gemini, opencode).
+Once the deprecation has been in place and CLI-only is proven reliable, the API backend code
+(`internal/agent/`, `internal/llm/`) can be removed entirely. This is a significant code
+reduction that simplifies maintenance and testing.
 
 ### Configuration Surface Simplification
 
