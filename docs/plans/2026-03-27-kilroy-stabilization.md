@@ -361,25 +361,32 @@ per-node git commits (node.after), CXDB event emission (node.after), checkpoint 
 - Multiple hooks can be registered and fire in order
 - Hook errors are logged but don't crash the engine (configurable: warn vs fail)
 
-### 2.2 Remove Git from Engine Core
+### 2.2 Extract Git Operations into Hooks
 
-**What:** Remove all git operations from the engine. Kilroy does not understand worktrees,
-branches, or commits. The caller creates the worktree and launches kilroy inside it.
+**What:** Move git branch creation, worktree management, per-node commits, and SHA tracking
+out of the engine core and into a git lifecycle hook. The engine doesn't know about git. The
+git hook provides worktree isolation, per-node checkpointing, and branch management as an
+opt-in capability.
 
-**Context:** Team feedback: "Don't make kilroy understand worktrees — always start kilroy
-into a worktree." This is cleaner than extracting git into hooks. The caller (user, supervisor,
-script) creates the worktree and launches kilroy in that directory. Kilroy works in whatever
-directory it's given. If you want git checkpointing, your graph has command nodes that run
-`git commit`. Git operations are spread across engine.go (~15 callsites),
+**Context:** Team feedback: "Don't make kilroy understand worktrees." The engine should work
+in whatever directory it's given. Git operations (worktree creation, per-node commits, SHA
+tracking) are valuable but should be composable — register the git hook and you get them,
+don't register it and the engine still works fine in a plain directory.
+
+The recommended workflow becomes: the caller creates a worktree (or the git hook does it on
+`run.before`), kilroy executes inside it, the git hook commits per node and tracks state.
+But none of that is required — kilroy can run in a temp directory with no git at all.
+
+Git operations are currently spread across engine.go (~15 callsites),
 parallel_handlers.go (branch isolation), and resume.go (SHA validation).
 
 **Done when:**
 - The engine core has zero direct gitutil imports
-- No git branches are created, no worktrees made, no per-node commits by the engine
-- The engine accepts a working directory and operates within it
-- Parallel branch isolation uses temp directories, not git worktrees
-- The test graph suite from Phase 0 works in a plain directory (no git repo required)
-- If git operations are needed, they're command nodes in the graph, not engine behavior
+- A GitHook implements the hook interface and provides all current git behavior
+- Runs WITH the GitHook behave identically to current behavior (worktrees, commits, SHAs)
+- Runs WITHOUT the GitHook succeed in any directory (no git required)
+- Parallel branch isolation works both ways: git hook uses worktrees, no-git uses temp dirs
+- The test graph suite from Phase 0 works both with and without the GitHook
 
 ### 2.3 Extract CXDB into Hooks
 
