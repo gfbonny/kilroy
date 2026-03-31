@@ -2124,19 +2124,6 @@ func emitCXDBToolTurns(ctx context.Context, eng *Engine, nodeID string, ev agent
 		}); err != nil {
 			eng.Warn(fmt.Sprintf("cxdb append ToolResult failed (node=%s tool=%s call_id=%s): %v", nodeID, toolName, callID, err))
 		}
-	case agent.EventAssistantTextEnd:
-		text := strings.TrimSpace(fmt.Sprint(ev.Data["text"]))
-		if text == "" {
-			return
-		}
-		if _, _, err := eng.CXDB.Append(ctx, "com.kilroy.attractor.AssistantMessage", 1, map[string]any{
-			"run_id":       runID,
-			"node_id":      nodeID,
-			"text":         truncate(text, 8_000),
-			"timestamp_ms": nowMS(),
-		}); err != nil {
-			eng.Warn(fmt.Sprintf("cxdb append AssistantMessage failed (node=%s): %v", nodeID, err))
-		}
 	}
 }
 
