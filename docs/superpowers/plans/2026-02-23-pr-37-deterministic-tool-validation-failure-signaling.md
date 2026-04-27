@@ -262,7 +262,7 @@ func TestSession_RepeatedMalformedJSONLoop_ReturnsInvalidToolCallError(t *testin
 	}
 	c.Register(f)
 
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.4"), NewLocalExecutionEnvironment(dir), SessionConfig{
 		MaxToolRoundsPerInput:          50,
 		MaxTurns:                       50,
 		RepeatedMalformedToolCallLimit: 2,
@@ -331,7 +331,7 @@ func TestSession_RepeatedSchemaValidationLoop_ReturnsInvalidToolCallError(t *tes
 	}
 	c.Register(f)
 
-	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.4"), NewLocalExecutionEnvironment(dir), SessionConfig{
 		MaxToolRoundsPerInput:          50,
 		MaxTurns:                       50,
 		RepeatedMalformedToolCallLimit: 2,

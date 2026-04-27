@@ -14,12 +14,17 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/danshapiro/kilroy/internal/attractor/agents"
 	"github.com/danshapiro/kilroy/internal/attractor/engine"
 	"github.com/danshapiro/kilroy/internal/attractor/modeldb"
+	"github.com/danshapiro/kilroy/internal/attractor/rundb"
 	"github.com/danshapiro/kilroy/internal/attractor/validate"
+	"github.com/danshapiro/kilroy/internal/attractor/workflows"
 	"github.com/danshapiro/kilroy/internal/dotenv"
 	"github.com/danshapiro/kilroy/internal/providerspec"
 	"github.com/danshapiro/kilroy/internal/version"
+
+	"github.com/mattn/go-isatty"
 )
 
 const (
@@ -47,6 +52,18 @@ func signalCancelContext() (context.Context, func()) {
 		cancel(nil)
 	}
 	return ctx, cleanup
+}
+
+func init() {
+	// Register GitOps auto-detection so that RunWithConfig/Run automatically
+	// enable git mode when a valid git repo is provided.
+	engine.AutoDetectGitOps = func(repoPath string) engine.GitOps {
+		hook := &workflows.GitHook{}
+		if hook.ValidateRepo(repoPath, false) == nil {
+			return hook
+		}
+		return nil
+	}
 }
 
 func main() {
@@ -107,10 +124,46 @@ func loadEnvFile(args []string) []string {
 	return out
 }
 
+// newLayeredRegistry composes the full handler registry from L0 (engine core),
+// L1 (agent capabilities), and L2 (workflow patterns). This is where the
+// layered architecture is wired together at startup.
+func newLayeredRegistry(useTmux bool) *engine.HandlerRegistry {
+	reg := engine.NewCoreRegistry()
+	// Layer 1: Agent capabilities.
+	if useTmux {
+		agentHandler := agents.NewTmuxAgentHandler()
+		reg.Register("agent", agentHandler)
+		reg.SetDefault(agentHandler)
+	} else {
+		agentHandler := &agents.AgentHandler{}
+		reg.Register("agent", agentHandler)
+		reg.SetDefault(agentHandler)
+	}
+	// Layer 2: Workflow patterns.
+	reg.Register("wait.human", &workflows.HumanGateHandler{})
+	reg.Register("stack.manager_loop", &workflows.ManagerLoopHandler{})
+	return reg
+}
+
+// openRunDB opens the global run database. Returns nil on error (best-effort).
+func openRunDB() *rundb.DB {
+	db, err := rundb.Open(rundb.DefaultPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not open run database: %v\n", err)
+		return nil
+	}
+	return db
+}
+
+// graphDeclaredInputs checks if the raw DOT source declares required inputs.
+func graphDeclaredInputs(dotSource []byte) bool {
+	return strings.Contains(string(dotSource), "inputs=")
+}
+
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  kilroy --version")
-	fmt.Fprintln(os.Stderr, "  kilroy [--env-file <path>] attractor run [--detach] [--allow-test-shim] [--confirm-stale-build] [--no-cxdb] [--force-model <provider=model>] --graph <file.dot> --config <run.yaml> [--run-id <id>] [--logs-root <dir>]")
+	fmt.Fprintln(os.Stderr, "  kilroy [--env-file <path>] attractor run (--graph <file.dot> | --package <dir>) [--tmux] [--detach] [--validate|--preflight|--test-run] [--skip-preflight] [--allow-test-shim] [--confirm-stale-build] [--no-cxdb] [--force-model <provider=model>] [--config <run.yaml>] [--run-id <id>] [--logs-root <dir>] [--input <path|json>] [--prompt-file <file>] [--workspace <dir>] [--label KEY=VALUE ...]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor resume --logs-root <dir>")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor resume --cxdb <http_base_url> --context-id <id>")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor resume --run-branch <attractor/run/...> [--repo <path>]")
@@ -122,8 +175,10 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  kilroy attractor serve [--addr <host:port>]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor modeldb suggest [--refresh] [--ttl <duration>] [--provider <name>]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor review --graph <file.dot> [--output <file>] [--json] [--max-turns <n>]")
-	fmt.Fprintln(os.Stderr, "  kilroy attractor runs list [--json]")
-	fmt.Fprintln(os.Stderr, "  kilroy attractor runs prune [--before YYYY-MM-DD] [--graph PATTERN] [--label KEY=VALUE] [--orphans] [--dry-run | --yes]")
+	fmt.Fprintln(os.Stderr, "  kilroy attractor runs list [--json] [--label KEY=VALUE] [--status STATUS] [--graph PATTERN] [--limit N]")
+	fmt.Fprintln(os.Stderr, "  kilroy attractor runs show (<id-or-prefix> | --latest [--label KEY=VALUE]) [--json] [--outputs] [--print <file>]")
+	fmt.Fprintln(os.Stderr, "  kilroy attractor runs wait (<id-or-prefix> | --latest [--label KEY=VALUE]) [--timeout <duration>] [--interval <duration>] [--json]")
+	fmt.Fprintln(os.Stderr, "  kilroy attractor runs prune [--before YYYY-MM-DD] [--older-than <duration>] [--graph PATTERN] [--label KEY=VALUE] [--orphans] [--dry-run | --yes]")
 }
 
 func attractor(args []string) {
@@ -164,16 +219,28 @@ func attractorRun(args []string) {
 	var runID string
 	var logsRoot string
 	var detach bool
+	var preflightOnly bool
 	var allowTestShim bool
 	var confirmStaleBuild bool
 	var noCXDB bool
 	var skipCLIHeadlessWarning bool
 	var forceModelSpecs []string
+	var inputPath string
+	var promptFile string
+	var workspace string
+	var labelSpecs []string
+	var useTmux bool
+	var skipPreflight bool
+	var packagePath string
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--detach":
 			detach = true
+		case "--preflight", "--validate":
+			preflightOnly = true
+		case "--test-run":
+			preflightOnly = true
 		case "--allow-test-shim":
 			allowTestShim = true
 		case "--confirm-stale-build":
@@ -217,14 +284,57 @@ func attractorRun(args []string) {
 				os.Exit(1)
 			}
 			logsRoot = args[i]
+		case "--input":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--input requires a path or JSON string")
+				os.Exit(1)
+			}
+			inputPath = args[i]
+		case "--prompt-file":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--prompt-file requires a file path")
+				os.Exit(1)
+			}
+			promptFile = args[i]
+		case "--workspace":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--workspace requires a directory path")
+				os.Exit(1)
+			}
+			workspace = args[i]
+		case "--label":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--label requires KEY=VALUE")
+				os.Exit(1)
+			}
+			labelSpecs = append(labelSpecs, args[i])
+		case "--tmux":
+			useTmux = true
+		case "--skip-preflight":
+			skipPreflight = true
+		case "--package":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--package requires a directory path")
+				os.Exit(1)
+			}
+			packagePath = args[i]
 		default:
 			fmt.Fprintf(os.Stderr, "unknown arg: %s\n", args[i])
 			os.Exit(1)
 		}
 	}
 
-	if graphPath == "" || configPath == "" {
+	if graphPath == "" && packagePath == "" {
 		usage()
+		os.Exit(1)
+	}
+	if preflightOnly && detach {
+		fmt.Fprintln(os.Stderr, "--validate/--preflight/--test-run cannot be combined with --detach")
 		os.Exit(1)
 	}
 	if err := ensureFreshKilroyBuild(confirmStaleBuild); err != nil {
@@ -237,8 +347,107 @@ func attractorRun(args []string) {
 		os.Exit(1)
 	}
 
+	// Parse labels.
+	labels := map[string]string{}
+	for _, spec := range labelSpecs {
+		parts := strings.SplitN(spec, "=", 2)
+		if len(parts) != 2 {
+			fmt.Fprintf(os.Stderr, "--label %q: expected KEY=VALUE format\n", spec)
+			os.Exit(1)
+		}
+		labels[parts[0]] = parts[1]
+	}
+
+	// Workflow package: load graph, scripts, prompts from a package directory.
+	var pkg *workflows.Package
+	if packagePath != "" {
+		var err error
+		pkg, err = workflows.LoadPackage(packagePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "package load error: %v\n", err)
+			os.Exit(1)
+		}
+		if graphPath == "" {
+			graphPath = pkg.GraphPath
+		}
+		// Apply manifest defaults.
+		if pkg.Manifest != nil {
+			for k, v := range pkg.Manifest.Defaults.Labels {
+				if _, exists := labels[k]; !exists {
+					labels[k] = v
+				}
+			}
+		}
+	}
+	if graphPath == "" {
+		fmt.Fprintln(os.Stderr, "--graph or --package is required")
+		os.Exit(1)
+	}
+
+	// Derive graph directory for prompt_file resolution.
+	graphDir := filepath.Dir(graphPath)
+	if absPath, err := filepath.Abs(graphPath); err == nil {
+		graphDir = filepath.Dir(absPath)
+	}
+
+	// Load structured inputs.
+	var inputs map[string]any
+	if inputPath != "" {
+		if strings.HasPrefix(strings.TrimSpace(inputPath), "{") {
+			// JSON string passed directly.
+			inputs, err = engine.LoadInputString(inputPath)
+		} else {
+			inputs, err = engine.LoadInputFile(inputPath)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error loading inputs: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	// --prompt-file reads a file verbatim and assigns its contents to the
+	// "prompt" input key. Overrides any prompt already set via --input.
+	if promptFile != "" {
+		data, err := os.ReadFile(promptFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error reading --prompt-file %q: %v\n", promptFile, err)
+			os.Exit(1)
+		}
+		if inputs == nil {
+			inputs = map[string]any{}
+		}
+		inputs["prompt"] = string(data)
+	}
+
+	// Git integration: auto-detect based on workspace/cwd.
+	// If the workspace (or cwd) is a git repo, enable git worktrees and commits.
+	// Otherwise, run in plain-directory mode (no git required).
+	var gitOps engine.GitOps
+	gitDetectDir := workspace
+	if gitDetectDir == "" {
+		gitDetectDir, _ = os.Getwd()
+	}
+	gitHook := &workflows.GitHook{}
+	if gitHook.ValidateRepo(gitDetectDir, false) == nil {
+		gitOps = gitHook
+	}
+
+	// Skip the interactive CLI-backend warning automatically when stdin isn't
+	// a terminal (detached runs, pipes, agent-driven invocations). There's
+	// nobody to answer y/n so the prompt is pointless and the warning has
+	// already been surfaced out-of-band by whatever started the process.
+	if !skipCLIHeadlessWarning && !stdinIsTerminal() {
+		skipCLIHeadlessWarning = true
+	}
+	// Default to --no-cxdb when the caller didn't supply a run config. The
+	// auto-built default config doesn't populate cxdb addresses, so requiring
+	// cxdb would just fail later. Callers that genuinely want cxdb should
+	// pass --config with cxdb.binary_addr set.
+	if configPath == "" && !noCXDB {
+		noCXDB = true
+	}
+
 	if detach {
-		cfg, err := engine.LoadRunConfigFile(configPath)
+		cfg, err := loadOrBuildConfig(configPath, gitOps, gitDetectDir)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -275,7 +484,10 @@ func attractorRun(args []string) {
 		configPath = absConfigPath
 		logsRoot = absLogsRoot
 
-		childArgs := []string{"attractor", "run", "--graph", graphPath, "--config", configPath}
+		childArgs := []string{"attractor", "run", "--graph", graphPath}
+		if configPath != "" {
+			childArgs = append(childArgs, "--config", configPath)
+		}
 		if runID != "" {
 			childArgs = append(childArgs, "--run-id", runID)
 		}
@@ -291,10 +503,66 @@ func attractorRun(args []string) {
 		if noCXDB {
 			childArgs = append(childArgs, "--no-cxdb")
 		}
+		if inputPath != "" && !strings.HasPrefix(strings.TrimSpace(inputPath), "{") {
+			if abs, err := filepath.Abs(inputPath); err == nil {
+				inputPath = abs
+			}
+			childArgs = append(childArgs, "--input", inputPath)
+		} else if inputPath != "" {
+			childArgs = append(childArgs, "--input", inputPath)
+		}
+		if promptFile != "" {
+			if abs, err := filepath.Abs(promptFile); err == nil {
+				promptFile = abs
+			}
+			childArgs = append(childArgs, "--prompt-file", promptFile)
+		}
+		// Always forward an explicit --workspace to the child. If the caller
+		// didn't pass one, use the parent's cwd — otherwise the detach child
+		// (which launches with cwd = logs_root) would mistake the logs dir
+		// for its workspace and run in plain-directory mode instead of the
+		// user's actual git repo.
+		if workspace == "" {
+			if cwd, err := os.Getwd(); err == nil {
+				workspace = cwd
+			}
+		}
+		if workspace != "" {
+			if abs, err := filepath.Abs(workspace); err == nil {
+				workspace = abs
+			}
+			childArgs = append(childArgs, "--workspace", workspace)
+		}
+		if packagePath != "" {
+			if abs, err := filepath.Abs(packagePath); err == nil {
+				packagePath = abs
+			}
+			childArgs = append(childArgs, "--package", packagePath)
+		}
+		if useTmux {
+			childArgs = append(childArgs, "--tmux")
+		}
+		if skipPreflight {
+			childArgs = append(childArgs, "--skip-preflight")
+		}
+		for _, spec := range labelSpecs {
+			childArgs = append(childArgs, "--label", spec)
+		}
 		childArgs = append(childArgs, skipCLIHeadlessWarningFlag)
 		for _, spec := range canonicalForceSpecs {
 			childArgs = append(childArgs, "--force-model", spec)
 		}
+
+		// Pre-register the run in the DB with status=running so that
+		// `runs list`, `runs show`, and `runs wait --latest --label ...` can
+		// find the run immediately — before the child process calls
+		// RecordRunStart inside the engine. The child will overwrite this row
+		// (INSERT OR REPLACE) with full metadata once it starts.
+		detachRepoPath := workspace
+		if detachRepoPath == "" {
+			detachRepoPath = gitDetectDir
+		}
+		registerDetachedRunInDB(runID, graphPath, logsRoot, detachRepoPath, labels, inputs, os.Args)
 
 		if err := launchDetached(childArgs, logsRoot); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -309,7 +577,7 @@ func attractorRun(args []string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	cfg, err := engine.LoadRunConfigFile(configPath)
+	cfg, err := loadOrBuildConfig(configPath, gitOps, gitDetectDir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -320,16 +588,82 @@ func attractorRun(args []string) {
 			os.Exit(1)
 		}
 	}
+	if preflightOnly {
+		ctx, cleanupSignalCtx := signalCancelContext()
+		pf, err := engine.PreflightWithConfig(ctx, dotSource, cfg, engine.RunOptions{
+			RunID:         runID,
+			LogsRoot:      logsRoot,
+			AllowTestShim: allowTestShim,
+			DisableCXDB:   noCXDB,
+			ForceModels:   forceModels,
+			Registry:      newLayeredRegistry(useTmux),
+			GitOps:        gitOps,
+			OnCXDBStartup: func(info *engine.CXDBStartupInfo) {
+				if info == nil {
+					return
+				}
+				if info.UIURL == "" {
+					return
+				}
+				if info.UIStarted {
+					fmt.Fprintf(os.Stderr, "CXDB UI starting at %s\n", info.UIURL)
+					return
+				}
+				fmt.Fprintf(os.Stderr, "CXDB UI available at %s\n", info.UIURL)
+			},
+		})
+		cleanupSignalCtx()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Printf("preflight=true\n")
+		fmt.Printf("run_id=%s\n", pf.RunID)
+		fmt.Printf("logs_root=%s\n", pf.LogsRoot)
+		fmt.Printf("preflight_report=%s\n", pf.PreflightReportPath)
+		if pf.CXDBUIURL != "" {
+			fmt.Printf("cxdb_ui=%s\n", pf.CXDBUIURL)
+		}
+		for _, w := range pf.Warnings {
+			fmt.Fprintf(os.Stderr, "WARNING: %s\n", w)
+		}
+		os.Exit(0)
+	}
 
 	// Default: no deadline. CLI runs (especially with provider CLIs) can take hours.
 	ctx, cleanupSignalCtx := signalCancelContext()
+
+	rdb := openRunDB()
+	if rdb != nil {
+		defer rdb.Close()
+	}
+	// Validate required inputs before starting the run.
+	if len(inputs) > 0 || graphDeclaredInputs(dotSource) {
+		g, _, parseErr := engine.Prepare(dotSource)
+		if parseErr == nil && g != nil {
+			if validErr := engine.ValidateRequiredInputs(g, inputs); validErr != nil {
+				fmt.Fprintln(os.Stderr, validErr)
+				os.Exit(1)
+			}
+		}
+	}
 
 	res, err := engine.RunWithConfig(ctx, dotSource, cfg, engine.RunOptions{
 		RunID:         runID,
 		LogsRoot:      logsRoot,
 		AllowTestShim: allowTestShim,
 		DisableCXDB:   noCXDB,
+		SkipPreflight: skipPreflight,
 		ForceModels:   forceModels,
+		Registry:      newLayeredRegistry(useTmux),
+		RunDB:         rdb,
+		Inputs:        inputs,
+		Workspace:     workspace,
+		GraphDir:      graphDir,
+		Labels:        labels,
+		GitOps:        gitOps,
+		Invocation:    os.Args,
+		PackageDir:    func() string { if pkg != nil { return pkg.Dir }; return "" }(),
 		OnCXDBStartup: func(info *engine.CXDBStartupInfo) {
 			if info == nil {
 				return
@@ -413,6 +747,36 @@ func isSupportedForceModelProvider(provider string) bool {
 	return ok
 }
 
+// loadOrBuildConfig loads a config from file, or builds a zero-config default
+// when configPath is empty. In both cases, providers are auto-detected from
+// the environment to fill gaps. Config-file values always take precedence.
+func loadOrBuildConfig(configPath string, gitOps engine.GitOps, repoPath string) (*engine.RunConfigFile, error) {
+	var cfg *engine.RunConfigFile
+	if configPath != "" {
+		loaded, err := engine.LoadRunConfigFile(configPath)
+		if err != nil {
+			return nil, err
+		}
+		cfg = loaded
+	} else {
+		built, err := engine.DefaultRunConfig(gitOps, repoPath)
+		if err != nil {
+			return nil, err
+		}
+		cfg = built
+	}
+	detected := engine.DetectProviders()
+	engine.ApplyDetectedProviders(cfg, detected)
+	if len(detected) > 0 {
+		for _, dp := range detected {
+			fmt.Fprintf(os.Stderr, "auto-detected provider %s (backend=%s)\n", dp.Key, dp.Backend)
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "no providers auto-detected from environment (set API key env vars for your LLM providers)")
+	}
+	return cfg, nil
+}
+
 func runConfigUsesCLIProviders(cfg *engine.RunConfigFile) bool {
 	if cfg == nil {
 		return false
@@ -423,6 +787,16 @@ func runConfigUsesCLIProviders(cfg *engine.RunConfigFile) bool {
 		}
 	}
 	return false
+}
+
+// stdinIsTerminal reports whether os.Stdin is attached to an interactive
+// terminal. When it isn't (detached runs, pipes, redirected input, /dev/null,
+// subprocess invocation), there's nobody to answer a y/n prompt so callers
+// should skip interactive confirmations entirely. We use go-isatty rather
+// than a Mode&CharDevice check because /dev/null is also a char device on
+// darwin/linux and would fool the simpler test.
+func stdinIsTerminal() bool {
+	return isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
 }
 
 func confirmCLIHeadlessWarning(in io.Reader, out io.Writer) bool {

@@ -375,7 +375,7 @@ func writePinnedCatalog(t *testing.T) string {
 	_ = os.WriteFile(path, []byte(`{
   "data": [
     {
-      "id": "openai/gpt-5.2",
+      "id": "openai/gpt-5.4",
       "context_length": 1000,
       "top_provider": {"max_completion_tokens": 1000}
     }
@@ -577,6 +577,247 @@ func TestUsage_IncludesAllowTestShimFlag(t *testing.T) {
 	}
 }
 
+func TestAttractorRun_PreflightFlag_Accepted(t *testing.T) {
+	bin := buildKilroyBinary(t)
+	repo := initTestRepo(t)
+	catalog := writePinnedCatalog(t)
+	cfg := writeRunConfig(t, repo, "http://127.0.0.1:9", "127.0.0.1:9", catalog)
+
+	graph := filepath.Join(t.TempDir(), "preflight.dot")
+	_ = os.WriteFile(graph, []byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  start -> exit
+}
+`), 0o644)
+
+	logsRoot := filepath.Join(t.TempDir(), "logs")
+	code, out := runKilroy(t, bin, "attractor", "run", "--graph", graph, "--config", cfg, "--run-id", "preflight-flag", "--logs-root", logsRoot, "--no-cxdb", "--preflight")
+	if code != 0 {
+		t.Fatalf("exit code: got %d want 0\n%s", code, out)
+	}
+	if !strings.Contains(out, "preflight=true") {
+		t.Fatalf("expected preflight marker, got:\n%s", out)
+	}
+	if !strings.Contains(out, "preflight_report=") {
+		t.Fatalf("expected preflight report output, got:\n%s", out)
+	}
+}
+
+func TestAttractorRun_TestRunAlias_Accepted(t *testing.T) {
+	bin := buildKilroyBinary(t)
+	repo := initTestRepo(t)
+	catalog := writePinnedCatalog(t)
+	cfg := writeRunConfig(t, repo, "http://127.0.0.1:9", "127.0.0.1:9", catalog)
+
+	graph := filepath.Join(t.TempDir(), "test-run.dot")
+	_ = os.WriteFile(graph, []byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  start -> exit
+}
+`), 0o644)
+
+	logsRoot := filepath.Join(t.TempDir(), "logs")
+	code, out := runKilroy(t, bin, "attractor", "run", "--graph", graph, "--config", cfg, "--run-id", "test-run-flag", "--logs-root", logsRoot, "--no-cxdb", "--test-run")
+	if code != 0 {
+		t.Fatalf("exit code: got %d want 0\n%s", code, out)
+	}
+	if !strings.Contains(out, "preflight=true") {
+		t.Fatalf("expected preflight marker, got:\n%s", out)
+	}
+}
+
+func TestAttractorRun_ValidateAlias_Accepted(t *testing.T) {
+	bin := buildKilroyBinary(t)
+	repo := initTestRepo(t)
+	catalog := writePinnedCatalog(t)
+	cfg := writeRunConfig(t, repo, "http://127.0.0.1:9", "127.0.0.1:9", catalog)
+
+	graph := filepath.Join(t.TempDir(), "validate.dot")
+	_ = os.WriteFile(graph, []byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  start -> exit
+}
+`), 0o644)
+
+	logsRoot := filepath.Join(t.TempDir(), "logs")
+	code, out := runKilroy(t, bin, "attractor", "run", "--graph", graph, "--config", cfg, "--run-id", "validate-flag", "--logs-root", logsRoot, "--no-cxdb", "--validate")
+	if code != 0 {
+		t.Fatalf("exit code: got %d want 0\n%s", code, out)
+	}
+	if !strings.Contains(out, "preflight=true") {
+		t.Fatalf("expected preflight marker, got:\n%s", out)
+	}
+}
+
+func TestAttractorRun_PreflightRejectsDetach(t *testing.T) {
+	bin := buildKilroyBinary(t)
+	repo := initTestRepo(t)
+	catalog := writePinnedCatalog(t)
+	cfg := writeRunConfig(t, repo, "http://127.0.0.1:9", "127.0.0.1:9", catalog)
+
+	graph := filepath.Join(t.TempDir(), "detach-preflight.dot")
+	_ = os.WriteFile(graph, []byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  start -> exit
+}
+`), 0o644)
+
+	logsRoot := filepath.Join(t.TempDir(), "logs")
+	code, out := runKilroy(t, bin, "attractor", "run", "--detach", "--preflight", "--graph", graph, "--config", cfg, "--run-id", "preflight-detach", "--logs-root", logsRoot)
+	if code != 1 {
+		t.Fatalf("exit code: got %d want 1\n%s", code, out)
+	}
+	if !strings.Contains(out, "--validate/--preflight/--test-run cannot be combined with --detach") {
+		t.Fatalf("expected incompatible flag error, got:\n%s", out)
+	}
+}
+
+func TestAttractorRun_PreflightOutput_IsPreflightOnlyMetadata(t *testing.T) {
+	bin := buildKilroyBinary(t)
+	repo := initTestRepo(t)
+	catalog := writePinnedCatalog(t)
+	cfg := writeRunConfig(t, repo, "http://127.0.0.1:9", "127.0.0.1:9", catalog)
+
+	graph := filepath.Join(t.TempDir(), "preflight-output.dot")
+	_ = os.WriteFile(graph, []byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  start -> exit
+}
+`), 0o644)
+
+	logsRoot := filepath.Join(t.TempDir(), "logs")
+	code, out := runKilroy(t, bin, "attractor", "run", "--graph", graph, "--config", cfg, "--run-id", "preflight-output", "--logs-root", logsRoot, "--no-cxdb", "--preflight")
+	if code != 0 {
+		t.Fatalf("exit code: got %d want 0\n%s", code, out)
+	}
+	if !strings.Contains(out, "preflight=true") {
+		t.Fatalf("expected preflight marker, got:\n%s", out)
+	}
+	if strings.Contains(out, "worktree=") {
+		t.Fatalf("worktree should be absent for preflight-only mode:\n%s", out)
+	}
+	if strings.Contains(out, "run_branch=") {
+		t.Fatalf("run_branch should be absent for preflight-only mode:\n%s", out)
+	}
+	if strings.Contains(out, "final_commit=") {
+		t.Fatalf("final_commit should be absent for preflight-only mode:\n%s", out)
+	}
+}
+
+func TestAttractorRun_PreflightStillEnforcesTestShimGate(t *testing.T) {
+	bin := buildKilroyBinary(t)
+	repo := initTestRepo(t)
+	catalog := writePinnedCatalog(t)
+
+	graph := filepath.Join(t.TempDir(), "shim-gate.dot")
+	_ = os.WriteFile(graph, []byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="hi"]
+  start -> a -> exit
+}
+`), 0o644)
+
+	cfg := filepath.Join(t.TempDir(), "run.yaml")
+	_ = os.WriteFile(cfg, []byte(fmt.Sprintf(`
+version: 1
+repo:
+  path: %s
+cxdb:
+  binary_addr: 127.0.0.1:9
+  http_base_url: http://127.0.0.1:9
+llm:
+  cli_profile: test_shim
+  providers:
+    openai:
+      backend: cli
+modeldb:
+  openrouter_model_info_path: %s
+  openrouter_model_info_update_policy: pinned
+`, repo, catalog)), 0o644)
+
+	logsRoot := filepath.Join(t.TempDir(), "logs")
+	code, out := runKilroyWithInput(
+		t,
+		bin,
+		"\n",
+		"attractor",
+		"run",
+		"--preflight",
+		"--graph",
+		graph,
+		"--config",
+		cfg,
+		"--run-id",
+		"preflight-test-shim-gate",
+		"--logs-root",
+		logsRoot,
+	)
+	if code != 1 {
+		t.Fatalf("exit code: got %d want 1\n%s", code, out)
+	}
+	if !strings.Contains(out, "--allow-test-shim") {
+		t.Fatalf("expected test_shim gate error, got:\n%s", out)
+	}
+}
+
+func TestAttractorRun_PreflightStillEnforcesStaleBuildGate(t *testing.T) {
+	bin := buildKilroyBinaryWithRevision(t, "deadbeef")
+	repo := initTestRepo(t)
+	repoBin := filepath.Join(repo, "kilroy")
+	b, err := os.ReadFile(bin)
+	if err != nil {
+		t.Fatalf("read built binary: %v", err)
+	}
+	if err := os.WriteFile(repoBin, b, 0o755); err != nil {
+		t.Fatalf("write repo binary: %v", err)
+	}
+
+	missingGraph := filepath.Join(repo, "missing.dot")
+	missingConfig := filepath.Join(repo, "missing.yaml")
+	code, out := runKilroyInDir(t, repo, repoBin, "attractor", "run", "--preflight", "--graph", missingGraph, "--config", missingConfig)
+	if code != 1 {
+		t.Fatalf("exit code: got %d want 1\n%s", code, out)
+	}
+	if !strings.Contains(out, "WARNING: STALE KILROY BUILD DETECTED") {
+		t.Fatalf("expected stale build warning, got:\n%s", out)
+	}
+	if !strings.Contains(out, "--confirm-stale-build") {
+		t.Fatalf("expected confirm remediation hint, got:\n%s", out)
+	}
+	if strings.Contains(out, "missing.dot") {
+		t.Fatalf("expected stale-build gate before graph read, got:\n%s", out)
+	}
+}
+
+func TestUsage_IncludesPreflightFlags(t *testing.T) {
+	bin := buildKilroyBinary(t)
+	code, out := runKilroy(t, bin)
+	if code != 1 {
+		t.Fatalf("exit code: got %d want 1\n%s", code, out)
+	}
+	if !strings.Contains(out, "--validate") {
+		t.Fatalf("usage should include --validate; output:\n%s", out)
+	}
+	if !strings.Contains(out, "--preflight") {
+		t.Fatalf("usage should include --preflight; output:\n%s", out)
+	}
+	if !strings.Contains(out, "--test-run") {
+		t.Fatalf("usage should include --test-run; output:\n%s", out)
+	}
+}
+
 func TestAttractorRun_StaleBuildRequiresConfirm(t *testing.T) {
 	bin := buildKilroyBinaryWithRevision(t, "deadbeef")
 	repo := initTestRepo(t)
@@ -637,14 +878,14 @@ func TestAttractorRun_StaleBuildConfirmAllowsProceeding(t *testing.T) {
 
 func TestParseForceModelFlags_NormalizesAndCanonicalizes(t *testing.T) {
 	got, specs, err := parseForceModelFlags([]string{
-		"openai=gpt-5.2-codex",
+		"openai=gpt-5.4",
 		"gemini=gemini-3-pro-preview",
 	})
 	if err != nil {
 		t.Fatalf("parseForceModelFlags: %v", err)
 	}
 	want := map[string]string{
-		"openai": "gpt-5.2-codex",
+		"openai": "gpt-5.4",
 		"google": "gemini-3-pro-preview",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -652,7 +893,7 @@ func TestParseForceModelFlags_NormalizesAndCanonicalizes(t *testing.T) {
 	}
 	wantSpecs := []string{
 		"google=gemini-3-pro-preview",
-		"openai=gpt-5.2-codex",
+		"openai=gpt-5.4",
 	}
 	if !reflect.DeepEqual(specs, wantSpecs) {
 		t.Fatalf("canonical specs: got %#v want %#v", specs, wantSpecs)
@@ -697,8 +938,8 @@ func TestParseForceModelFlags_RejectsUnsupportedProvider(t *testing.T) {
 
 func TestParseForceModelFlags_RejectsDuplicateProvider(t *testing.T) {
 	if _, _, err := parseForceModelFlags([]string{
-		"openai=gpt-5.2-codex",
-		"openai=gpt-5.3-codex",
+		"openai=gpt-5.4",
+		"openai=codex-mini-latest",
 	}); err == nil {
 		t.Fatalf("expected parse error for duplicate provider")
 	}
@@ -721,7 +962,7 @@ func TestAttractorRun_RealProfileRejectsShimOverride(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="hi"]
   start -> a -> exit
 }
 `), 0o644)
@@ -754,53 +995,13 @@ modeldb:
 	}
 }
 
-func TestAttractorRun_CLIProviderWarningCanAbortPreflight(t *testing.T) {
-	bin := buildKilroyBinary(t)
-	repo := initTestRepo(t)
-	catalog := writePinnedCatalog(t)
-
-	graph := filepath.Join(t.TempDir(), "openai.dot")
-	_ = os.WriteFile(graph, []byte(`
-digraph G {
-  start [shape=Mdiamond]
-  exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="hi"]
-  start -> a -> exit
-}
-`), 0o644)
-
-	cfg := filepath.Join(t.TempDir(), "run.yaml")
-	_ = os.WriteFile(cfg, []byte(fmt.Sprintf(`
-version: 1
-repo:
-  path: %s
-cxdb:
-  binary_addr: 127.0.0.1:9009
-  http_base_url: http://127.0.0.1:9010
-llm:
-  cli_profile: real
-  providers:
-    openai:
-      backend: cli
-modeldb:
-  openrouter_model_info_path: %s
-  openrouter_model_info_update_policy: pinned
-`, repo, catalog)), 0o644)
-
-	logsRoot := filepath.Join(t.TempDir(), "logs")
-	code, out := runKilroyWithInput(t, bin, "n\n", "attractor", "run", "--graph", graph, "--config", cfg, "--run-id", "cli-warning-abort", "--logs-root", logsRoot)
-	if code != 1 {
-		t.Fatalf("exit code: got %d want 1\n%s", code, out)
-	}
-	if !strings.Contains(out, cliHeadlessWarningPrompt) {
-		t.Fatalf("expected cli headless warning prompt, got:\n%s", out)
-	}
-	if !strings.Contains(out, "preflight aborted: declined provider CLI headless-risk warning") {
-		t.Fatalf("expected explicit preflight abort message, got:\n%s", out)
-	}
-}
-
-func TestAttractorRun_CLIProviderWarningDefaultsToProceedOnEnter(t *testing.T) {
+// TestAttractorRun_CLIProviderWarningAutoSkippedOnNonTTY verifies that when
+// stdin is not a terminal (pipe, /dev/null, agent subprocess), the
+// interactive CLI-backend warning is silently bypassed: the prompt text is
+// not printed, the "declined" exit path is unreachable, and the run proceeds
+// directly to downstream preflight checks. Subprocess invocations from CI,
+// pipes, and detached child processes always hit this path.
+func TestAttractorRun_CLIProviderWarningAutoSkippedOnNonTTY(t *testing.T) {
 	bin := buildKilroyBinary(t)
 	repo := initTestRepo(t)
 	catalog := writePinnedCatalog(t)
@@ -811,7 +1012,7 @@ func TestAttractorRun_CLIProviderWarningDefaultsToProceedOnEnter(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="hi"]
   start -> a -> exit
 }
 `), 0o644)
@@ -835,18 +1036,20 @@ modeldb:
 `, repo, catalog)), 0o644)
 
 	logsRoot := filepath.Join(t.TempDir(), "logs")
-	code, out := runKilroyWithInput(t, bin, "\n", "attractor", "run", "--graph", graph, "--config", cfg, "--run-id", "cli-warning-proceed", "--logs-root", logsRoot)
+	// Even with "n\n" piped on stdin, the auto-skip ignores it: stdin isn't
+	// a TTY so confirmCLIHeadlessWarning is never called.
+	code, out := runKilroyWithInput(t, bin, "n\n", "attractor", "run", "--graph", graph, "--config", cfg, "--run-id", "cli-warning-autoskip", "--logs-root", logsRoot)
 	if code != 1 {
 		t.Fatalf("exit code: got %d want 1\n%s", code, out)
 	}
-	if !strings.Contains(out, cliHeadlessWarningPrompt) {
-		t.Fatalf("expected cli headless warning prompt, got:\n%s", out)
+	if strings.Contains(out, cliHeadlessWarningPrompt) {
+		t.Fatalf("warning prompt should be auto-skipped on non-TTY stdin, but was printed:\n%s", out)
 	}
 	if strings.Contains(out, "preflight aborted: declined provider CLI headless-risk warning") {
-		t.Fatalf("prompt should default to proceed on Enter, got:\n%s", out)
+		t.Fatalf("warning auto-skip must not abort preflight, got:\n%s", out)
 	}
 	if !strings.Contains(out, "llm.cli_profile=real forbids provider path overrides") {
-		t.Fatalf("expected run to continue into preflight policy checks, got:\n%s", out)
+		t.Fatalf("expected run to proceed past warning into downstream preflight checks, got:\n%s", out)
 	}
 }
 

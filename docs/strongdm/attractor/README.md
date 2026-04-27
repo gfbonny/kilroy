@@ -26,7 +26,7 @@ Although bringing your own agentic loop and unified LLM SDK is not required to b
   - Sensitive Codex state roots (`codex-home*`, `.codex/auth.json`, `.codex/config.toml`) are excluded from `stage.tgz` and `run.tgz`.
   - Idle watchdog enforces process-group cleanup for stalled Codex CLI stages.
 - Codex schema behavior:
-  - Structured output schema requires `final` and `summary`, but allows additional properties for CLI compatibility.
+  - Structured output schema requires `final` and `summary` and sets `additionalProperties: false` (strict object contract required by Codex/OpenAI structured-output validation).
   - If codex rejects schema validation (`invalid_json_schema`-class errors), Attractor retries once without `--output-schema` and records fallback metadata in stage artifacts.
   - If codex returns unknown structured keys on schema-enabled output, Attractor emits a loud warning, writes `structured_output_unknown_keys.json`, retries once without `--output-schema`, and records fallback metadata in `cli_invocation.json`.
   - If codex emits known state-db discrepancy signatures, Attractor retries once with a fresh isolated state root and records state-db fallback metadata.
@@ -46,10 +46,30 @@ Although bringing your own agentic loop and unified LLM SDK is not required to b
   - `KILROY_PREFLIGHT_CAPABILITY_PROBES=off` disables capability probing and keeps binary-presence checks only.
   - API prompt probes retry transient failures by default (timeout `30000ms`, retries `2`, backoff `500ms` to `5000ms`).
   - Tune with `KILROY_PREFLIGHT_API_PROMPT_PROBE_TIMEOUT_MS`, `KILROY_PREFLIGHT_API_PROMPT_PROBE_RETRIES`, `KILROY_PREFLIGHT_API_PROMPT_PROBE_BASE_DELAY_MS`, `KILROY_PREFLIGHT_API_PROMPT_PROBE_MAX_DELAY_MS`.
+- Preflight-only run mode:
+  - `./kilroy attractor run --graph <graph.dot> --config <run.yaml> --preflight` (alias: `--test-run`).
+  - Runs full startup validation stack (policy gates, graph/config validation, model/provider preflight, CXDB readiness unless `--no-cxdb`) and then exits before execution.
+  - Writes `<logs_root>/preflight_report.json`.
+  - Does not produce execution artifacts: `final.json`, `checkpoint.json`, `manifest.json`, `run.pid`, `worktree/`, run branch traversal.
+  - `--preflight/--test-run` cannot be combined with `--detach`.
 - Provider plug-ins (runtime metadata):
   - Providers are resolved through runtime metadata (protocol family + backend + failover), not hard-coded provider switches.
   - Built-ins: `openai`, `anthropic`, `google`, `kimi`, `zai`, `cerebras`, `minimax`.
   - Built-in aliases: `gemini`/`google_ai_studio` -> `google`, `moonshot`/`moonshotai` -> `kimi`, `z-ai`/`z.ai` -> `zai`, `cerebras-ai` -> `cerebras`, `minimax-ai` -> `minimax`.
+  - Built-in provider metadata does not define executable failover defaults.
+  - Failover occurs only when `llm.providers.<provider>.failover` is explicitly set in run config.
+  - Use `failover: []` to explicitly disable failover for a provider.
+  - Example explicit policy:
+    ```yaml
+    llm:
+      providers:
+        openai:
+          backend: api
+          failover: [google]
+        google:
+          backend: api
+          failover: []
+    ```
   - `kimi`, `zai`, `cerebras`, and `minimax` are API-only in this release (`kimi` uses `anthropic_messages`; `zai`, `cerebras`, and `minimax` use `openai_chat_completions`).
 - Real vs test-shim execution:
   - `llm.cli_profile` defaults to `real` and rejects `KILROY_CODEX_PATH`, `KILROY_CLAUDE_PATH`, `KILROY_GEMINI_PATH` overrides.

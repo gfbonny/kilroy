@@ -222,10 +222,11 @@ func applyConfigDefaults(cfg *RunConfigFile) {
 	if !cfg.Git.CommitPerNode {
 		cfg.Git.CommitPerNode = true
 	}
-	// metaspec default: require_clean defaults to true when not specified.
+	// require_clean defaults to false: kilroy creates its own worktree, so
+	// the parent repo's cleanliness is irrelevant for correctness.
 	if cfg.Git.RequireClean == nil {
-		t := true
-		cfg.Git.RequireClean = &t
+		f := false
+		cfg.Git.RequireClean = &f
 	}
 	cfg.Git.CheckpointExcludeGlobs = trimNonEmpty(cfg.Git.CheckpointExcludeGlobs)
 	applyArtifactPolicyDefaults(cfg)
@@ -309,9 +310,6 @@ func validateConfig(cfg *RunConfigFile) error {
 	if strings.TrimSpace(cfg.Repo.Path) == "" {
 		return fmt.Errorf("repo.path is required")
 	}
-	if strings.TrimSpace(cfg.CXDB.BinaryAddr) == "" || strings.TrimSpace(cfg.CXDB.HTTPBaseURL) == "" {
-		return fmt.Errorf("cxdb.binary_addr and cxdb.http_base_url are required in v1")
-	}
 	if cfg.CXDB.Autostart.WaitTimeoutMS < 0 {
 		return fmt.Errorf("cxdb.autostart.wait_timeout_ms must be >= 0")
 	}
@@ -321,17 +319,18 @@ func validateConfig(cfg *RunConfigFile) error {
 	if cfg.CXDB.Autostart.Enabled && len(cfg.CXDB.Autostart.Command) == 0 {
 		return fmt.Errorf("cxdb.autostart.command is required when cxdb.autostart.enabled=true")
 	}
-	if strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoPath) == "" {
-		return fmt.Errorf("modeldb.openrouter_model_info_path is required")
-	}
-	switch strings.ToLower(strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoUpdatePolicy)) {
-	case "pinned", "on_run_start":
-		// ok
-	default:
-		return fmt.Errorf("invalid modeldb.openrouter_model_info_update_policy: %q (want pinned|on_run_start)", cfg.ModelDB.OpenRouterModelInfoUpdatePolicy)
-	}
-	if strings.ToLower(strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoUpdatePolicy)) == "on_run_start" && strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoURL) == "" {
-		return fmt.Errorf("modeldb.openrouter_model_info_url is required when update_policy=on_run_start")
+	// Model catalog is optional: when no path is configured the engine falls
+	// back to the embedded catalog at bootstrap time.
+	if strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoPath) != "" {
+		switch strings.ToLower(strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoUpdatePolicy)) {
+		case "pinned", "on_run_start":
+			// ok
+		default:
+			return fmt.Errorf("invalid modeldb.openrouter_model_info_update_policy: %q (want pinned|on_run_start)", cfg.ModelDB.OpenRouterModelInfoUpdatePolicy)
+		}
+		if strings.ToLower(strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoUpdatePolicy)) == "on_run_start" && strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoURL) == "" {
+			return fmt.Errorf("modeldb.openrouter_model_info_url is required when update_policy=on_run_start")
+		}
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.LLM.CLIProfile)) {
 	case "real", "test_shim":
@@ -356,7 +355,7 @@ func validateConfig(cfg *RunConfigFile) error {
 				return fmt.Errorf("llm.providers.%s backend=cli requires builtin provider with cli contract", prov)
 			}
 		default:
-			return fmt.Errorf("invalid backend for provider %q: %q (want api|cli)", prov, pc.Backend)
+			return fmt.Errorf("invalid backend for provider %q: %q (want api|cli)\n  hint: add backend: cli (or api) under llm.providers.%s in your run config", prov, pc.Backend, prov)
 		}
 		if strings.EqualFold(cfg.LLM.CLIProfile, "real") && strings.TrimSpace(pc.Executable) != "" {
 			return fmt.Errorf("llm.providers.%s.executable is only allowed when llm.cli_profile=test_shim", prov)
@@ -436,10 +435,10 @@ func trimNonEmpty(parts []string) []string {
 }
 
 // resolveRequireClean returns the effective require_clean value from the config,
-// defaulting to true when the config is nil or the field is unset.
+// defaulting to false when the config is nil or the field is unset.
 func resolveRequireClean(cfg *RunConfigFile) bool {
 	if cfg == nil || cfg.Git.RequireClean == nil {
-		return true
+		return false
 	}
 	return *cfg.Git.RequireClean
 }

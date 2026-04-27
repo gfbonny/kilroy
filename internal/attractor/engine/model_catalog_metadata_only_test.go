@@ -20,7 +20,7 @@ func TestRunWithConfig_ModelCatalogMetadata_DoesNotAffectProviderRouting_WithFor
 	// run option bypasses the provider/model catalog gate so we can still verify
 	// provider routing is driven by graph/config, not catalog provider metadata.
 	pinned := filepath.Join(t.TempDir(), "pinned.json")
-	if err := os.WriteFile(pinned, []byte(`{"data":[{"id":"anthropic/gpt-5.2","supported_parameters":[],"context_length":64}]}`), 0o644); err != nil {
+	if err := os.WriteFile(pinned, []byte(`{"data":[{"id":"anthropic/gpt-5.4","supported_parameters":[],"context_length":64}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -38,7 +38,7 @@ func TestRunWithConfig_ModelCatalogMetadata_DoesNotAffectProviderRouting_WithFor
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
   "id": "resp_1",
-  "model": "gpt-5.2",
+  "model": "gpt-5.4",
   "output": [{"type": "message", "content": [{"type":"output_text", "text":"Hello"}]}],
   "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
 }`))
@@ -64,7 +64,7 @@ digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, codergen_mode=one_shot, prompt="say hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, agent_mode=one_shot, prompt="say hi"]
   start -> a -> exit
 }
 `)
@@ -74,7 +74,7 @@ digraph G {
 	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{
 		RunID:       "test-catalog-metadata-only",
 		LogsRoot:    logsRoot,
-		ForceModels: map[string]string{"openai": "gpt-5.2"},
+		ForceModels: map[string]string{"openai": "gpt-5.4"},
 	})
 	if err != nil {
 		t.Fatalf("RunWithConfig: %v", err)

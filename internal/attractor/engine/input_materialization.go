@@ -752,7 +752,7 @@ func isLikelyArtifactInputPath(path string) bool {
 	segments := strings.Split(normalized, "/")
 	for _, seg := range segments {
 		switch seg {
-		case ".git", ".jj", "logs", "benchmarks", "worktree", "node_modules", ".pnpm-store", ".venv", "venv", "__pycache__", ".pytest_cache", "dist-info", "managed":
+		case ".git", ".jj", "logs", "benchmarks", "worktree", ".worktrees", "node_modules", ".pnpm-store", ".venv", "venv", "__pycache__", ".pytest_cache", "dist-info", "managed", ".cargo-target":
 			return true
 		}
 	}
@@ -810,7 +810,7 @@ func (e *Engine) materializeStageInputs(ctx context.Context, nodeID string) erro
 		return nil
 	}
 	// Stage materialization runs immediately before handler execution and updates
-	// the stage-local manifest path consumed by buildStageRuntimeEnv.
+	// the stage-local manifest path consumed by BuildStageRuntimeEnv.
 	roots := []string{e.WorktreeDir}
 	snapshot := inputSnapshotFilesRoot(e.LogsRoot)
 	if strings.TrimSpace(snapshot) != "" {

@@ -45,9 +45,9 @@ digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
   par [shape=component]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, auto_status=true, prompt="branch a"]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2, auto_status=true, prompt="branch b"]
-  merge [shape=box, llm_provider=openai, llm_model=gpt-5.2, auto_status=true, prompt="merge branch outputs"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, auto_status=true, prompt="branch a"]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4, auto_status=true, prompt="branch b"]
+  merge [shape=box, llm_provider=openai, llm_model=gpt-5.4, auto_status=true, prompt="merge branch outputs"]
 
   start -> par
   par -> a
@@ -64,7 +64,7 @@ digraph G {
 	runID := "test-manual-box-fan-in-handoff"
 	logsRoot := filepath.Join(t.TempDir(), runID)
 	eng := newReliabilityFixtureEngine(t, repo, logsRoot, runID, dot)
-	eng.CodergenBackend = backend
+	eng.AgentBackend = backend
 	_, err := eng.runLoop(ctx, "start", nil, map[string]int{}, map[string]runtime.Outcome{})
 	if err != nil {
 		t.Fatalf("runLoop() error: %v", err)

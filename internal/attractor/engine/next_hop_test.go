@@ -12,7 +12,7 @@ func TestResolveNextHop_FanInFail_DoesNotPickUnconditionalEdge(t *testing.T) {
 	g, err := dot.Parse([]byte(`
 digraph G {
   join [shape=tripleoctagon]
-  verify [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  verify [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   join -> verify
 }
 `))
@@ -23,7 +23,7 @@ digraph G {
 	hop, err := resolveNextHop(g, "join", runtime.Outcome{
 		Status:        runtime.StatusFail,
 		FailureReason: "all parallel branches failed",
-	}, runtime.NewContext(), "")
+	}, runtime.NewContext(), "", nil)
 	if err != nil {
 		t.Fatalf("resolveNextHop: %v", err)
 	}
@@ -37,9 +37,9 @@ func TestResolveNextHop_FanInFail_PicksRetryTarget(t *testing.T) {
 digraph G {
   graph [retry_target="retry_global"]
   join [shape=tripleoctagon, retry_target="retry_node"]
-  verify [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  retry_node [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  retry_global [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  verify [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  retry_node [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  retry_global [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   join -> verify
 }
 `))
@@ -50,7 +50,7 @@ digraph G {
 	hop, err := resolveNextHop(g, "join", runtime.Outcome{
 		Status:        runtime.StatusFail,
 		FailureReason: "all parallel branches failed",
-	}, runtime.NewContext(), failureClassTransientInfra)
+	}, runtime.NewContext(), failureClassTransientInfra, nil)
 	if err != nil {
 		t.Fatalf("resolveNextHop: %v", err)
 	}
@@ -72,9 +72,9 @@ func TestResolveNextHop_FanInFail_ConditionalBeatsRetryTarget(t *testing.T) {
 	g, err := dot.Parse([]byte(`
 digraph G {
   join [shape=tripleoctagon, retry_target="retry_node"]
-  retry_by_condition [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  retry_node [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  verify [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  retry_by_condition [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  retry_node [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  verify [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   join -> retry_by_condition [condition="outcome=fail"]
   join -> verify
 }
@@ -86,7 +86,7 @@ digraph G {
 	hop, err := resolveNextHop(g, "join", runtime.Outcome{
 		Status:        runtime.StatusFail,
 		FailureReason: "all parallel branches failed",
-	}, runtime.NewContext(), "")
+	}, runtime.NewContext(), "", nil)
 	if err != nil {
 		t.Fatalf("resolveNextHop: %v", err)
 	}
@@ -106,9 +106,9 @@ func TestResolveNextHop_FanInFail_DeterministicBlocksRetryTarget(t *testing.T) {
 digraph G {
   graph [retry_target="retry_global"]
   join [shape=tripleoctagon, retry_target="retry_node"]
-  verify [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  retry_node [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  retry_global [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  verify [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  retry_node [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  retry_global [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   join -> verify
 }
 `))
@@ -119,7 +119,7 @@ digraph G {
 	hop, err := resolveNextHop(g, "join", runtime.Outcome{
 		Status:        runtime.StatusFail,
 		FailureReason: "all parallel branches failed",
-	}, runtime.NewContext(), failureClassDeterministic)
+	}, runtime.NewContext(), failureClassDeterministic, nil)
 	if err != nil {
 		t.Fatalf("resolveNextHop: %v", err)
 	}
@@ -133,9 +133,9 @@ func TestResolveNextHop_FanInFail_TransientAllowsRetryTarget(t *testing.T) {
 digraph G {
   graph [retry_target="retry_global"]
   join [shape=tripleoctagon, retry_target="retry_node"]
-  verify [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  retry_node [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  retry_global [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  verify [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  retry_node [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  retry_global [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   join -> verify
 }
 `))
@@ -146,7 +146,7 @@ digraph G {
 	hop, err := resolveNextHop(g, "join", runtime.Outcome{
 		Status:        runtime.StatusFail,
 		FailureReason: "upstream timeout",
-	}, runtime.NewContext(), failureClassTransientInfra)
+	}, runtime.NewContext(), failureClassTransientInfra, nil)
 	if err != nil {
 		t.Fatalf("resolveNextHop: %v", err)
 	}
@@ -287,7 +287,7 @@ digraph G {
 	hop, err := resolveNextHop(g, "join", runtime.Outcome{
 		Status:        runtime.StatusFail,
 		FailureReason: "all parallel branches failed",
-	}, runtime.NewContext(), failureClassDeterministic)
+	}, runtime.NewContext(), failureClassDeterministic, nil)
 	if err != nil {
 		t.Fatalf("resolveNextHop: %v", err)
 	}
@@ -300,9 +300,9 @@ digraph G {
 func TestResolveNextHop_NonFanIn_PreservesSelectNextEdgeBehavior(t *testing.T) {
 	g, err := dot.Parse([]byte(`
 digraph G {
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2]
-  c [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4]
+  c [shape=box, llm_provider=openai, llm_model=gpt-5.4]
   a -> b [weight=10]
   a -> c [weight=1]
 }
@@ -317,7 +317,7 @@ digraph G {
 	if err != nil {
 		t.Fatalf("selectNextEdge: %v", err)
 	}
-	got, err := resolveNextHop(g, "a", out, ctx, "")
+	got, err := resolveNextHop(g, "a", out, ctx, "", nil)
 	if err != nil {
 		t.Fatalf("resolveNextHop: %v", err)
 	}

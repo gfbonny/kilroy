@@ -21,7 +21,7 @@ func TestRunWithConfig_ParallelBranches_ForkCXDBContexts(t *testing.T) {
 
 	logsRoot := t.TempDir()
 	pinned := filepath.Join(t.TempDir(), "pinned.json")
-	_ = os.WriteFile(pinned, []byte(`{"data":[{"id":"openai/gpt-5.2"}]}`), 0o644)
+	_ = os.WriteFile(pinned, []byte(`{"data":[{"id":"openai/gpt-5.4"}]}`), 0o644)
 
 	cxdbSrv := newCXDBTestServer(t)
 
@@ -44,8 +44,8 @@ digraph P {
   graph [goal="test"]
   start [shape=Mdiamond]
   par [shape=component]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="a"]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="b"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="a"]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="b"]
   join [shape=tripleoctagon]
   exit [shape=Msquare]
 

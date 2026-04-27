@@ -6,6 +6,8 @@ import (
 	"runtime/debug"
 	"strings"
 	"testing"
+
+	"github.com/danshapiro/kilroy/internal/modelmeta"
 )
 
 func TestParseIngestArgs(t *testing.T) {
@@ -60,8 +62,8 @@ func TestParseIngestArgs(t *testing.T) {
 			name: "default model",
 			args: []string{"Build a solitaire game"},
 			check: func(t *testing.T, o *ingestOptions) {
-				if o.model != "claude-sonnet-4-5" {
-					t.Errorf("model = %q, want default %q", o.model, "claude-sonnet-4-5")
+				if o.model != modelmeta.DefaultAnthropicModel {
+					t.Errorf("model = %q, want default %q", o.model, modelmeta.DefaultAnthropicModel)
 				}
 			},
 		},

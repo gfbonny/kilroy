@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/danshapiro/kilroy/internal/attractor/gitutil"
 	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
 
@@ -19,7 +18,10 @@ func runSubgraphUntil(ctx context.Context, eng *Engine, startNodeID, stopNodeID 
 		return parallelBranchResult{}, fmt.Errorf("start node is required")
 	}
 
-	headSHA, _ := gitutil.HeadSHA(eng.WorktreeDir)
+	var headSHA string
+	if eng.GitOps != nil {
+		headSHA, _ = eng.GitOps.HeadSHA(eng.WorktreeDir)
+	}
 
 	current := startNodeID
 	completed := []string{}
@@ -181,7 +183,7 @@ func runSubgraphUntil(ctx context.Context, eng *Engine, startNodeID, stopNodeID 
 			return canceledReturn(node.ID, lastOutcome, err)
 		}
 
-		next, err := selectNextEdge(eng.Graph, node.ID, out, eng.Context)
+		next, err := selectNextEdge(eng.Graph, node.ID, out, eng.Context, eng.appendProgress)
 		if err != nil {
 			return parallelBranchResult{}, err
 		}

@@ -78,18 +78,16 @@ func resolveProviderRuntimes(cfg *RunConfigFile) (map[string]ProviderRuntime, er
 		rt.ProfileFamily = rt.API.ProfileFamily
 		// Preserve explicit empty failover overrides:
 		// - failover: [] => no failover targets for this provider
-		// - failover omitted => inherit builtin failover policy
+		// - failover omitted => no failover targets for this provider
 		if pc.Failover != nil {
 			rt.FailoverExplicit = true
 			rt.Failover = providerspec.CanonicalizeProviderList(pc.Failover)
-		} else if len(builtin.Failover) > 0 {
-			rt.Failover = providerspec.CanonicalizeProviderList(builtin.Failover)
 		}
 		out[key] = rt
 	}
 
-	// Synthesize builtin failover targets recursively so fallback chains can resolve
-	// without requiring explicit config entries for each target.
+	// Synthesize explicitly referenced failover targets so routing/preflight can
+	// resolve provider metadata without requiring a fully duplicated runfile entry.
 	queue := make([]string, 0, len(out))
 	for key := range out {
 		queue = append(queue, key)
@@ -111,7 +109,6 @@ func resolveProviderRuntimes(cfg *RunConfigFile) (map[string]ProviderRuntime, er
 				Backend:    defaultBackendForSpec(builtin),
 				Executable: "",
 				CLI:        cloneCLISpec(builtin.CLI),
-				Failover:   providerspec.CanonicalizeProviderList(builtin.Failover),
 			}
 			if builtin.API != nil {
 				synth.API = *builtin.API

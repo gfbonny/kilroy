@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -16,7 +17,6 @@ import (
 
 	"github.com/danshapiro/kilroy/internal/attractor/cond"
 	"github.com/danshapiro/kilroy/internal/attractor/dot"
-	"github.com/danshapiro/kilroy/internal/attractor/gitutil"
 	"github.com/danshapiro/kilroy/internal/attractor/model"
 	"github.com/danshapiro/kilroy/internal/attractor/modeldb"
 	"github.com/danshapiro/kilroy/internal/attractor/runtime"
@@ -67,7 +67,7 @@ type RunOptions struct {
 	StallTimeout       time.Duration
 	StallCheckInterval time.Duration
 
-	// Optional cap for LLM retries in codergen routing.
+	// Optional cap for LLM retries in agent routing.
 	// Pointer preserves explicit zero versus unset semantics from config.
 	MaxLLMRetries *int
 
@@ -88,14 +88,60 @@ type RunOptions struct {
 	// Arbitrary key/value metadata written to manifest.json under "labels".
 	// Use to fingerprint runs for later querying or pruning (e.g. source=test).
 	Labels map[string]string
+
+	// Optional pre-configured handler registry. When set, RunWithConfig uses
+	// this registry instead of creating one via NewDefaultRegistry. This allows
+	// cmd/kilroy/ to compose layers by registering handlers from agents/ and
+	// workflows/ packages before starting the engine.
+	Registry *HandlerRegistry
+
+	// Optional run database for operational state. When set, the engine
+	// records lifecycle events (run start, node executions, edge decisions).
+	RunDB RunDBWriter
+
+	// Optional version control operations. When set, the engine uses git
+	// worktrees, per-node commits, and branch isolation. When nil, the
+	// engine operates in plain-directory mode (no git required).
+	GitOps GitOps
+
+	// Structured inputs loaded from --input file. Available in prompts as
+	// $input.key and in tool_command env as KILROY_INPUT_KEY.
+	Inputs map[string]any
+
+	// Workspace is the directory where the engine executes tool_commands.
+	// When set, overrides RepoPath as the execution directory.
+	// If omitted, defaults to cwd. Prompt files still resolve relative
+	// to the graph file location (GraphDir), not the workspace.
+	Workspace string
+
+	// GraphDir is the directory containing the graph file. Used to resolve
+	// prompt_file attributes. Derived from --graph path.
+	GraphDir string
+
+	// PackageDir is the root of a workflow package directory. When set,
+	// the engine copies package scripts and prompts into the workspace
+	// at .kilroy/package/ after workspace creation.
+	PackageDir string
+
+	// When true, skip provider preflight probes (CLI prompt probes,
+	// API key validation). Useful when using tmux-managed sessions
+	// with isolated auth that differs from the host environment.
+	SkipPreflight bool
+
+	// CLI arguments used to launch this run. Captured from os.Args.
+	Invocation []string
 }
 
 func (o *RunOptions) applyDefaults() error {
 	if o.RunBranchPrefix == "" {
 		o.RunBranchPrefix = "attractor/run"
 	}
-	// metaspec: require_clean defaults to true; an allow-dirty override is not required for v1.
-	o.RequireClean = true
+	// Workspace defaults to RepoPath (existing behavior) or cwd.
+	if o.Workspace != "" && o.RepoPath == "" {
+		o.RepoPath = o.Workspace
+	}
+	// require_clean defaults to false (zero value of bool): kilroy creates
+	// its own worktree, so the parent repo's cleanliness is irrelevant.
 	if o.RunID == "" {
 		id, err := NewRunID()
 		if err != nil {
@@ -153,10 +199,16 @@ type Engine struct {
 
 	Registry *HandlerRegistry
 
-	// Backend for codergen nodes (until provider routing is wired in).
-	CodergenBackend CodergenBackend
+	// Optional version control operations (forwarded from RunOptions).
+	GitOps GitOps
+
+	// Backend for agent nodes (until provider routing is wired in).
+	AgentBackend AgentBackend
 
 	Interviewer Interviewer
+
+	// Optional: SQLite run database for operational state.
+	RunDB RunDBWriter
 
 	// Optional: normalized event sink (CXDB).
 	CXDB *CXDBSink
@@ -164,6 +216,9 @@ type Engine struct {
 	// Artifact store for the run (spec §5.5). Initialized once per run;
 	// handlers access it via Execution.Artifacts.
 	Artifacts *ArtifactStore
+
+	// Canonical run activity log (run.log). Nil until run starts.
+	RunLog *RunLog
 
 	// Model catalog snapshot metadata (metaspec).
 	ModelCatalogSHA    string
@@ -198,6 +253,28 @@ type Engine struct {
 	// resetting would defeat the breaker in impl-succeeds/verify-fails cycles.
 	loopFailureSignatures map[string]int
 
+	// loopIterations tracks the current iteration count per loop body entry
+	// node. Used by handleLoopIteration to assign distinct attempt numbers
+	// to each loop iteration so every iteration gets its own DB row and
+	// captured artifacts. Separate from executeWithRetry's retry counter
+	// because retries and loop iterations are different semantic concerns.
+	loopIterations map[string]int
+
+	// activeLoopIteration is the current iteration of the innermost active
+	// loop scope. Zero when no loop is active. Set by handleLoopIteration
+	// on loop-back and cleared when a loop terminates normally. Used by the
+	// main runLoop to assign attempt numbers to every node that runs inside
+	// a multi-node loop body (not just the jump target) so each iteration of
+	// every body node gets its own DB row and captured artifacts.
+	activeLoopIteration int
+
+	// concurrentDepth is >0 while the engine is executing inside a
+	// concurrent region (between a concurrent.split and its paired
+	// concurrent.join). Per-node git commits are suppressed while this is
+	// >0 — commits are consolidated at the join node instead — to avoid
+	// concurrent write contention on the shared worktree.
+	concurrentDepth int
+
 	// parallelDispatchCounts tracks how many times each fan-out node has been
 	// dispatched in this run. Incremented once per dispatch call. Used to
 	// produce unique pass-numbered branch names so each re-visit of a fan-out
@@ -215,6 +292,15 @@ type Engine struct {
 	forceNextFidelityUsed bool        // true once the override has been consumed
 	lastResolvedFidelity  string      // last resolved LLM fidelity for checkpoint/resume
 	lastResolvedThreadKey string      // thread key when fidelity=full (best-effort)
+}
+
+// LastResolvedFidelity returns the most recently resolved LLM fidelity mode.
+// Exported for use by agent handler implementations in external packages.
+func (e *Engine) LastResolvedFidelity() string {
+	if e == nil {
+		return ""
+	}
+	return e.lastResolvedFidelity
 }
 
 // nextParallelPassCount increments and returns the dispatch count for nodeID.
@@ -266,9 +352,12 @@ type Result struct {
 
 type PrepareOptions struct {
 	Transforms []Transform
-	// RepoPath is the repository root directory. When set, prompt_file attributes
-	// on nodes are resolved relative to this path before other transforms run.
+	// RepoPath is the repository root directory. When set and GraphDir is empty,
+	// prompt_file attributes on nodes are resolved relative to this path.
 	RepoPath string
+	// GraphDir overrides RepoPath for prompt_file resolution. When set,
+	// prompt_file attributes resolve relative to the graph file's directory.
+	GraphDir string
 	// KnownTypes is an optional list of handler type strings. When non-empty,
 	// the TypeKnownRule lint rule is added to validation so that nodes with
 	// explicit type= attributes not in this set produce a warning.
@@ -300,8 +389,13 @@ func PrepareWithOptions(dotSource []byte, opts PrepareOptions) (*model.Graph, []
 
 	// Built-in transforms: prompt_file resolution, stylesheet, $goal expansion.
 	// prompt_file runs first so loaded content gets stylesheet defaults and $goal expansion.
-	if opts.RepoPath != "" {
-		if err := expandPromptFiles(g, opts.RepoPath); err != nil {
+	// Prefer GraphDir (graph file location) over RepoPath for prompt_file resolution.
+	promptFileBase := opts.GraphDir
+	if promptFileBase == "" {
+		promptFileBase = opts.RepoPath
+	}
+	if promptFileBase != "" {
+		if err := expandPromptFiles(g, promptFileBase); err != nil {
 			return g, nil, fmt.Errorf("prompt_file expansion: %w", err)
 		}
 	}
@@ -339,7 +433,11 @@ func PrepareWithOptions(dotSource []byte, opts PrepareOptions) (*model.Graph, []
 	var errs []string
 	for _, d := range diags {
 		if d.Severity == validate.SeverityError {
-			errs = append(errs, d.Rule+": "+d.Message)
+			msg := d.Rule + ": " + d.Message
+			if d.Fix != "" {
+				msg += "\n  hint: " + d.Fix
+			}
+			errs = append(errs, msg)
 		}
 	}
 	if len(errs) > 0 {
@@ -364,7 +462,7 @@ func Run(ctx context.Context, dotSource []byte, opts RunOptions) (*Result, error
 
 	eng := newBaseEngine(g, dotSource, opts)
 	eng.Registry = reg
-	eng.CodergenBackend = &SimulatedCodergenBackend{}
+	eng.AgentBackend = &SimulatedAgentBackend{}
 
 	return eng.run(ctx)
 }
@@ -373,34 +471,47 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 	runCtx, cancelRun := context.WithCancelCause(ctx)
 	defer cancelRun(nil)
 
+	var releaseOwnership func()
 	defer func() {
-		if err != nil {
+		if err != nil && !isRunOwnershipConflict(err) {
 			e.persistFatalOutcome(ctx, err)
+		}
+		if releaseOwnership != nil {
+			releaseOwnership()
 		}
 	}()
 
-	if e.Options.RepoPath == "" {
-		return nil, fmt.Errorf("repo.path is required")
-	}
-	if !gitutil.IsRepo(e.Options.RepoPath) {
-		return nil, fmt.Errorf("not a git repo: %s", e.Options.RepoPath)
-	}
-	if e.Options.RequireClean {
-		clean, err := gitutil.IsClean(e.Options.RepoPath)
-		if err != nil {
-			return nil, err
-		}
-		if !clean {
-			return nil, fmt.Errorf("repo has uncommitted changes (require_clean=true)")
+	// Auto-detect git mode when GitOps is not explicitly set.
+	if e.GitOps == nil && AutoDetectGitOps != nil && e.Options.RepoPath != "" {
+		if detected := AutoDetectGitOps(e.Options.RepoPath); detected != nil {
+			e.GitOps = detected
 		}
 	}
 
-	baseSHA, err := gitutil.HeadSHA(e.Options.RepoPath)
-	if err != nil {
+	if e.GitOps != nil {
+		// Git mode: validate repo, create branch and worktree.
+		if e.Options.RepoPath == "" {
+			return nil, fmt.Errorf("repo.path is required")
+		}
+		if err := e.GitOps.ValidateRepo(e.Options.RepoPath, e.Options.RequireClean); err != nil {
+			return nil, err
+		}
+		baseSHA, err := e.GitOps.HeadSHA(e.Options.RepoPath)
+		if err != nil {
+			return nil, err
+		}
+		e.baseSHA = baseSHA
+	}
+
+	if err := os.MkdirAll(e.LogsRoot, 0o755); err != nil {
 		return nil, err
 	}
-	e.baseSHA = baseSHA
-	if err := os.MkdirAll(e.LogsRoot, 0o755); err != nil {
+	if rl, rlErr := NewRunLog(e.LogsRoot, e.Options.RunID); rlErr == nil {
+		e.RunLog = rl
+		defer e.RunLog.Close()
+	}
+	releaseOwnership, err = acquireRunOwnership(e.LogsRoot, e.Options.RunID)
+	if err != nil {
 		return nil, err
 	}
 	// Record PID so attractor status can detect a running process.
@@ -410,29 +521,48 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 		_ = writeJSON(filepath.Join(e.LogsRoot, "run_config.json"), e.RunConfig)
 	}
 
-	// Create run branch at BASE_SHA and materialize a worktree for execution.
-	if err := gitutil.CreateBranchAt(e.Options.RepoPath, e.RunBranch, baseSHA); err != nil {
-		return nil, err
+	if e.GitOps != nil {
+		// Create run branch at BASE_SHA and materialize a worktree for execution.
+		if err := e.GitOps.SetupRunWorkspace(e.Options.RepoPath, e.WorktreeDir, e.RunBranch, e.baseSHA); err != nil {
+			return nil, err
+		}
+		e.RunLog.Info("git", "", "worktree.created", fmt.Sprintf("Worktree: %s (branch: %s)", e.WorktreeDir, e.RunBranch), map[string]any{
+			"path":     e.WorktreeDir,
+			"branch":   e.RunBranch,
+			"base_sha": e.baseSHA,
+		})
+		// Copy gitignored files (e.g. .env, secrets, local configs) from the
+		// source repo into the run worktree.
+		if err := e.GitOps.CopyIgnoredFiles(e.Options.RepoPath, e.WorktreeDir); err != nil {
+			e.Warn(fmt.Sprintf("copy ignored files to run worktree: %v", err))
+		}
+	} else {
+		// No-git mode: ensure workspace directory exists.
+		if err := os.MkdirAll(e.WorktreeDir, 0o755); err != nil {
+			return nil, err
+		}
 	}
-	// If worktree exists (e.g., re-run), remove and recreate.
-	_ = gitutil.RemoveWorktree(e.Options.RepoPath, e.WorktreeDir)
-	if err := gitutil.AddWorktree(e.Options.RepoPath, e.WorktreeDir, e.RunBranch); err != nil {
-		return nil, err
+	// Materialize workflow package scripts/prompts into workspace.
+	if e.Options.PackageDir != "" {
+		if err := materializePackage(e.Options.PackageDir, e.WorktreeDir); err != nil {
+			return nil, fmt.Errorf("materialize package: %w", err)
+		}
 	}
-	// Copy gitignored files (e.g. .env, secrets, local configs) from the
-	// source repo into the run worktree. These are not committed to git so
-	// they don't survive worktree creation; agents that rely on them (e.g. for
-	// API keys or environment config) need them present without us committing
-	// sensitive material.
-	if err := gitutil.CopyIgnoredFiles(e.Options.RepoPath, e.WorktreeDir); err != nil {
-		e.Warn(fmt.Sprintf("copy ignored files to run worktree: %v", err))
+	// Create .kilroy/ convention directory and write INPUT.md.
+	if err := initKilroyDir(e.WorktreeDir); err != nil {
+		e.Warn("create .kilroy/ directory: " + err.Error())
+	} else {
+		if err := writeInputMD(e.WorktreeDir, e.Options.Inputs); err != nil {
+			e.Warn("write INPUT.md: " + err.Error())
+		}
+		ensureGitignoreKilroy(e.WorktreeDir)
 	}
 	if err := e.materializeRunStartupInputs(ctx); err != nil {
 		return nil, err
 	}
 
 	// Run metadata.
-	if err := e.writeManifest(baseSHA); err != nil {
+	if err := e.writeManifest(e.baseSHA); err != nil {
 		return nil, err
 	}
 	// Persist the DOT input for replay/resume.
@@ -441,20 +571,33 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 			return nil, err
 		}
 	}
-	if err := e.cxdbRunStarted(runCtx, baseSHA); err != nil {
+	if err := e.cxdbRunStarted(runCtx, e.baseSHA); err != nil {
 		return nil, err
 	}
+	e.rundbRecordRunStart()
+	e.RunLog.Info("engine", "", "run.started", fmt.Sprintf("Run started: %s", e.Graph.Name), map[string]any{
+		"run_id":    e.Options.RunID,
+		"workspace": e.WorktreeDir,
+		"inputs":    e.Options.Inputs,
+		"graph":     e.Graph.Name,
+	})
 
 	// Mirror graph attributes into context.
 	for k, v := range e.Graph.Attrs {
 		e.Context.Set("graph."+k, v)
 	}
 	e.Context.Set("graph.goal", e.Graph.Attrs["goal"])
-	e.Context.Set("base_sha", baseSHA)
+	e.Context.Set("base_sha", e.baseSHA)
+
+	// Inject structured inputs into context and expand $input.* in prompts.
+	if len(e.Options.Inputs) > 0 {
+		InjectInputsIntoContext(e.Context, e.Options.Inputs)
+		ExpandInputVariables(e.Graph, e.Options.Inputs)
+	}
 
 	// Expand $base_sha in prompts now that the base SHA is known.
 	// ($goal was already expanded at parse/prepare time.)
-	expandBaseSHA(e.Graph, baseSHA)
+	expandBaseSHA(e.Graph, e.baseSHA)
 
 	// Run pre-pipeline setup commands (e.g., npm install) in the worktree.
 	if err := e.executeSetupCommands(ctx); err != nil {
@@ -524,6 +667,15 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 			prev = completed[len(completed)-1]
 		}
 		e.Context.Set("previous_node", prev)
+		// Expose predecessor outcome so handlers (tool-command, agent) receive
+		// KILROY_PREDECESSOR_OUTCOME alongside KILROY_PREDECESSOR_NODE.
+		prevOutcome := ""
+		if prev != "" {
+			if o, ok := nodeOutcomes[prev]; ok {
+				prevOutcome = string(o.Status)
+			}
+		}
+		e.Context.Set("previous_outcome", prevOutcome)
 		e.Context.Set("current_node", current)
 		e.Context.Set("completed_nodes", append([]string{}, completed...))
 
@@ -562,6 +714,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 				continue
 			}
 			e.cxdbStageStarted(ctx, node)
+			nodeDBID := e.rundbRecordNodeStart(node.ID, 1, resolvedHandlerTypeName(e, node.ID))
 			// Execute exit handler as the final checkpointed node.
 			out, err := e.executeNode(ctx, node)
 			if err != nil {
@@ -570,6 +723,8 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 			nodeOutcomes[node.ID] = out
 			completed = append(completed, node.ID)
 			e.cxdbStageFinished(ctx, node, out)
+			e.rundbRecordNodeComplete(nodeDBID, out)
+			e.rundbCaptureNodeArtifacts(nodeDBID, node.ID)
 			if err := runContextError(ctx); err != nil {
 				return nil, err
 			}
@@ -592,6 +747,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 				CXDBHeadTurnID:    completionTurnID,
 			}
 			e.persistTerminalOutcome(ctx, final)
+			e.rundbRecordRunComplete(runtime.FinalSuccess, "", sha)
 			return &Result{
 				RunID:          e.Options.RunID,
 				LogsRoot:       e.LogsRoot,
@@ -603,12 +759,38 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 			}, nil
 		}
 
+		// Capture git HEAD before node execution for diff tracking.
+		var beforeSHA string
+		if e.GitOps != nil {
+			beforeSHA, _ = e.GitOps.HeadSHA(e.WorktreeDir)
+		}
+
+		// Write .kilroy/ convention files before node execution.
+		e.writeKilroyPreNodeFiles(node, completed, nodeOutcomes)
+
 		e.cxdbStageStarted(ctx, node)
+		// Attempt numbering precedence:
+		//   1. Active loop iteration (multi-node loop body or re-entry to a
+		//      single-node loop) — every body node uses the same iteration
+		//      count so all iterations are distinct in the DB.
+		//   2. Per-node loop iteration counter (covers the first iteration
+		//      before activeLoopIteration is set).
+		//   3. Retry counter from executeWithRetry.
+		startAttempt := nodeRetries[node.ID] + 1
+		if e.activeLoopIteration > 0 {
+			startAttempt = e.activeLoopIteration
+		} else if iter, ok := e.loopIterations[node.ID]; ok && iter > 0 {
+			startAttempt = iter + 1
+		}
+		nodeDBID := e.rundbRecordNodeStart(node.ID, startAttempt, resolvedHandlerTypeName(e, node.ID))
 		out, err := e.executeWithRetry(ctx, node, nodeRetries)
 		if err != nil {
 			return nil, err
 		}
+		e.rundbRecordProviderIfAgent(node.ID, nodeRetries[node.ID]+1)
 		e.cxdbStageFinished(ctx, node, out)
+		e.rundbRecordNodeComplete(nodeDBID, out)
+		e.rundbCaptureNodeArtifacts(nodeDBID, node.ID)
 		if err := runContextError(ctx); err != nil {
 			return nil, err
 		}
@@ -622,6 +804,11 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		e.Context.Set("outcome", string(out.Status))
 		e.Context.Set("preferred_label", out.PreferredLabel)
 		e.Context.Set("failure_reason", out.FailureReason)
+		if len(out.ContextUpdates) > 0 {
+			e.RunLog.Info("engine", node.ID, "context.updated", fmt.Sprintf("Context updated: %d keys", len(out.ContextUpdates)), map[string]any{
+				"keys": contextUpdateKeys(out.ContextUpdates),
+			})
+		}
 		failureClass := classifyFailureClass(out)
 		e.Context.Set("failure_class", failureClass)
 		e.updateFailureDossierContext(node, out, failureClass, nodeRetries)
@@ -674,6 +861,64 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		}
 		e.lastCheckpointSHA = sha
 		e.cxdbCheckpointSaved(ctx, node.ID, out.Status, sha)
+		if sha != "" {
+			e.RunLog.Info("engine", node.ID, "checkpoint.saved", fmt.Sprintf("Checkpoint: %s", sha[:minInt(8, len(sha))]), map[string]any{
+				"sha": sha,
+			})
+		}
+
+		// Record git diff for this node if SHAs differ.
+		e.recordNodeDiff(node.ID, nodeRetries[node.ID]+1, beforeSHA, sha)
+
+		// Concurrent primitive: when the just-completed node is a
+		// concurrent.split, dispatch all outgoing edges as concurrent
+		// branches in the shared workspace and resume at the paired join.
+		// Evaluated before the loop check so concurrent regions can't be
+		// confused with loop back-edges.
+		if shapeToType(node.Shape()) == "concurrent.split" {
+			joinID, concErr := e.runConcurrentRegion(ctx, node, &completed, nodeRetries, nodeOutcomes)
+			if concErr != nil {
+				failedTurnID, _ := e.cxdbRunFailed(ctx, node.ID, sha, concErr.Error())
+				final := runtime.FinalOutcome{
+					Timestamp:         time.Now().UTC(),
+					Status:            runtime.FinalFail,
+					RunID:             e.Options.RunID,
+					FinalGitCommitSHA: sha,
+					FailureReason:     concErr.Error(),
+					CXDBContextID:     cxdbContextID(e.CXDB),
+					CXDBHeadTurnID:    failedTurnID,
+				}
+				e.persistTerminalOutcome(ctx, final)
+				e.rundbRecordRunComplete(runtime.FinalFail, concErr.Error(), sha)
+				return nil, concErr
+			}
+			e.incomingEdge = nil
+			current = joinID
+			continue
+		}
+
+		// Loop primitive: single-node and multi-node iteration.
+		// Evaluated after the node completes but before any routing decisions so
+		// we bypass edge selection when looping back.
+		if shouldLoop, jumpTo, loopFailReason := e.handleLoopIteration(node, out); shouldLoop {
+			e.incomingEdge = nil
+			current = jumpTo
+			continue
+		} else if loopFailReason != "" {
+			failedTurnID, _ := e.cxdbRunFailed(ctx, node.ID, sha, loopFailReason)
+			final := runtime.FinalOutcome{
+				Timestamp:         time.Now().UTC(),
+				Status:            runtime.FinalFail,
+				RunID:             e.Options.RunID,
+				FinalGitCommitSHA: sha,
+				FailureReason:     loopFailReason,
+				CXDBContextID:     cxdbContextID(e.CXDB),
+				CXDBHeadTurnID:    failedTurnID,
+			}
+			e.persistTerminalOutcome(ctx, final)
+			e.rundbRecordRunComplete(runtime.FinalFail, loopFailReason, sha)
+			return nil, fmt.Errorf("%s", loopFailReason)
+		}
 
 		// Kilroy v1: explicit parallel nodes control the next hop via context.
 		isExplicitParallel := false
@@ -736,7 +981,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		}
 
 		// Resolve next hop with fan-in failure policy.
-		nextHop, err := resolveNextHop(e.Graph, node.ID, out, e.Context, failureClass)
+		nextHop, err := resolveNextHop(e.Graph, node.ID, out, e.Context, failureClass, e.appendProgress)
 		if err != nil {
 			return nil, err
 		}
@@ -771,6 +1016,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 					CXDBHeadTurnID:    failedTurnID,
 				}
 				e.persistTerminalOutcome(ctx, final)
+				e.rundbRecordRunComplete(runtime.FinalFail, out.FailureReason, sha)
 				return nil, fmt.Errorf("stage failed with no outgoing fail edge: %s", out.FailureReason)
 			}
 			completionTurnID, err := e.cxdbRunCompleted(ctx, sha)
@@ -786,6 +1032,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 				CXDBHeadTurnID:    completionTurnID,
 			}
 			e.persistTerminalOutcome(ctx, final)
+			e.rundbRecordRunComplete(runtime.FinalSuccess, "", sha)
 			return &Result{
 				RunID:          e.Options.RunID,
 				LogsRoot:       e.LogsRoot,
@@ -797,13 +1044,23 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 			}, nil
 		}
 		next := nextHop.Edge
+		e.rundbRecordEdgeDecision(node.ID, next.To, next.Label(), next.Condition(), nextHop.SelectionMeta.Method)
 		e.appendProgress(map[string]any{
-			"event":      "edge_selected",
-			"from_node":  node.ID,
-			"to_node":    next.To,
-			"label":      next.Label(),
-			"condition":  next.Condition(),
-			"hop_source": string(nextHop.Source),
+			"event":                "edge_selected",
+			"from_node":            node.ID,
+			"to_node":              next.To,
+			"label":                next.Label(),
+			"condition":            next.Condition(),
+			"hop_source":           string(nextHop.Source),
+			"selection_method":     nextHop.SelectionMeta.Method,
+			"candidates_evaluated": nextHop.SelectionMeta.CandidatesEvaluated,
+			"conditions_matched":   nextHop.SelectionMeta.ConditionsMatched,
+		})
+		e.RunLog.Info("engine", "", "edge.selected", fmt.Sprintf("%s → %s (%s)", node.ID, next.To, nextHop.SelectionMeta.Method), map[string]any{
+			"from":      node.ID,
+			"to":        next.To,
+			"reason":    nextHop.SelectionMeta.Method,
+			"condition": next.Condition(),
 		})
 
 		// loop_restart (attractor-spec §3.2 Step 7): terminate current run, re-launch
@@ -1152,7 +1409,18 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 			"attempt": 1,
 			"max":     1,
 		})
+		handlerType := resolvedHandlerTypeName(e, node.ID)
+		e.RunLog.Info("engine", node.ID, "node.started", fmt.Sprintf("Executing: %s", node.Label()), map[string]any{
+			"handler": handlerType,
+			"attempt": 1,
+		})
+		nodeStart := time.Now()
 		out, _ := e.executeNode(ctx, node)
+		dur := time.Since(nodeStart)
+		e.RunLog.Info("engine", node.ID, "node.completed", fmt.Sprintf("Node %s: %s (%dms)", node.ID, out.Status, dur.Milliseconds()), map[string]any{
+			"status":      string(out.Status),
+			"duration_ms": dur.Milliseconds(),
+		})
 		e.appendProgress(map[string]any{
 			"event":          "stage_attempt_end",
 			"node_id":        node.ID,
@@ -1196,6 +1464,9 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 	// postmortem), preserve its prior output under visit_N/ before overwriting.
 	archivePriorVisitDir(stageDir)
 
+	// Clear any stale FEEDBACK.md from previous nodes before first attempt.
+	clearFeedbackMD(e.WorktreeDir)
+
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		// Before running attempt N>1, archive the previous attempt's files into
 		// attempt_{N-1}/ so they survive when executeNode overwrites them.
@@ -1208,7 +1479,19 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 			"attempt": attempt,
 			"max":     maxAttempts,
 		})
+		handlerType := resolvedHandlerTypeName(e, node.ID)
+		e.RunLog.Info("engine", node.ID, "node.started", fmt.Sprintf("Executing: %s", node.Label()), map[string]any{
+			"handler": handlerType,
+			"attempt": attempt,
+		})
+		attemptStart := time.Now()
 		out, _ := e.executeNode(ctx, node)
+		attemptDur := time.Since(attemptStart)
+		e.RunLog.Info("engine", node.ID, "node.completed", fmt.Sprintf("Node %s: %s (%dms)", node.ID, out.Status, attemptDur.Milliseconds()), map[string]any{
+			"status":      string(out.Status),
+			"duration_ms": attemptDur.Milliseconds(),
+			"attempt":     attempt,
+		})
 		e.appendProgress(map[string]any{
 			"event":          "stage_attempt_end",
 			"node_id":        node.ID,
@@ -1223,9 +1506,21 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 			_ = writeJSON(filepath.Join(stageDir, "status.json"), fo)
 			return fo, nil
 		}
-		if out.Status == runtime.StatusSuccess || out.Status == runtime.StatusPartialSuccess || out.Status == runtime.StatusSkipped {
-			retries[node.ID] = 0
-			return out, nil
+		if out.Status == runtime.StatusSuccess || out.Status == runtime.StatusDegradedSuccess || out.Status == runtime.StatusPartialSuccess || out.Status == runtime.StatusSkipped {
+			// Check output contract: if declared outputs are missing, downgrade to fail.
+			if downgraded, violated := enforceOutputContract(e, node, out, attempt); violated {
+				out = downgraded
+				e.appendProgress(map[string]any{
+					"event":          "output_contract_violated",
+					"node_id":        node.ID,
+					"attempt":        attempt,
+					"failure_reason": out.FailureReason,
+				})
+				// Fall through to the retry logic below.
+			} else {
+				retries[node.ID] = 0
+				return out, nil
+			}
 		}
 
 		// Spec §3.3: custom (non-canonical) outcomes are routing decisions, not failures.
@@ -1281,10 +1576,30 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 		if canRetry {
 			willRetry = true
 		}
+		reason := out.FailureReason
+		if willRetry {
+			reason = fmt.Sprintf("%s, attempts remaining", out.FailureReason)
+		} else if attempt >= maxAttempts {
+			reason = fmt.Sprintf("%s, max retries exhausted", out.FailureReason)
+		} else {
+			reason = fmt.Sprintf("%s, failure_class=%s not retryable", out.FailureReason, failureClass)
+		}
+		e.appendProgress(map[string]any{
+			"event":       "retry_decision",
+			"node_id":     node.ID,
+			"attempt":     attempt,
+			"max_retries": maxRetries,
+			"will_retry":  willRetry,
+			"reason":      reason,
+		})
 		// Spec §9.6: emit StageFailed CXDB event.
 		e.cxdbStageFailed(ctx, node, out.FailureReason, willRetry, attempt)
 		if canRetry {
 			retries[node.ID]++
+			// Write FEEDBACK.md so the next attempt can see why the previous failed.
+			if err := writeFeedbackMD(e.WorktreeDir, node.ID, out.FailureReason, attempt, ""); err != nil {
+				e.Warn("write FEEDBACK.md: " + err.Error())
+			}
 			// Spec §5.1: update built-in context key internal.retry_count.<node_id> on each retry.
 			e.Context.Set(fmt.Sprintf("internal.retry_count.%s", node.ID), retries[node.ID])
 			delay := backoffDelayForNode(e.Options.RunID, e.Graph, node, attempt)
@@ -1506,6 +1821,18 @@ func runContextError(ctx context.Context) error {
 }
 
 func (e *Engine) checkpoint(nodeID string, out runtime.Outcome, completed []string, retries map[string]int) (string, error) {
+	// Skip per-node git commits while inside a concurrent region. Multiple
+	// branches writing to the shared worktree would race on commits. The
+	// region consolidates into a single commit at the concurrent.join node.
+	if e.concurrentDepth > 0 && e.Graph != nil {
+		if n := e.Graph.Nodes[nodeID]; n != nil {
+			t := shapeToType(n.Shape())
+			if t != "concurrent.join" && t != "concurrent.split" {
+				// Keep the last known SHA so checkpoint metadata is consistent.
+				return e.lastCheckpointSHA, nil
+			}
+		}
+	}
 	msg := fmt.Sprintf("attractor(%s): %s (%s)", e.Options.RunID, nodeID, out.Status)
 	sha := ""
 	if out.Meta != nil {
@@ -1513,19 +1840,15 @@ func (e *Engine) checkpoint(nodeID string, out runtime.Outcome, completed []stri
 			sha = strings.TrimSpace(fmt.Sprint(v))
 		}
 	}
-	if sha == "" {
+	if sha == "" && e.GitOps != nil {
 		var err error
-		sha, err = gitutil.CommitAllowEmptyWithExcludes(e.WorktreeDir, msg, e.checkpointExcludeGlobs())
+		sha, err = e.GitOps.Checkpoint(e.WorktreeDir, msg, e.checkpointExcludeGlobs())
 		if err != nil {
 			return "", err
 		}
-	} else {
-		head, err := gitutil.HeadSHA(e.WorktreeDir)
-		if err != nil {
+	} else if sha != "" && e.GitOps != nil {
+		if err := e.GitOps.VerifyHeadSHA(e.WorktreeDir, sha); err != nil {
 			return "", err
-		}
-		if strings.TrimSpace(head) != sha {
-			return "", fmt.Errorf("handler-provided checkpoint sha does not match HEAD (head=%s meta=%s)", head, sha)
 		}
 	}
 	cp := runtime.NewCheckpoint()
@@ -1615,6 +1938,12 @@ func (e *Engine) writeManifest(baseSHA string) error {
 	if len(e.Options.Labels) > 0 {
 		manifest["labels"] = copyStringStringMap(e.Options.Labels)
 	}
+	if len(e.Options.Invocation) > 0 {
+		manifest["invocation"] = e.Options.Invocation
+	}
+	if len(e.Options.Inputs) > 0 {
+		manifest["inputs"] = e.Options.Inputs
+	}
 	return writeJSON(filepath.Join(e.LogsRoot, "manifest.json"), manifest)
 }
 
@@ -1629,9 +1958,9 @@ func (e *Engine) persistFatalOutcome(ctx context.Context, runErr error) {
 		nodeID = strings.TrimSpace(e.Context.GetString("current_node", ""))
 	}
 	sha := strings.TrimSpace(e.lastCheckpointSHA)
-	if sha == "" {
+	if sha == "" && e.GitOps != nil {
 		if wt := strings.TrimSpace(e.WorktreeDir); wt != "" {
-			if got, err := gitutil.HeadSHA(wt); err == nil {
+			if got, err := e.GitOps.HeadSHA(wt); err == nil {
 				sha = strings.TrimSpace(got)
 			}
 		}
@@ -1641,9 +1970,13 @@ func (e *Engine) persistFatalOutcome(ctx context.Context, runErr error) {
 	}
 
 	failedTurnID, _ := e.cxdbRunFailed(ctx, nodeID, sha, reason)
+	status := runtime.FinalFail
+	if isCanceledError(runErr) {
+		status = runtime.FinalCanceled
+	}
 	final := runtime.FinalOutcome{
 		Timestamp:         time.Now().UTC(),
-		Status:            runtime.FinalFail,
+		Status:            status,
 		RunID:             e.Options.RunID,
 		FinalGitCommitSHA: sha,
 		FailureReason:     reason,
@@ -1696,6 +2029,9 @@ func (e *Engine) persistTerminalOutcome(ctx context.Context, final runtime.Final
 		_, _ = e.CXDB.PutArtifactFile(ctx, "", "final.json", primaryPath)
 	}
 
+	// Collect declared output artifacts from worktree to outputs/ directory.
+	e.CollectAndRecordOutputs()
+
 	archiveRoot := strings.TrimSpace(e.LogsRoot)
 	if archiveRoot != "" {
 		runTar := filepath.Join(archiveRoot, "run.tgz")
@@ -1709,8 +2045,57 @@ func (e *Engine) persistTerminalOutcome(ctx context.Context, final runtime.Final
 
 	e.terminalOutcomePersisted = true
 
+	e.RunLog.Info("engine", "", "run.completed", fmt.Sprintf("Run completed: %s", final.Status), map[string]any{
+		"status":         string(final.Status),
+		"failure_reason": final.FailureReason,
+		"sha":            final.FinalGitCommitSHA,
+	})
+
 	// Best-effort push after terminal outcome so remote has final state.
 	e.gitPushIfConfigured()
+
+	// Emit the terminal progress event as the final line of progress.ndjson.
+	// This MUST be emitted after final.json is written so that any reader
+	// observing this event can immediately open final.json.
+	e.emitTerminalProgressEvent(final)
+}
+
+// emitTerminalProgressEvent appends the terminal lifecycle event to progress.ndjson.
+// It is called as the very last action of persistTerminalOutcome so that it is
+// always the final line in the stream.
+func (e *Engine) emitTerminalProgressEvent(final runtime.FinalOutcome) {
+	switch final.Status {
+	case runtime.FinalSuccess:
+		e.appendProgress(map[string]any{
+			"event":  "run_completed",
+			"status": "success",
+		})
+	case runtime.FinalFail:
+		ev := map[string]any{
+			"event":  "run_failed",
+			"status": "fail",
+		}
+		if reason := strings.TrimSpace(final.FailureReason); reason != "" {
+			ev["reason"] = reason
+		}
+		e.appendProgress(ev)
+	case runtime.FinalCanceled:
+		ev := map[string]any{
+			"event":  "run_failed",
+			"status": "canceled",
+		}
+		if reason := strings.TrimSpace(final.FailureReason); reason != "" {
+			ev["reason"] = reason
+		}
+		e.appendProgress(ev)
+	}
+}
+
+// isCanceledError reports whether err is a context cancellation error
+// (context.Canceled or context.DeadlineExceeded). Used to classify
+// externally-canceled runs as FinalCanceled vs internally-failed FinalFail.
+func isCanceledError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 // gitPushIfConfigured pushes the run branch to the configured remote.
@@ -1736,7 +2121,10 @@ func (e *Engine) gitPushIfConfigured() {
 		"remote": remote,
 		"branch": branch,
 	})
-	if err := gitutil.PushBranch(repoDir, remote, branch); err != nil {
+	if e.GitOps == nil {
+		return
+	}
+	if err := e.GitOps.PushBranch(repoDir, remote, branch); err != nil {
 		e.Warn(fmt.Sprintf("git push %s %s: %v", remote, branch, err))
 		e.appendProgress(map[string]any{
 			"event":  "git_push_failed",
@@ -1957,7 +2345,7 @@ func checkGoalGates(g *model.Graph, outcomes map[string]runtime.Outcome) (bool, 
 		if !strings.EqualFold(n.Attr("goal_gate", "false"), "true") {
 			continue
 		}
-		if out.Status != runtime.StatusSuccess && out.Status != runtime.StatusPartialSuccess {
+		if out.Status != runtime.StatusSuccess && out.Status != runtime.StatusDegradedSuccess && out.Status != runtime.StatusPartialSuccess {
 			return false, id
 		}
 	}
@@ -1979,15 +2367,31 @@ func findStartNodeID(g *model.Graph) string {
 }
 
 // selectNextEdge implements attractor-spec edge selection with deterministic tie-breaks (metaspec).
-func selectNextEdge(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context) (*model.Edge, error) {
-	edges, err := selectAllEligibleEdges(g, from, out, ctx)
+func selectNextEdge(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context, progress ...ProgressFunc) (*model.Edge, error) {
+	edge, _, err := selectNextEdgeWithMeta(g, from, out, ctx, progress...)
+	return edge, err
+}
+
+func selectNextEdgeWithMeta(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context, progress ...ProgressFunc) (*model.Edge, edgeSelectionMeta, error) {
+	edges, meta, err := selectAllEligibleEdgesWithMeta(g, from, out, ctx, progress...)
 	if err != nil {
-		return nil, err
+		return nil, meta, err
 	}
 	if len(edges) == 0 {
-		return nil, nil
+		return nil, meta, nil
 	}
-	return bestEdge(edges), nil
+	// Refine method: if weight selected from multiple candidates, check for tiebreak.
+	if meta.Method == "weight" && len(edges) > 1 {
+		best := bestEdge(edges)
+		// Check if the winner was determined by lexical tiebreak.
+		wi := parseInt(edges[0].Attr("weight", "0"), 0)
+		wj := parseInt(edges[1].Attr("weight", "0"), 0)
+		if wi == wj {
+			meta.Method = "lexical_tiebreak"
+		}
+		return best, meta, nil
+	}
+	return bestEdge(edges), meta, nil
 }
 
 // hasMatchingOutgoingCondition returns true if any outgoing edge from the given
@@ -2018,14 +2422,26 @@ func hasMatchingOutgoingCondition(g *model.Graph, nodeID string, out runtime.Out
 	return false
 }
 
+// edgeSelectionMeta captures how edge selection resolved for decision logging.
+type edgeSelectionMeta struct {
+	Method              string // condition_match, preferred_label, suggested_next_ids, weight, only_edge, fallback
+	CandidatesEvaluated int
+	ConditionsMatched   int
+}
+
 // selectAllEligibleEdges returns all edges that are eligible for traversal from the given node.
 // When multiple edges are returned, the caller should treat this as an implicit fan-out.
 // Preferred-label and suggested-next-ID narrowing still apply — if they narrow to a single edge,
 // only that edge is returned (no fan-out).
-func selectAllEligibleEdges(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context) ([]*model.Edge, error) {
+func selectAllEligibleEdges(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context, progress ...ProgressFunc) ([]*model.Edge, error) {
+	edges, _, err := selectAllEligibleEdgesWithMeta(g, from, out, ctx, progress...)
+	return edges, err
+}
+
+func selectAllEligibleEdgesWithMeta(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context, progress ...ProgressFunc) ([]*model.Edge, edgeSelectionMeta, error) {
 	rawEdges := g.Outgoing(from)
 	if len(rawEdges) == 0 {
-		return nil, nil
+		return nil, edgeSelectionMeta{}, nil
 	}
 
 	// Filter nil edges once for use in all subsequent steps.
@@ -2036,26 +2452,47 @@ func selectAllEligibleEdges(g *model.Graph, from string, out runtime.Outcome, ct
 		}
 	}
 	if len(edges) == 0 {
-		return nil, nil
+		return nil, edgeSelectionMeta{}, nil
+	}
+
+	meta := edgeSelectionMeta{CandidatesEvaluated: len(edges)}
+
+	// Resolve optional progress callback.
+	var emit ProgressFunc
+	if len(progress) > 0 && progress[0] != nil {
+		emit = progress[0]
 	}
 
 	// Step 1: Eligible conditional edges.
 	var condMatched []*model.Edge
+	conditionsEvaluated := 0
 	for _, e := range edges {
 		c := strings.TrimSpace(e.Condition())
 		if c == "" {
 			continue
 		}
+		conditionsEvaluated++
 		ok, err := cond.Evaluate(c, out, ctx)
 		if err != nil {
-			return nil, err
+			return nil, edgeSelectionMeta{}, err
+		}
+		if emit != nil {
+			emit(map[string]any{
+				"event":     "edge_condition_evaluated",
+				"node_id":   from,
+				"edge_to":   e.To,
+				"condition": c,
+				"matched":   ok,
+			})
 		}
 		if ok {
 			condMatched = append(condMatched, e)
 		}
 	}
 	if len(condMatched) > 0 {
-		return condMatched, nil
+		meta.Method = "condition_match"
+		meta.ConditionsMatched = len(condMatched)
+		return condMatched, meta, nil
 	}
 
 	// Step 2: Preferred label match narrows to one.
@@ -2067,7 +2504,8 @@ func selectAllEligibleEdges(g *model.Graph, from string, out runtime.Outcome, ct
 		sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Order < sorted[j].Order })
 		for _, e := range sorted {
 			if normalizeLabel(e.Label()) == want {
-				return []*model.Edge{e}, nil
+				meta.Method = "preferred_label"
+				return []*model.Edge{e}, meta, nil
 			}
 		}
 	}
@@ -2081,7 +2519,8 @@ func selectAllEligibleEdges(g *model.Graph, from string, out runtime.Outcome, ct
 		for _, suggested := range out.SuggestedNextIDs {
 			for _, e := range sorted {
 				if e.To == suggested {
-					return []*model.Edge{e}, nil
+					meta.Method = "suggested_next_ids"
+					return []*model.Edge{e}, meta, nil
 				}
 			}
 		}
@@ -2095,7 +2534,12 @@ func selectAllEligibleEdges(g *model.Graph, from string, out runtime.Outcome, ct
 		}
 	}
 	if len(uncond) > 0 {
-		return uncond, nil
+		if len(uncond) == 1 {
+			meta.Method = "only_edge"
+		} else {
+			meta.Method = "weight"
+		}
+		return uncond, meta, nil
 	}
 
 	// Fallback: any edge (spec §3.3). All edges have conditions and none
@@ -2108,7 +2552,8 @@ func selectAllEligibleEdges(g *model.Graph, from string, out runtime.Outcome, ct
 	// all_conditional_edges ERROR promotion).
 	fmt.Fprintf(os.Stderr, `{"event":"step5_all_conditional_fallback","node":%q,"edges_considered":%d,"outcome":%q}`+"\n",
 		from, len(edges), string(out.Status))
-	return edges, nil
+	meta.Method = "fallback"
+	return edges, meta, nil
 }
 
 func bestEdge(edges []*model.Edge) *model.Edge {

@@ -35,7 +35,7 @@ digraph G {
   graph [goal="test loop restart", default_max_retry=0]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  work  [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do work"]
+  work  [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="do work"]
   check [shape=diamond]
   start -> work
   work -> check
@@ -65,15 +65,15 @@ digraph G {
 
 	logsRoot := t.TempDir()
 	eng := &Engine{
-		Graph:           g,
-		Options:         RunOptions{RepoPath: repo, RunID: "test-restart", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
-		DotSource:       dot,
-		LogsRoot:        logsRoot,
-		WorktreeDir:     filepath.Join(logsRoot, "worktree"),
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		Graph:        g,
+		Options:      RunOptions{RepoPath: repo, RunID: "test-restart", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
+		DotSource:    dot,
+		LogsRoot:     logsRoot,
+		WorktreeDir:  filepath.Join(logsRoot, "worktree"),
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-restart"
 
@@ -132,7 +132,7 @@ digraph G {
   graph [goal="test retry budget reset", max_restarts="3"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  work  [shape=box, llm_provider=openai, llm_model=gpt-5.2, max_retries="1", prompt="do work"]
+  work  [shape=box, llm_provider=openai, llm_model=gpt-5.4, max_retries="1", prompt="do work"]
   check [shape=diamond]
   start -> work
   work -> check
@@ -170,15 +170,15 @@ digraph G {
 
 	logsRoot := t.TempDir()
 	eng := &Engine{
-		Graph:           g,
-		Options:         RunOptions{RepoPath: repo, RunID: "test-retry-reset", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
-		DotSource:       dot,
-		LogsRoot:        logsRoot,
-		WorktreeDir:     filepath.Join(logsRoot, "worktree"),
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		Graph:        g,
+		Options:      RunOptions{RepoPath: repo, RunID: "test-retry-reset", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
+		DotSource:    dot,
+		LogsRoot:     logsRoot,
+		WorktreeDir:  filepath.Join(logsRoot, "worktree"),
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-retry-reset"
 
@@ -237,7 +237,7 @@ digraph G {
   graph [goal="test limit", max_restarts="2", loop_restart_signature_limit="99"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  work  [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do work"]
+  work  [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="do work"]
   check [shape=diamond]
   start -> work
   work -> check
@@ -262,15 +262,15 @@ digraph G {
 
 	logsRoot := t.TempDir()
 	eng := &Engine{
-		Graph:           g,
-		Options:         RunOptions{RepoPath: repo, RunID: "test-limit", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
-		DotSource:       dot,
-		LogsRoot:        logsRoot,
-		WorktreeDir:     filepath.Join(logsRoot, "worktree"),
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		Graph:        g,
+		Options:      RunOptions{RepoPath: repo, RunID: "test-limit", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
+		DotSource:    dot,
+		LogsRoot:     logsRoot,
+		WorktreeDir:  filepath.Join(logsRoot, "worktree"),
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-limit"
 
@@ -297,7 +297,7 @@ digraph G {
   graph [goal="test terminal final", max_restarts="1"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  work  [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do work"]
+  work  [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="do work"]
   check [shape=diamond]
   start -> work
   work -> check
@@ -322,15 +322,15 @@ digraph G {
 
 	logsRoot := t.TempDir()
 	eng := &Engine{
-		Graph:           g,
-		Options:         RunOptions{RepoPath: repo, RunID: "test-final-on-limit", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
-		DotSource:       dot,
-		LogsRoot:        logsRoot,
-		WorktreeDir:     filepath.Join(logsRoot, "worktree"),
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		Graph:        g,
+		Options:      RunOptions{RepoPath: repo, RunID: "test-final-on-limit", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
+		DotSource:    dot,
+		LogsRoot:     logsRoot,
+		WorktreeDir:  filepath.Join(logsRoot, "worktree"),
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-final-on-limit"
 
@@ -386,7 +386,7 @@ digraph G {
   graph [goal="test deterministic block", max_restarts="10"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  work  [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do work"]
+  work  [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="do work"]
   check [shape=diamond]
   start -> work
   work -> check
@@ -411,15 +411,15 @@ digraph G {
 
 	logsRoot := t.TempDir()
 	eng := &Engine{
-		Graph:           g,
-		Options:         RunOptions{RepoPath: repo, RunID: "test-deterministic-block", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
-		DotSource:       dot,
-		LogsRoot:        logsRoot,
-		WorktreeDir:     filepath.Join(logsRoot, "worktree"),
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		Graph:        g,
+		Options:      RunOptions{RepoPath: repo, RunID: "test-deterministic-block", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
+		DotSource:    dot,
+		LogsRoot:     logsRoot,
+		WorktreeDir:  filepath.Join(logsRoot, "worktree"),
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-deterministic-block"
 
@@ -464,7 +464,7 @@ digraph G {
   graph [goal="test circuit breaker", max_restarts="20", loop_restart_signature_limit="2"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  work  [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do work"]
+  work  [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="do work"]
   check [shape=diamond]
   start -> work
   work -> check
@@ -489,15 +489,15 @@ digraph G {
 
 	logsRoot := t.TempDir()
 	eng := &Engine{
-		Graph:           g,
-		Options:         RunOptions{RepoPath: repo, RunID: "test-circuit-breaker", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
-		DotSource:       dot,
-		LogsRoot:        logsRoot,
-		WorktreeDir:     filepath.Join(logsRoot, "worktree"),
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		Graph:        g,
+		Options:      RunOptions{RepoPath: repo, RunID: "test-circuit-breaker", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
+		DotSource:    dot,
+		LogsRoot:     logsRoot,
+		WorktreeDir:  filepath.Join(logsRoot, "worktree"),
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-circuit-breaker"
 
@@ -572,8 +572,8 @@ digraph G {
   graph [goal="test stuck cycle", max_node_visits="5"]
   start  [shape=Mdiamond]
   exit   [shape=Msquare]
-  impl   [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="implement"]
-  verify [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="verify"]
+  impl   [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="implement"]
+  verify [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="verify"]
   check  [shape=diamond]
   start -> impl -> verify -> check
   check -> exit [condition="outcome=success"]
@@ -607,15 +607,15 @@ digraph G {
 
 	logsRoot := t.TempDir()
 	eng := &Engine{
-		Graph:           g,
-		Options:         RunOptions{RepoPath: repo, RunID: "test-stuck-cycle", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
-		DotSource:       dot,
-		LogsRoot:        logsRoot,
-		WorktreeDir:     filepath.Join(logsRoot, "worktree"),
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		Graph:        g,
+		Options:      RunOptions{RepoPath: repo, RunID: "test-stuck-cycle", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
+		DotSource:    dot,
+		LogsRoot:     logsRoot,
+		WorktreeDir:  filepath.Join(logsRoot, "worktree"),
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-stuck-cycle"
 
@@ -763,7 +763,7 @@ digraph G {
   graph [goal="test context persistence", default_max_retry=0, loop_restart_persist_keys="completed_features,skipped_features"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  work  [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do work"]
+  work  [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="do work"]
   check [shape=diamond]
   start -> work
   work -> check
@@ -809,15 +809,15 @@ digraph G {
 
 	logsRoot := t.TempDir()
 	eng := &Engine{
-		Graph:           g,
-		Options:         RunOptions{RepoPath: repo, RunID: "test-persist", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
-		DotSource:       dot,
-		LogsRoot:        logsRoot,
-		WorktreeDir:     filepath.Join(logsRoot, "worktree"),
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		Graph:        g,
+		Options:      RunOptions{RepoPath: repo, RunID: "test-persist", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
+		DotSource:    dot,
+		LogsRoot:     logsRoot,
+		WorktreeDir:  filepath.Join(logsRoot, "worktree"),
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-persist"
 
@@ -867,7 +867,7 @@ digraph G {
   graph [goal="test persist keys in progress", default_max_retry=0, loop_restart_persist_keys="my_key"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  work  [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do work"]
+  work  [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="do work"]
   check [shape=diamond]
   start -> work
   work -> check
@@ -900,15 +900,15 @@ digraph G {
 
 	logsRoot := t.TempDir()
 	eng := &Engine{
-		Graph:           g,
-		Options:         RunOptions{RepoPath: repo, RunID: "test-persist-progress", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
-		DotSource:       dot,
-		LogsRoot:        logsRoot,
-		WorktreeDir:     filepath.Join(logsRoot, "worktree"),
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		Graph:        g,
+		Options:      RunOptions{RepoPath: repo, RunID: "test-persist-progress", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
+		DotSource:    dot,
+		LogsRoot:     logsRoot,
+		WorktreeDir:  filepath.Join(logsRoot, "worktree"),
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-persist-progress"
 

@@ -11,7 +11,7 @@ import (
 	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
 
-func TestInputManifestContract_CodergenEnvAndPreambleInjected(t *testing.T) {
+func TestInputManifestContract_AgentEnvAndPreambleInjected(t *testing.T) {
 	repo := initTestRepo(t)
 	logsRoot := t.TempDir()
 	mustWriteInputFile(t, filepath.Join(repo, ".ai", "definition_of_done.md"), "line by line")
@@ -24,7 +24,7 @@ digraph G {
   graph [goal="manifest contract"]
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="check inputs"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="check inputs"]
   start -> a -> exit
 }
 `)
@@ -73,6 +73,7 @@ digraph G {
 func TestInputManifestContract_DisabledSuppressesEnvPreambleAndEvents(t *testing.T) {
 	repo := initTestRepo(t)
 	logsRoot := t.TempDir()
+	t.Setenv(inputsManifestEnvKey, "/tmp/ambient-inputs-manifest.json")
 	mustWriteInputFile(t, filepath.Join(repo, ".ai", "definition_of_done.md"), "line by line")
 
 	cli := writeInputManifestProbeCLI(t, false)
@@ -85,7 +86,7 @@ digraph G {
   graph [goal="manifest contract disabled"]
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="check inputs"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="check inputs"]
   start -> a -> exit
 }
 `)

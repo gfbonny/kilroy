@@ -26,7 +26,7 @@ digraph T {
   graph [goal="test"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do nothing"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="do nothing"]
   start -> a -> exit
 }
 `)

@@ -7,20 +7,41 @@ import (
 )
 
 const (
-	runIDEnvKey          = "KILROY_RUN_ID"
-	nodeIDEnvKey         = "KILROY_NODE_ID"
-	logsRootEnvKey       = "KILROY_LOGS_ROOT"
-	stageLogsDirEnvKey   = "KILROY_STAGE_LOGS_DIR"
-	worktreeDirEnvKey    = "KILROY_WORKTREE_DIR"
-	inputsManifestEnvKey = "KILROY_INPUTS_MANIFEST_PATH"
+	runIDEnvKey              = "KILROY_RUN_ID"
+	nodeIDEnvKey             = "KILROY_NODE_ID"
+	logsRootEnvKey           = "KILROY_LOGS_ROOT"
+	stageLogsDirEnvKey       = "KILROY_STAGE_LOGS_DIR"
+	worktreeDirEnvKey        = "KILROY_WORKTREE_DIR"
+	inputsManifestEnvKey     = "KILROY_INPUTS_MANIFEST_PATH"
+	dataDirEnvKey            = "KILROY_DATA_DIR"
+	predecessorNodeEnvKey    = "KILROY_PREDECESSOR_NODE"
+	predecessorOutcomeEnvKey = "KILROY_PREDECESSOR_OUTCOME"
 )
+
+var baseNodeEnvStripKeys = []string{
+	"CLAUDECODE",
+	runIDEnvKey,
+	nodeIDEnvKey,
+	logsRootEnvKey,
+	stageLogsDirEnvKey,
+	worktreeDirEnvKey,
+	inputsManifestEnvKey,
+	stageStatusPathEnvKey,
+	stageStatusFallbackPathEnvKey,
+	dataDirEnvKey,
+	predecessorNodeEnvKey,
+	predecessorOutcomeEnvKey,
+}
 
 // buildBaseNodeEnv constructs the base environment for any node execution.
 // It starts from os.Environ(), strips CLAUDECODE, then applies resolved
 // artifact policy environment variables.
 func buildBaseNodeEnv(rp ResolvedArtifactPolicy) []string {
 	base := os.Environ()
-	base = stripEnvKey(base, "CLAUDECODE")
+	// Scrub inherited process state that can corrupt stage-local contracts.
+	for _, key := range baseNodeEnvStripKeys {
+		base = stripEnvKey(base, key)
+	}
 
 	overrides := make(map[string]string, len(rp.Env.Vars))
 	for k, v := range rp.Env.Vars {
@@ -46,9 +67,9 @@ func stripEnvKey(env []string, key string) []string {
 	return out
 }
 
-// buildStageRuntimeEnv returns stable per-stage environment variables that
-// help codergen/tool nodes find their run-local state (logs, worktree, etc.).
-func buildStageRuntimeEnv(execCtx *Execution, nodeID string) map[string]string {
+// BuildStageRuntimeEnv returns stable per-stage environment variables that
+// help agent/tool nodes find their run-local state (logs, worktree, etc.).
+func BuildStageRuntimeEnv(execCtx *Execution, nodeID string) map[string]string {
 	out := map[string]string{}
 	if execCtx == nil {
 		return out
@@ -69,6 +90,13 @@ func buildStageRuntimeEnv(execCtx *Execution, nodeID string) map[string]string {
 	}
 	if worktree := strings.TrimSpace(execCtx.WorktreeDir); worktree != "" {
 		out[worktreeDirEnvKey] = worktree
+		out[dataDirEnvKey] = filepath.Join(worktree, kilroyDir)
+	}
+	// Add structured input env vars (KILROY_INPUT_*).
+	if execCtx.Engine != nil {
+		for k, v := range InputEnvVars(execCtx.Engine.Options.Inputs) {
+			out[k] = v
+		}
 	}
 	if execCtx.Engine != nil && execCtx.Engine.inputMaterializationEnabled() {
 		manifestPath := strings.TrimSpace(execCtx.Engine.currentInputManifestPath)
@@ -80,6 +108,16 @@ func buildStageRuntimeEnv(execCtx *Execution, nodeID string) map[string]string {
 				out[inputsManifestEnvKey] = manifestPath
 			}
 		}
+	}
+	// Predecessor node and outcome: expose to handlers so fail_report-style
+	// nodes can route based on which predecessor failed without probing
+	// filesystem state. Set unconditionally (possibly empty) so the key is
+	// always present; callers need not special-case absence vs empty string.
+	if execCtx.Context != nil {
+		predNode := execCtx.Context.GetString("previous_node", "")
+		out[predecessorNodeEnvKey] = predNode
+		predOutcome := execCtx.Context.GetString("previous_outcome", "")
+		out[predecessorOutcomeEnvKey] = predOutcome
 	}
 	return out
 }
@@ -101,13 +139,18 @@ func buildStageRuntimePreamble(execCtx *Execution, nodeID string) string {
 	if runID == "" && logsRoot == "" && stageDir == "" && worktree == "" && strings.TrimSpace(nodeID) == "" {
 		return ""
 	}
+	dataDir := ""
+	if worktree != "" {
+		dataDir = filepath.Join(worktree, kilroyDir)
+	}
 	return strings.TrimSpace(
 		"Execution context:\n" +
 			"- $" + runIDEnvKey + "=" + runID + "\n" +
 			"- $" + logsRootEnvKey + "=" + logsRoot + "\n" +
 			"- $" + stageLogsDirEnvKey + "=" + stageDir + "\n" +
 			"- $" + worktreeDirEnvKey + "=" + worktree + "\n" +
-			"- $" + nodeIDEnvKey + "=" + strings.TrimSpace(nodeID) + "\n",
+			"- $" + nodeIDEnvKey + "=" + strings.TrimSpace(nodeID) + "\n" +
+			"- $" + dataDirEnvKey + "=" + dataDir + "\n",
 	)
 }
 

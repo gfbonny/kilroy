@@ -13,12 +13,21 @@ var builtinSpecs = map[string]Spec{
 		},
 		CLI: &CLISpec{
 			DefaultExecutable:  "codex",
-			InvocationTemplate: []string{"exec", "--json", "--sandbox", "workspace-write", "-m", "{{model}}", "-C", "{{worktree}}"},
+			InvocationTemplate: []string{"exec", "--json", "-m", "{{model}}", "-C", "{{worktree}}"},
 			PromptMode:         "stdin",
 			HelpProbeArgs:      []string{"exec", "--help"},
-			CapabilityAll:      []string{"--json", "--sandbox"},
+			CapabilityAll:      []string{"--json"},
 		},
-		Failover: []string{"google"},
+	},
+	"codex-app-server": {
+		Key:     "codex-app-server",
+		Aliases: []string{"codex_app_server"},
+		API: &APISpec{
+			Protocol:           ProtocolCodexAppServer,
+			DefaultAPIKeyEnv:   "",
+			ProviderOptionsKey: "codex_app_server",
+			ProfileFamily:      "codex-app-server",
+		},
 	},
 	"anthropic": {
 		Key: "anthropic",
@@ -37,7 +46,6 @@ var builtinSpecs = map[string]Spec{
 			HelpProbeArgs:      []string{"--help"},
 			CapabilityAll:      []string{"--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"},
 		},
-		Failover: []string{"google"},
 	},
 	"google": {
 		Key:     "google",
@@ -58,7 +66,6 @@ var builtinSpecs = map[string]Spec{
 			CapabilityAll:      []string{"--output-format"},
 			CapabilityAnyOf:    [][]string{{"--yolo", "--approval-mode"}},
 		},
-		Failover: []string{"kimi"},
 	},
 	"kimi": {
 		Key:     "kimi",
@@ -71,7 +78,6 @@ var builtinSpecs = map[string]Spec{
 			ProviderOptionsKey: "anthropic",
 			ProfileFamily:      "openai",
 		},
-		Failover: []string{"zai"},
 	},
 	"zai": {
 		Key:     "zai",
@@ -84,7 +90,6 @@ var builtinSpecs = map[string]Spec{
 			ProviderOptionsKey: "zai",
 			ProfileFamily:      "openai",
 		},
-		Failover: []string{"cerebras"},
 	},
 	"cerebras": {
 		Key:     "cerebras",
@@ -97,7 +102,6 @@ var builtinSpecs = map[string]Spec{
 			ProviderOptionsKey: "cerebras",
 			ProfileFamily:      "openai",
 		},
-		Failover: []string{"zai"},
 	},
 	"minimax": {
 		Key:     "minimax",
@@ -110,7 +114,6 @@ var builtinSpecs = map[string]Spec{
 			ProviderOptionsKey: "minimax",
 			ProfileFamily:      "openai",
 		},
-		Failover: []string{"cerebras"},
 	},
 	"inception": {
 		Key:     "inception",
@@ -123,7 +126,6 @@ var builtinSpecs = map[string]Spec{
 			ProviderOptionsKey: "inception",
 			ProfileFamily:      "openai",
 		},
-		Failover: []string{"cerebras"},
 	},
 }
 

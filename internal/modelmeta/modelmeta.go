@@ -8,6 +8,14 @@ import (
 	"github.com/danshapiro/kilroy/internal/providerspec"
 )
 
+// DefaultOpenAIModel is the default OpenAI model used across the codebase.
+// Change this single value to upgrade the default model everywhere.
+const DefaultOpenAIModel = "gpt-5.4"
+
+// DefaultAnthropicModel is the default Anthropic model used across the codebase.
+// Change this single value to upgrade the default model everywhere.
+const DefaultAnthropicModel = "claude-sonnet-4-6"
+
 // versionDotRe matches dots between digits in model version numbers
 // (e.g. "4.5", "3.7") without touching other dots.
 var versionDotRe = regexp.MustCompile(`(\d)\.(\d)`)

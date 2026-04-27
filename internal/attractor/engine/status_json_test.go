@@ -53,7 +53,7 @@ digraph G {
 	}
 }
 
-func TestCodergenStatusIngestion_CanonicalStageStatusWins(t *testing.T) {
+func TestAgentStatusIngestion_CanonicalStageStatusWins(t *testing.T) {
 	out, source := runStatusIngestionFixture(t, true, true, false)
 	if source != "canonical" {
 		t.Fatalf("source=%q want canonical", source)
@@ -63,7 +63,7 @@ func TestCodergenStatusIngestion_CanonicalStageStatusWins(t *testing.T) {
 	}
 }
 
-func TestCodergenStatusIngestion_FallbackOnlyWhenCanonicalMissing(t *testing.T) {
+func TestAgentStatusIngestion_FallbackOnlyWhenCanonicalMissing(t *testing.T) {
 	out, source := runStatusIngestionFixture(t, false, true, false)
 	if source != "worktree" {
 		t.Fatalf("source=%q want worktree", source)
@@ -73,9 +73,22 @@ func TestCodergenStatusIngestion_FallbackOnlyWhenCanonicalMissing(t *testing.T) 
 	}
 }
 
-func TestCodergenStatusIngestion_InvalidFallbackIsRejected(t *testing.T) {
-	_, source := runStatusIngestionFixture(t, false, false, true)
+func TestAgentStatusIngestion_InvalidFallbackIsRejected(t *testing.T) {
+	out, source := runStatusIngestionFixture(t, false, false, true)
 	if source != "" {
 		t.Fatalf("source=%q want empty", source)
+	}
+	if out.Status != runtime.StatusFail {
+		t.Fatalf("status=%q want %q", out.Status, runtime.StatusFail)
+	}
+}
+
+func TestAgentStatusIngestion_MissingFallbackIsDiagnosed(t *testing.T) {
+	out, source := runStatusIngestionFixture(t, false, false, false)
+	if source != "" {
+		t.Fatalf("source=%q want empty", source)
+	}
+	if out.Status != runtime.StatusFail {
+		t.Fatalf("status=%q want %q", out.Status, runtime.StatusFail)
 	}
 }

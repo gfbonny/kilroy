@@ -22,7 +22,7 @@ digraph G {
   exit  [shape=Msquare]
 
   check_toolchain [shape=parallelogram, tool_command="cd missing/bootstrap && rustc --version"]
-  postmortem [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="Analyze the failure and route."]
+  postmortem [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="Analyze the failure and route."]
 
   start -> check_toolchain
   check_toolchain -> postmortem [condition="outcome=fail"]

@@ -31,6 +31,9 @@ const (
 	defaultPreflightAPIPromptProbeRetries   = 2
 	defaultPreflightAPIPromptProbeBaseDelay = 500 * time.Millisecond
 	defaultPreflightAPIPromptProbeMaxDelay  = 5 * time.Second
+
+	codexAppServerCommandEnv     = "CODEX_APP_SERVER_COMMAND"
+	codexAppServerDefaultCommand = "codex"
 )
 
 type providerPreflightReport struct {
@@ -90,9 +93,8 @@ func runProviderCLIPreflight(ctx context.Context, g *model.Graph, runtimes map[s
 		_ = writePreflightReport(opts.LogsRoot, report)
 	}()
 
-	// Validate CLI-only models: fail early if a CLI-only model (e.g.,
-	// gpt-5.3-codex-spark) is used but its provider is not configured with
-	// backend=cli.
+	// Validate CLI-only models: fail early if a configured CLI-only model is
+	// used but its provider is not configured with backend=cli.
 	if err := validateCLIOnlyModels(g, runtimes, opts.ForceModels, report); err != nil {
 		return report, err
 	}
@@ -179,7 +181,53 @@ func runProviderAPIPreflight(ctx context.Context, g *model.Graph, runtimes map[s
 			})
 			return fmt.Errorf("preflight: provider %s missing runtime definition", provider)
 		}
+		if rt.API.Protocol == providerspec.ProtocolCodexAppServer {
+			command := strings.TrimSpace(os.Getenv(codexAppServerCommandEnv))
+			source := "default"
+			if command == "" {
+				command = codexAppServerDefaultCommand
+			} else {
+				source = "env"
+			}
+			resolvedPath, lookErr := exec.LookPath(command)
+			if lookErr != nil {
+				report.addCheck(providerPreflightCheck{
+					Name:     "provider_api_presence",
+					Provider: provider,
+					Status:   preflightStatusFail,
+					Message:  fmt.Sprintf("codex app server command %q is not available: %v", command, lookErr),
+					Details: map[string]any{
+						"command": command,
+						"source":  source,
+					},
+				})
+				return fmt.Errorf("preflight: provider %s codex app server command %q is not available: %w", provider, command, lookErr)
+			}
+			report.addCheck(providerPreflightCheck{
+				Name:     "provider_api_presence",
+				Provider: provider,
+				Status:   preflightStatusPass,
+				Message:  fmt.Sprintf("codex app server command %q is available", command),
+				Details: map[string]any{
+					"command":       command,
+					"resolved_path": resolvedPath,
+					"source":        source,
+				},
+			})
+		}
 		keyEnv := strings.TrimSpace(rt.API.DefaultAPIKeyEnv)
+		if rt.API.Protocol == providerspec.ProtocolCodexAppServer && keyEnv == "" {
+			report.addCheck(providerPreflightCheck{
+				Name:     "provider_api_credentials",
+				Provider: provider,
+				Status:   preflightStatusPass,
+				Message:  "api key env is not required for codex app server",
+				Details: map[string]any{
+					"protocol": string(rt.API.Protocol),
+				},
+			})
+			continue
+		}
 		if keyEnv == "" {
 			report.addCheck(providerPreflightCheck{
 				Name:     "provider_api_credentials",
@@ -187,7 +235,7 @@ func runProviderAPIPreflight(ctx context.Context, g *model.Graph, runtimes map[s
 				Status:   preflightStatusFail,
 				Message:  "api key env is not configured",
 			})
-			return fmt.Errorf("preflight: provider %s api key env is not configured", provider)
+			return fmt.Errorf("preflight: provider %s api key env is not configured\n  hint: set api_key_env in your run config under llm.providers.%s.api, or use backend: cli to skip API keys", provider, provider)
 		}
 		if strings.TrimSpace(os.Getenv(keyEnv)) == "" {
 			report.addCheck(providerPreflightCheck{
@@ -196,7 +244,7 @@ func runProviderAPIPreflight(ctx context.Context, g *model.Graph, runtimes map[s
 				Status:   preflightStatusFail,
 				Message:  fmt.Sprintf("required api key env %s is not set", keyEnv),
 			})
-			return fmt.Errorf("preflight: provider %s missing api key env %s", provider, keyEnv)
+			return fmt.Errorf("preflight: provider %s missing api key env %s\n  hint: export %s=<your-api-key> or switch to backend: cli in your run config", provider, keyEnv, keyEnv)
 		}
 		report.addCheck(providerPreflightCheck{
 			Name:     "provider_api_credentials",
@@ -330,7 +378,7 @@ func runProviderAPIPreflight(ctx context.Context, g *model.Graph, runtimes map[s
 				"model":            target.Model,
 				"mode":             target.Mode,
 				"transport":        effectiveTransport,
-				"response_preview": truncate(strings.TrimSpace(probe.Text), 64),
+				"response_preview": Truncate(strings.TrimSpace(probe.Text), 64),
 			}
 			if probe.MaxTokens > 0 {
 				details["max_tokens"] = probe.MaxTokens
@@ -1030,7 +1078,7 @@ func runProviderCLIPromptProbeAttempt(ctx context.Context, provider string, mode
 	defer cancel()
 
 	probeLogsRoot := filepath.Join(opts.LogsRoot, "preflight", "prompt-probe", safePathToken(provider), safePathToken(modelID))
-	router := NewCodergenRouterWithRuntimes(cfg, nil, nil)
+	router := NewAgentRouterWithRuntimes(cfg, nil, nil)
 	execCtx := &Execution{
 		LogsRoot:    probeLogsRoot,
 		WorktreeDir: worktreeForInvocation,
@@ -1284,12 +1332,12 @@ func usedAPIPromptProbeTargetsForProvider(g *model.Graph, runtimes map[string]Pr
 			continue
 		}
 
-		mode := strings.ToLower(strings.TrimSpace(n.Attr("codergen_mode", "")))
+		mode := strings.ToLower(strings.TrimSpace(n.Attr("agent_mode", "")))
 		if mode == "" {
 			mode = "agent_loop"
 		}
 		if mode != "one_shot" && mode != "agent_loop" {
-			return nil, fmt.Errorf("invalid codergen_mode: %q (want one_shot|agent_loop)", mode)
+			return nil, fmt.Errorf("invalid agent_mode: %q (want one_shot|agent_loop)", mode)
 		}
 		reasoning := strings.TrimSpace(n.Attr("reasoning_effort", ""))
 		req, err := preflightAPIPromptProbeRequest(provider, modelID, mode, reasoning, runtimes)
@@ -1396,7 +1444,7 @@ func preflightAPIPromptProbeRequest(provider string, modelID string, mode string
 		req.Tools = toolDefs
 		return req, nil
 	default:
-		return llm.Request{}, fmt.Errorf("invalid codergen_mode: %q (want one_shot|agent_loop)", mode)
+		return llm.Request{}, fmt.Errorf("invalid agent_mode: %q (want one_shot|agent_loop)", mode)
 	}
 }
 

@@ -115,7 +115,7 @@ func TestCatalogHasProviderModel_AcceptsOpenRouterProviderPrefixes(t *testing.T)
 func TestCatalogHasProviderModel_SparkEntry(t *testing.T) {
 	path := t.TempDir() + "/catalog.json"
 	data := `{"data":[{
-		"id": "openai/gpt-5.3-codex-spark",
+		"id": "openai/gpt-5.4-spark",
 		"context_length": 128000,
 		"architecture": {
 			"input_modalities": ["text"],
@@ -132,10 +132,10 @@ func TestCatalogHasProviderModel_SparkEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCatalogFromOpenRouterJSON: %v", err)
 	}
-	if !CatalogHasProviderModel(c, "openai", "gpt-5.3-codex-spark") {
-		t.Fatal("expected catalog to contain openai/gpt-5.3-codex-spark")
+	if !CatalogHasProviderModel(c, "openai", "gpt-5.4-spark") {
+		t.Fatal("expected catalog to contain openai/gpt-5.4-spark")
 	}
-	entry := c.Models["openai/gpt-5.3-codex-spark"]
+	entry := c.Models["openai/gpt-5.4-spark"]
 	if entry.ContextWindow != 128000 {
 		t.Errorf("context_window: got %d, want 128000", entry.ContextWindow)
 	}
@@ -147,5 +147,24 @@ func TestCatalogHasProviderModel_SparkEntry(t *testing.T) {
 	}
 	if !entry.SupportsReasoning {
 		t.Error("expected SupportsReasoning=true")
+	}
+}
+
+func TestLoadEmbeddedCatalog_ContainsAnthropicSonnet46(t *testing.T) {
+	c, err := LoadEmbeddedCatalog()
+	if err != nil {
+		t.Fatalf("LoadEmbeddedCatalog: %v", err)
+	}
+	if !CatalogHasProviderModel(c, "anthropic", "claude-sonnet-4.6") {
+		t.Fatal("expected embedded catalog to contain anthropic/claude-sonnet-4.6")
+	}
+	if !CatalogHasProviderModel(c, "anthropic", "claude-sonnet-4-6") {
+		t.Fatal("expected dash-format anthropic model id to resolve for claude-sonnet-4.6")
+	}
+	if !CatalogHasProviderModel(c, "openai", "gpt-5.3-codex") {
+		t.Fatal("expected embedded catalog to contain openai/gpt-5.3-codex")
+	}
+	if !CatalogHasProviderModel(c, "google", "gemini-3.1-pro-preview") {
+		t.Fatal("expected embedded catalog to contain google/gemini-3.1-pro-preview")
 	}
 }

@@ -53,6 +53,7 @@ func TestGitPushIfConfigured_PushesToRemote(t *testing.T) {
 		Options:   RunOptions{RepoPath: repo},
 		RunBranch: "attractor/run/test-push",
 		RunConfig: &RunConfigFile{},
+		GitOps:    &testGitOps{},
 	}
 	eng.RunConfig.Git.PushRemote = "test-remote"
 
@@ -84,7 +85,7 @@ digraph G {
   graph [goal="test push on restart"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  work  [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do work"]
+  work  [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="do work"]
   check [shape=diamond]
   start -> work
   work -> check
@@ -119,16 +120,16 @@ digraph G {
 	cfg.Git.PushRemote = "test-remote"
 
 	eng := &Engine{
-		Graph:           g,
-		Options:         RunOptions{RepoPath: repo, RunID: "test-push-restart", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
-		DotSource:       dot,
-		LogsRoot:        logsRoot,
-		WorktreeDir:     filepath.Join(logsRoot, "worktree"),
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
-		RunConfig:       cfg,
+		Graph:        g,
+		Options:      RunOptions{RepoPath: repo, RunID: "test-push-restart", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
+		DotSource:    dot,
+		LogsRoot:     logsRoot,
+		WorktreeDir:  filepath.Join(logsRoot, "worktree"),
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
+		AgentBackend: backend,
+		RunConfig:    cfg,
 	}
 	eng.RunBranch = "attractor/run/test-push-restart"
 

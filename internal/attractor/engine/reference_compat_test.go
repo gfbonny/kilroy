@@ -18,7 +18,7 @@ func TestPrepare_ReferenceStyleDotfile(t *testing.T) {
 
 		Work [
 			shape=box,
-			llm_provider=openai, llm_model="gpt-5.2",
+			llm_provider=openai, llm_model="gpt-5.4",
 			llm_prompt="Implement the thing. Goal: $goal\nWrite status.json: outcome=success",
 			timeout="300"
 		]
@@ -60,7 +60,7 @@ func TestPrepare_ReferenceStyleDotfile(t *testing.T) {
 		t.Errorf("context_thread_default = %q, want %q", got, "test-thread")
 	}
 
-	// Verify timeout attribute is present on codergen node.
+	// Verify timeout attribute is present on agent node.
 	if got := workNode.Attr("timeout", ""); got != "300" {
 		t.Errorf("Work.timeout = %q, want %q", got, "300")
 	}

@@ -166,7 +166,7 @@ func TestExpandPromptFiles_GoalExpansionStillWorks(t *testing.T) {
 digraph G {
   goal="Build the app"
   start [shape=Mdiamond]
-  build [shape=box, prompt_file="p.md", llm_provider=openai, llm_model=gpt-5.2]
+  build [shape=box, prompt_file="p.md", llm_provider=openai, llm_model=gpt-5.4]
   exit [shape=Msquare]
   start -> build -> exit
 }
@@ -195,7 +195,7 @@ func TestPromptFile_MissingFile_PrepareWithOptionsReturnsError(t *testing.T) {
 	dotSrc := []byte(`
 digraph G {
   start [shape=Mdiamond]
-  build [shape=box, prompt_file="nonexistent.txt", llm_provider=openai, llm_model=gpt-5.2]
+  build [shape=box, prompt_file="nonexistent.txt", llm_provider=openai, llm_model=gpt-5.4]
   exit  [shape=Msquare]
   start -> build -> exit
 }
@@ -225,7 +225,7 @@ func TestPromptFile_BothPromptAndPromptFile_PrepareWithOptionsReturnsError(t *te
 	dotSrc := []byte(`
 digraph G {
   start [shape=Mdiamond]
-  build [shape=box, prompt="inline text", prompt_file="extra.md", llm_provider=openai, llm_model=gpt-5.2]
+  build [shape=box, prompt="inline text", prompt_file="extra.md", llm_provider=openai, llm_model=gpt-5.4]
   exit  [shape=Msquare]
   start -> build -> exit
 }

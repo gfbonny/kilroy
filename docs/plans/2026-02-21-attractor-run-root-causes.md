@@ -34,8 +34,8 @@ func TestValidate_LoopRestartOnUnconditionalEdge_Warns(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
-  b [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="y"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="y"]
   start -> a -> b
   b -> a [loop_restart=true]
   a -> exit [condition="outcome=success"]
@@ -57,7 +57,7 @@ func TestValidate_LoopRestartTransientGuardWithoutDeterministicFallback_Warns(t 
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   check [shape=diamond]
   start -> a -> check
   check -> a [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
@@ -151,9 +151,9 @@ Replace the fixture at line 211-221:
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   check [shape=diamond]
-  pm [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="postmortem"]
+  pm [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="postmortem"]
   start -> a -> check
   check -> a [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
   check -> pm [condition="outcome=fail && context.failure_class!=transient_infra"]

@@ -16,6 +16,28 @@ import (
 	"github.com/danshapiro/kilroy/internal/llm"
 )
 
+func assertRateLimitInfo(t *testing.T, rl *llm.RateLimitInfo) {
+	t.Helper()
+	if rl == nil {
+		t.Fatalf("expected rate limit info, got nil")
+	}
+	if rl.RequestsRemaining == nil || *rl.RequestsRemaining != 9 {
+		t.Fatalf("requests_remaining: %#v", rl.RequestsRemaining)
+	}
+	if rl.RequestsLimit == nil || *rl.RequestsLimit != 10 {
+		t.Fatalf("requests_limit: %#v", rl.RequestsLimit)
+	}
+	if rl.TokensRemaining == nil || *rl.TokensRemaining != 90 {
+		t.Fatalf("tokens_remaining: %#v", rl.TokensRemaining)
+	}
+	if rl.TokensLimit == nil || *rl.TokensLimit != 100 {
+		t.Fatalf("tokens_limit: %#v", rl.TokensLimit)
+	}
+	if rl.ResetAt != "2025-01-01T00:00:10Z" {
+		t.Fatalf("reset_at: %q", rl.ResetAt)
+	}
+}
+
 func TestAdapter_Complete_MapsToResponsesAPI(t *testing.T) {
 	var gotBody map[string]any
 
@@ -29,9 +51,14 @@ func TestAdapter_Complete_MapsToResponsesAPI(t *testing.T) {
 		_ = json.Unmarshal(b, &gotBody)
 
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("x-ratelimit-remaining-requests", "9")
+		w.Header().Set("x-ratelimit-limit-requests", "10")
+		w.Header().Set("x-ratelimit-remaining-tokens", "90")
+		w.Header().Set("x-ratelimit-limit-tokens", "100")
+		w.Header().Set("x-ratelimit-reset-requests", "Wed, 01 Jan 2025 00:00:10 GMT")
 		_, _ = w.Write([]byte(`{
   "id": "resp_1",
-  "model": "gpt-5.2",
+  "model": "gpt-5.4",
   "output": [
     {"type": "message", "content": [{"type":"output_text", "text":"Hello"}]}
   ],
@@ -46,7 +73,7 @@ func TestAdapter_Complete_MapsToResponsesAPI(t *testing.T) {
 
 	reasoning := "low"
 	resp, err := a.Complete(ctx, llm.Request{
-		Model: "gpt-5.2",
+		Model: "gpt-5.4",
 		Messages: []llm.Message{
 			llm.System("sys"),
 			llm.Developer("dev"),
@@ -67,12 +94,13 @@ func TestAdapter_Complete_MapsToResponsesAPI(t *testing.T) {
 	if strings.TrimSpace(resp.Text()) != "Hello" {
 		t.Fatalf("resp text: %q", resp.Text())
 	}
+	assertRateLimitInfo(t, resp.RateLimit)
 
 	// Assert request mapping.
 	if gotBody == nil {
 		t.Fatalf("server did not capture request body")
 	}
-	if gotBody["model"] != "gpt-5.2" {
+	if gotBody["model"] != "gpt-5.4" {
 		t.Fatalf("model: %v", gotBody["model"])
 	}
 	if instr, _ := gotBody["instructions"].(string); !strings.Contains(instr, "sys") || !strings.Contains(instr, "dev") {
@@ -86,6 +114,48 @@ func TestAdapter_Complete_MapsToResponsesAPI(t *testing.T) {
 	}
 	if inputAny, ok := gotBody["input"].([]any); !ok || len(inputAny) == 0 {
 		t.Fatalf("input: %#v", gotBody["input"])
+	}
+}
+
+func TestAdapter_Complete_NormalizesProviderPrefixedModelID(t *testing.T) {
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/responses" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		_ = json.Unmarshal(b, &gotBody)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+  "id": "resp_1",
+  "model": "gpt-5.2",
+  "output": [{"type": "message", "content": [{"type":"output_text", "text":"ok"}]}],
+  "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	a := &Adapter{APIKey: "k", BaseURL: srv.URL, Client: srv.Client()}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := a.Complete(ctx, llm.Request{Model: "openai/gpt-5.2", Messages: []llm.Message{llm.User("hi")}})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if gotBody == nil {
+		t.Fatalf("server did not capture request body")
+	}
+	gotModel, ok := gotBody["model"].(string)
+	if !ok {
+		t.Fatalf("request model field type: %#v", gotBody["model"])
+	}
+	if got := strings.TrimSpace(gotModel); got != "gpt-5.2" {
+		t.Fatalf("request model: got %q want %q", got, "gpt-5.2")
 	}
 }
 
@@ -107,7 +177,7 @@ func TestAdapter_Complete_ToolChoice_MappedPerSpec(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
   "id": "resp_1",
-  "model": "gpt-5.2",
+  "model": "gpt-5.4",
   "output": [{"type": "message", "content": [{"type":"output_text", "text":"ok"}]}],
   "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
 }`))
@@ -175,7 +245,7 @@ func TestAdapter_Complete_ToolChoice_MappedPerSpec(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			gotBody = nil
 			_, err := a.Complete(ctx, llm.Request{
-				Model:      "gpt-5.2",
+				Model:      "gpt-5.4",
 				Messages:   []llm.Message{llm.User("hi")},
 				Tools:      []llm.ToolDefinition{toolDef},
 				ToolChoice: tc.tc,
@@ -196,7 +266,7 @@ func TestAdapter_Complete_Usage_MapsReasoningAndCacheTokens(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
   "id": "resp_1",
-  "model": "gpt-5.2",
+  "model": "gpt-5.4",
   "output": [{"type": "message", "content": [{"type":"output_text", "text":"ok"}]}],
   "usage": {
     "input_tokens": 1,
@@ -213,7 +283,7 @@ func TestAdapter_Complete_Usage_MapsReasoningAndCacheTokens(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	resp, err := a.Complete(ctx, llm.Request{Model: "gpt-5.2", Messages: []llm.Message{llm.User("hi")}})
+	resp, err := a.Complete(ctx, llm.Request{Model: "gpt-5.4", Messages: []llm.Message{llm.User("hi")}})
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
@@ -236,7 +306,7 @@ func TestAdapter_Complete_ToolParameters_DefaultToEmptyObjectSchema(t *testing.T
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
   "id": "resp_1",
-  "model": "gpt-5.2",
+  "model": "gpt-5.4",
   "output": [{"type": "message", "content": [{"type":"output_text", "text":"ok"}]}],
   "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
 }`))
@@ -248,7 +318,7 @@ func TestAdapter_Complete_ToolParameters_DefaultToEmptyObjectSchema(t *testing.T
 	defer cancel()
 
 	_, err := a.Complete(ctx, llm.Request{
-		Model:    "gpt-5.2",
+		Model:    "gpt-5.4",
 		Messages: []llm.Message{llm.User("hi")},
 		Tools:    []llm.ToolDefinition{{Name: "t1"}},
 	})
@@ -272,7 +342,7 @@ func TestAdapter_Complete_RejectsAudioAndDocumentParts(t *testing.T) {
 	defer cancel()
 
 	msgAudio := llm.Message{Role: llm.RoleUser, Content: []llm.ContentPart{{Kind: llm.ContentAudio, Audio: &llm.AudioData{URL: "https://example.com/a.wav"}}}}
-	_, err := a.Complete(ctx, llm.Request{Model: "gpt-5.2", Messages: []llm.Message{msgAudio}})
+	_, err := a.Complete(ctx, llm.Request{Model: "gpt-5.4", Messages: []llm.Message{msgAudio}})
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -282,7 +352,7 @@ func TestAdapter_Complete_RejectsAudioAndDocumentParts(t *testing.T) {
 	}
 
 	msgDoc := llm.Message{Role: llm.RoleUser, Content: []llm.ContentPart{{Kind: llm.ContentDocument, Document: &llm.DocumentData{URL: "https://example.com/a.pdf"}}}}
-	_, err = a.Complete(ctx, llm.Request{Model: "gpt-5.2", Messages: []llm.Message{msgDoc}})
+	_, err = a.Complete(ctx, llm.Request{Model: "gpt-5.4", Messages: []llm.Message{msgDoc}})
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -304,7 +374,7 @@ func TestAdapter_Complete_HTTPErrorMapping_IncludesRetryAfter(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	_, err := a.Complete(ctx, llm.Request{Model: "gpt-5.2", Messages: []llm.Message{llm.User("hi")}})
+	_, err := a.Complete(ctx, llm.Request{Model: "gpt-5.4", Messages: []llm.Message{llm.User("hi")}})
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -333,6 +403,11 @@ func TestAdapter_Stream_YieldsTextDeltasAndFinish(t *testing.T) {
 		_ = json.Unmarshal(b, &gotBody)
 
 		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("x-ratelimit-remaining-requests", "9")
+		w.Header().Set("x-ratelimit-limit-requests", "10")
+		w.Header().Set("x-ratelimit-remaining-tokens", "90")
+		w.Header().Set("x-ratelimit-limit-tokens", "100")
+		w.Header().Set("x-ratelimit-reset-requests", "Wed, 01 Jan 2025 00:00:10 GMT")
 		f, _ := w.(http.Flusher)
 
 		write := func(event string, data string) {
@@ -345,7 +420,7 @@ func TestAdapter_Stream_YieldsTextDeltasAndFinish(t *testing.T) {
 
 		write("response.output_text.delta", `{"type":"response.output_text.delta","delta":"Hel"}`)
 		write("response.output_text.delta", `{"type":"response.output_text.delta","delta":"lo"}`)
-		write("response.completed", `{"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.2","output":[{"type":"message","content":[{"type":"output_text","text":"Hello"}]}],"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}`)
+		write("response.completed", `{"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.4","output":[{"type":"message","content":[{"type":"output_text","text":"Hello"}]}],"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}`)
 	}))
 	t.Cleanup(srv.Close)
 
@@ -353,7 +428,7 @@ func TestAdapter_Stream_YieldsTextDeltasAndFinish(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	stream, err := a.Stream(ctx, llm.Request{Model: "gpt-5.2", Messages: []llm.Message{llm.User("hi")}})
+	stream, err := a.Stream(ctx, llm.Request{Model: "gpt-5.4", Messages: []llm.Message{llm.User("hi")}})
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -377,6 +452,7 @@ func TestAdapter_Stream_YieldsTextDeltasAndFinish(t *testing.T) {
 	if finish == nil || strings.TrimSpace(finish.Text()) != "Hello" {
 		t.Fatalf("finish response: %+v", finish)
 	}
+	assertRateLimitInfo(t, finish.RateLimit)
 
 	if gotBody == nil {
 		t.Fatalf("server did not capture request body")
@@ -411,6 +487,52 @@ func TestAdapter_Stream_YieldsTextDeltasAndFinish(t *testing.T) {
 	}
 }
 
+func TestAdapter_Stream_NormalizesProviderPrefixedModelID(t *testing.T) {
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/responses" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		_ = json.Unmarshal(b, &gotBody)
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		f, _ := w.(http.Flusher)
+		_, _ = io.WriteString(w, "event: response.completed\n")
+		_, _ = io.WriteString(w, `data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.2","output":[{"type":"message","content":[{"type":"output_text","text":"Hello"}]}],"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}`+"\n\n")
+		if f != nil {
+			f.Flush()
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	a := &Adapter{APIKey: "k", BaseURL: srv.URL, Client: srv.Client()}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	stream, err := a.Stream(ctx, llm.Request{Model: "openai/gpt-5.2", Messages: []llm.Message{llm.User("hi")}})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer stream.Close()
+	for range stream.Events() {
+	}
+
+	if gotBody == nil {
+		t.Fatalf("server did not capture request body")
+	}
+	gotModel, ok := gotBody["model"].(string)
+	if !ok {
+		t.Fatalf("request model field type: %#v", gotBody["model"])
+	}
+	if got := strings.TrimSpace(gotModel); got != "gpt-5.2" {
+		t.Fatalf("request model: got %q want %q", got, "gpt-5.2")
+	}
+}
+
 func TestAdapter_Stream_TranslatesToolCalls(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/responses" {
@@ -431,7 +553,7 @@ func TestAdapter_Stream_TranslatesToolCalls(t *testing.T) {
 
 		write("response.function_call_arguments.delta", `{"type":"response.function_call_arguments.delta","call_id":"call_1","name":"get_weather","delta":"{\"n\":1}"}`)
 		write("response.output_item.done", `{"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_1","name":"get_weather","arguments":"{\"n\":1}"}}`)
-		write("response.completed", `{"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.2","output":[{"type":"function_call","call_id":"call_1","name":"get_weather","arguments":"{\"n\":1}"}],"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}`)
+		write("response.completed", `{"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.4","output":[{"type":"function_call","call_id":"call_1","name":"get_weather","arguments":"{\"n\":1}"}],"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}`)
 	}))
 	t.Cleanup(srv.Close)
 
@@ -439,7 +561,7 @@ func TestAdapter_Stream_TranslatesToolCalls(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	stream, err := a.Stream(ctx, llm.Request{Model: "gpt-5.2", Messages: []llm.Message{llm.User("hi")}})
+	stream, err := a.Stream(ctx, llm.Request{Model: "gpt-5.4", Messages: []llm.Message{llm.User("hi")}})
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -510,7 +632,7 @@ func TestAdapter_Complete_ImageInput_URL_Data_AndFilePath(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
   "id": "resp_1",
-  "model": "gpt-5.2",
+  "model": "gpt-5.4",
   "output": [{"type": "message", "content": [{"type":"output_text", "text":"ok"}]}],
   "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
 }`))
@@ -534,7 +656,7 @@ func TestAdapter_Complete_ImageInput_URL_Data_AndFilePath(t *testing.T) {
 			{Kind: llm.ContentImage, Image: &llm.ImageData{URL: imgPath}},
 		},
 	}
-	if _, err := a.Complete(ctx, llm.Request{Model: "gpt-5.2", Messages: []llm.Message{msg}}); err != nil {
+	if _, err := a.Complete(ctx, llm.Request{Model: "gpt-5.4", Messages: []llm.Message{msg}}); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
 
@@ -599,7 +721,7 @@ func TestAdapter_Complete_ResponseFormat_JSONSchema(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
   "id": "resp_1",
-  "model": "gpt-5.2",
+  "model": "gpt-5.4",
   "output": [{"type": "message", "content": [{"type":"output_text", "text":"{}"}]}],
   "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
 }`))
@@ -618,7 +740,7 @@ func TestAdapter_Complete_ResponseFormat_JSONSchema(t *testing.T) {
 		"required": []string{"name"},
 	}
 	_, err := a.Complete(ctx, llm.Request{
-		Model:    "gpt-5.2",
+		Model:    "gpt-5.4",
 		Messages: []llm.Message{llm.User("hi")},
 		ResponseFormat: &llm.ResponseFormat{
 			Type:       "json_schema",
@@ -661,7 +783,7 @@ func TestAdapter_Stream_ContextDeadline_EmitsRequestTimeoutError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	st, err := a.Stream(ctx, llm.Request{Model: "gpt-5.2", Messages: []llm.Message{llm.User("hi")}})
+	st, err := a.Stream(ctx, llm.Request{Model: "gpt-5.4", Messages: []llm.Message{llm.User("hi")}})
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -692,7 +814,7 @@ func TestAdapter_ProviderOptions_PassThrough(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
   "id": "resp_1",
-  "model": "gpt-5.2",
+  "model": "gpt-5.4",
   "output": [{"type": "message", "content": [{"type":"output_text", "text":"ok"}]}],
   "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
 }`))
@@ -704,7 +826,7 @@ func TestAdapter_ProviderOptions_PassThrough(t *testing.T) {
 	defer cancel()
 
 	_, err := a.Complete(ctx, llm.Request{
-		Model:    "gpt-5.2",
+		Model:    "gpt-5.4",
 		Messages: []llm.Message{llm.User("hi")},
 		ProviderOptions: map[string]any{
 			"openai": map[string]any{

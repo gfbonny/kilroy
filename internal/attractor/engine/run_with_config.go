@@ -8,22 +8,123 @@ import (
 	"strings"
 	"time"
 
-	"github.com/danshapiro/kilroy/internal/attractor/gitutil"
 	"github.com/danshapiro/kilroy/internal/attractor/model"
+	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 	"github.com/danshapiro/kilroy/internal/attractor/modeldb"
 	"github.com/danshapiro/kilroy/internal/cxdb"
 )
 
+type runBootstrap struct {
+	Graph                   *model.Graph
+	Dot                     []byte
+	Config                  *RunConfigFile
+	Options                 RunOptions
+	Registry                *HandlerRegistry
+	ResolvedArtifactPolicy  ResolvedArtifactPolicy
+	Catalog                 *modeldb.Catalog
+	ModelCatalogSource      string
+	ModelCatalogPath        string
+	Runtimes                map[string]ProviderRuntime
+	InputInferer            InputReferenceInferer
+	ResolvedWarning         string
+	InputInfererInitWarning string
+	StartupWarnings         []string
+	Warnings                []string
+	CXDBClient              *cxdb.Client
+	CXDBBin                 *cxdb.BinaryClient
+	Startup                 *CXDBStartupInfo
+}
+
 // RunWithConfig executes a run using the metaspec run configuration file schema.
 func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, overrides RunOptions) (*Result, error) {
+	boot, err := bootstrapRunWithConfig(ctx, dotSource, cfg, overrides)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRunBootstrapResources(boot)
+
+	var sink *CXDBSink
+	if boot.CXDBClient != nil {
+		bundleID, bundle, _, err := cxdb.KilroyAttractorRegistryBundle()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := boot.CXDBClient.PublishRegistryBundle(ctx, bundleID, bundle); err != nil {
+			return nil, err
+		}
+		ci, err := createContextWithFallback(ctx, boot.CXDBClient, boot.CXDBBin)
+		if err != nil {
+			return nil, err
+		}
+		sink = NewCXDBSink(boot.CXDBClient, boot.CXDBBin, boot.Options.RunID, ci.ContextID, ci.HeadTurnID, bundleID)
+	}
+
+	eng := newBaseEngine(boot.Graph, dotSource, boot.Options)
+	eng.Registry = boot.Registry // reuse the registry from validation (avoids creating a duplicate)
+	eng.RunConfig = boot.Config
+	eng.ArtifactPolicy = boot.ResolvedArtifactPolicy
+	eng.Context = NewContextWithGraphAttrs(boot.Graph)
+	eng.AgentBackend = NewAgentRouterWithRuntimes(boot.Config, boot.Catalog, boot.Runtimes)
+	eng.CXDB = sink
+	eng.ModelCatalogSHA = boot.Catalog.SHA256
+	eng.ModelCatalogSource = boot.ModelCatalogSource
+	eng.ModelCatalogPath = boot.ModelCatalogPath
+	eng.InputMaterializationPolicy = inputMaterializationPolicyFromConfig(boot.Config)
+	eng.InputReferenceInferer = boot.InputInferer
+	eng.InputInferenceCache = map[string][]InferredReference{}
+	eng.InputSourceTargetMap = map[string]string{}
+	if boot.ResolvedWarning != "" {
+		eng.Warn(boot.ResolvedWarning)
+		eng.Context.AppendLog(boot.ResolvedWarning)
+	}
+	if boot.InputInfererInitWarning != "" {
+		eng.Warn(boot.InputInfererInitWarning)
+		eng.Context.AppendLog(boot.InputInfererInitWarning)
+	}
+	for _, w := range boot.StartupWarnings {
+		eng.Warn(w)
+	}
+
+	if boot.Options.OnEngineReady != nil {
+		boot.Options.OnEngineReady(eng)
+	}
+
+	res, err := eng.run(ctx)
+	if err != nil {
+		// Record the failure in the run DB so it doesn't stay "running" forever.
+		eng.rundbRecordRunComplete(runtime.FinalFail, err.Error(), "")
+		return nil, err
+	}
+	if boot.Startup != nil {
+		res.CXDBUIURL = strings.TrimSpace(boot.Startup.UIURL)
+	}
+	return res, nil
+}
+
+func closeRunBootstrapResources(boot *runBootstrap) {
+	if boot == nil {
+		return
+	}
+	if boot.Startup != nil {
+		_ = boot.Startup.shutdownManagedProcesses()
+	}
+	if boot.CXDBBin != nil {
+		_ = boot.CXDBBin.Close()
+	}
+}
+
+func bootstrapRunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, overrides RunOptions) (*runBootstrap, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is nil")
 	}
 	applyConfigDefaults(cfg)
 
-	// Create handler registry early so we can wire KnownTypes into validation
-	// and use it for provider requirement checks below.
-	reg := NewDefaultRegistry()
+	// Use the registry from options if provided (layered composition from cmd/kilroy/),
+	// otherwise fall back to the full default registry.
+	reg := overrides.Registry
+	if reg == nil {
+		reg = NewDefaultRegistry()
+	}
 
 	// Load catalog early (best-effort) so that model ID lint rules fire during
 	// PrepareWithOptions. The full ResolveModelCatalog snapshot still runs later
@@ -46,6 +147,7 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	// Prepare graph (parse + transforms + validate).
 	g, _, err := PrepareWithOptions(dotSource, PrepareOptions{
 		RepoPath:   cfg.Repo.Path,
+		GraphDir:   overrides.GraphDir,
 		KnownTypes: reg.KnownTypes(),
 		Catalog:    earlyCatalog,
 	})
@@ -89,7 +191,7 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	for p := range usedProviders {
 		rt, ok := runtimes[p]
 		if !ok || (rt.Backend != BackendAPI && rt.Backend != BackendCLI) {
-			return nil, fmt.Errorf("missing llm.providers.%s.backend (Kilroy forbids implicit backend defaults)", p)
+			return nil, fmt.Errorf("missing llm.providers.%s.backend (Kilroy forbids implicit backend defaults)\n  hint: add llm.providers.%s.backend: cli (or api) to your run config, or remove --config to use auto-detection", p, p)
 		}
 	}
 	runUsesCLIProviders := false
@@ -124,10 +226,24 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 		opts.RunBranchPrefix = overrides.RunBranchPrefix
 	}
 	opts.AllowTestShim = overrides.AllowTestShim
+	opts.SkipPreflight = overrides.SkipPreflight
 	opts.ForceModels = normalizeForceModels(overrides.ForceModels)
 	opts.ProgressSink = overrides.ProgressSink
 	opts.Interviewer = overrides.Interviewer
 	opts.OnEngineReady = overrides.OnEngineReady
+	opts.RunDB = overrides.RunDB
+	opts.Registry = overrides.Registry
+	opts.Labels = overrides.Labels
+	opts.Inputs = overrides.Inputs
+	opts.GraphDir = overrides.GraphDir
+	opts.GitOps = overrides.GitOps
+	opts.PackageDir = overrides.PackageDir
+	if overrides.Workspace != "" {
+		opts.Workspace = overrides.Workspace
+		if opts.RepoPath == "" {
+			opts.RepoPath = overrides.Workspace
+		}
+	}
 
 	if err := opts.applyDefaults(); err != nil {
 		return nil, err
@@ -144,28 +260,28 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 		return nil, err
 	}
 
+	// Auto-detect git mode when GitOps is not explicitly set.
+	if opts.GitOps == nil && AutoDetectGitOps != nil && opts.RepoPath != "" {
+		if detected := AutoDetectGitOps(opts.RepoPath); detected != nil {
+			opts.GitOps = detected
+		}
+	}
+
 	// Repo validation: cheap local checks that must pass before any expensive
 	// preflight work (provider probes, model catalog fetch, CXDB startup).
-	if opts.RepoPath == "" {
-		return nil, fmt.Errorf("repo.path is required")
-	}
-	if !gitutil.IsRepo(opts.RepoPath) {
-		return nil, fmt.Errorf("not a git repo: %s", opts.RepoPath)
-	}
-	if opts.RequireClean {
-		clean, err := gitutil.IsClean(opts.RepoPath)
-		if err != nil {
+	if opts.GitOps != nil {
+		if opts.RepoPath == "" {
+			return nil, fmt.Errorf("repo.path is required")
+		}
+		if err := opts.GitOps.ValidateRepo(opts.RepoPath, opts.RequireClean); err != nil {
 			return nil, err
 		}
-		if !clean {
-			return nil, fmt.Errorf("repo has uncommitted changes (require_clean=true)")
+		// Verify the repo has at least one commit (HeadSHA fails on empty repos).
+		// eng.run() needs this later for branch creation; catching it here avoids
+		// wasting minutes on provider probes and CXDB startup first.
+		if _, err := opts.GitOps.HeadSHA(opts.RepoPath); err != nil {
+			return nil, fmt.Errorf("repo has no commits or HEAD is unresolvable: %w", err)
 		}
-	}
-	// Verify the repo has at least one commit (HeadSHA fails on empty repos).
-	// eng.run() needs this later for branch creation; catching it here avoids
-	// wasting minutes on provider probes and CXDB startup first.
-	if _, err := gitutil.HeadSHA(opts.RepoPath); err != nil {
-		return nil, fmt.Errorf("repo has no commits or HEAD is unresolvable: %w", err)
 	}
 	// Ensure the logs directory is writable before expensive preflight work.
 	// Several preflight steps write into LogsRoot, but an outright unwritable
@@ -194,20 +310,41 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	}
 
 	// Resolve + snapshot the model catalog for this run (repeatability).
-	resolved, err := modeldb.ResolveModelCatalog(
-		ctx,
-		cfg.ModelDB.OpenRouterModelInfoPath,
-		opts.LogsRoot,
-		modeldb.CatalogUpdatePolicy(strings.ToLower(strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoUpdatePolicy))),
-		cfg.ModelDB.OpenRouterModelInfoURL,
-		time.Duration(cfg.ModelDB.OpenRouterModelInfoFetchTimeoutMS)*time.Millisecond,
+	// When no catalog path is configured, fall back to the embedded catalog.
+	var (
+		catalog            *modeldb.Catalog
+		modelCatalogSource string
+		modelCatalogPath   string
+		resolvedWarning    string
 	)
-	if err != nil {
-		return nil, err
-	}
-	catalog, err := loadCatalogForRun(resolved.SnapshotPath)
-	if err != nil {
-		return nil, err
+	if strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoPath) != "" {
+		resolved, resolveErr := modeldb.ResolveModelCatalog(
+			ctx,
+			cfg.ModelDB.OpenRouterModelInfoPath,
+			opts.LogsRoot,
+			modeldb.CatalogUpdatePolicy(strings.ToLower(strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoUpdatePolicy))),
+			cfg.ModelDB.OpenRouterModelInfoURL,
+			time.Duration(cfg.ModelDB.OpenRouterModelInfoFetchTimeoutMS)*time.Millisecond,
+		)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		cat, loadErr := loadCatalogForRun(resolved.SnapshotPath)
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		catalog = cat
+		modelCatalogSource = resolved.Source
+		modelCatalogPath = resolved.SnapshotPath
+		resolvedWarning = strings.TrimSpace(resolved.Warning)
+	} else {
+		cat, loadErr := modeldb.LoadEmbeddedCatalog()
+		if loadErr != nil {
+			return nil, fmt.Errorf("no model catalog configured and embedded catalog unavailable: %w", loadErr)
+		}
+		catalog = cat
+		modelCatalogSource = "embedded"
+		modelCatalogPath = ""
 	}
 	catalogChecks, catalogErr := validateProviderModelPairs(g, runtimes, catalog, opts)
 	if catalogErr != nil {
@@ -225,88 +362,82 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 		_ = writePreflightReport(opts.LogsRoot, report)
 		return nil, catalogErr
 	}
-	if _, err := runProviderCLIPreflight(ctx, g, runtimes, cfg, opts, catalog, catalogChecks); err != nil {
-		return nil, err
+	if opts.SkipPreflight {
+		// Skip CLI prompt probes — caller asserts tools are configured.
+	} else {
+		if _, err := runProviderCLIPreflight(ctx, g, runtimes, cfg, opts, catalog, catalogChecks); err != nil {
+			return nil, err
+		}
 	}
 
-	var sink *CXDBSink
-	var startup *CXDBStartupInfo
-	if !overrides.DisableCXDB {
-		// CXDB is required in v1 and must be reachable.
-		cxdbClient, bin, cxdbStartup, err := ensureCXDBReady(ctx, cfg, opts.LogsRoot, opts.RunID)
+	var (
+		cxdbClient *cxdb.Client
+		bin        *cxdb.BinaryClient
+		startup    *CXDBStartupInfo
+	)
+	cxdbConfigured := strings.TrimSpace(cfg.CXDB.BinaryAddr) != "" && strings.TrimSpace(cfg.CXDB.HTTPBaseURL) != ""
+	if !overrides.DisableCXDB && cxdbConfigured {
+		var cxdbStartup *CXDBStartupInfo
+		cxdbClient, bin, cxdbStartup, err = ensureCXDBReady(ctx, cfg, opts.LogsRoot, opts.RunID)
 		if err != nil {
 			return nil, err
 		}
-		defer func() { _ = bin.Close() }()
 		startup = cxdbStartup
-		if startup != nil {
-			// Defer process shutdown after bin close is deferred so shutdown runs first (LIFO).
-			defer func() { _ = startup.shutdownManagedProcesses() }()
-		}
 		if startup != nil && overrides.OnCXDBStartup != nil {
 			overrides.OnCXDBStartup(startup)
 		}
-		bundleID, bundle, _, err := cxdb.KilroyAttractorRegistryBundle()
-		if err != nil {
-			return nil, err
-		}
-		if _, err := cxdbClient.PublishRegistryBundle(ctx, bundleID, bundle); err != nil {
-			return nil, err
-		}
-		ci, err := createContextWithFallback(ctx, cxdbClient, bin)
-		if err != nil {
-			return nil, err
-		}
-		sink = NewCXDBSink(cxdbClient, bin, opts.RunID, ci.ContextID, ci.HeadTurnID, bundleID)
 	}
 
-	eng := newBaseEngine(g, dotSource, opts)
-	eng.Registry = reg // reuse the registry from validation (avoids creating a duplicate)
-	eng.RunConfig = cfg
-	eng.ArtifactPolicy = resolvedArtifactPolicy
-	eng.Context = NewContextWithGraphAttrs(g)
-	eng.CodergenBackend = NewCodergenRouterWithRuntimes(cfg, catalog, runtimes)
-	eng.CXDB = sink
-	eng.ModelCatalogSHA = catalog.SHA256
-	eng.ModelCatalogSource = resolved.Source
-	eng.ModelCatalogPath = resolved.SnapshotPath
-	eng.InputMaterializationPolicy = inputMaterializationPolicyFromConfig(cfg)
-	eng.InputReferenceInferer = inputInferer
-	eng.InputInferenceCache = map[string][]InferredReference{}
-	eng.InputSourceTargetMap = map[string]string{}
-	if strings.TrimSpace(resolved.Warning) != "" {
-		eng.Warn(resolved.Warning)
-		eng.Context.AppendLog(resolved.Warning)
+	inputInfererInitWarning = strings.TrimSpace(inputInfererInitWarning)
+	combinedWarnings := []string{}
+	if resolvedWarning != "" {
+		combinedWarnings = append(combinedWarnings, resolvedWarning)
 	}
-	if strings.TrimSpace(inputInfererInitWarning) != "" {
-		eng.Warn(inputInfererInitWarning)
-		eng.Context.AppendLog(inputInfererInitWarning)
+	if inputInfererInitWarning != "" {
+		combinedWarnings = append(combinedWarnings, inputInfererInitWarning)
 	}
+	startupWarnings := []string{}
 	if startup != nil {
 		for _, w := range startup.Warnings {
-			eng.Warn(w)
+			w = strings.TrimSpace(w)
+			if w == "" {
+				continue
+			}
+			startupWarnings = append(startupWarnings, w)
+			combinedWarnings = append(combinedWarnings, w)
 		}
 	}
 
-	if overrides.OnEngineReady != nil {
-		overrides.OnEngineReady(eng)
-	}
-
-	res, err := eng.run(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if startup != nil {
-		res.CXDBUIURL = strings.TrimSpace(startup.UIURL)
-	}
-	return res, nil
+	return &runBootstrap{
+		Graph:                   g,
+		Dot:                     dotSource,
+		Config:                  cfg,
+		Options:                 opts,
+		Registry:                reg,
+		ResolvedArtifactPolicy:  resolvedArtifactPolicy,
+		Catalog:                 catalog,
+		ModelCatalogSource:      modelCatalogSource,
+		ModelCatalogPath:        modelCatalogPath,
+		Runtimes:                runtimes,
+		InputInferer:            inputInferer,
+		ResolvedWarning:         resolvedWarning,
+		InputInfererInitWarning: inputInfererInitWarning,
+		StartupWarnings:         startupWarnings,
+		Warnings:                combinedWarnings,
+		CXDBClient:              cxdbClient,
+		CXDBBin:                 bin,
+		Startup:                 startup,
+	}, nil
 }
 
 func validateProviderModelPairs(g *model.Graph, runtimes map[string]ProviderRuntime, catalog *modeldb.Catalog, opts RunOptions) ([]providerPreflightCheck, error) {
 	if g == nil || catalog == nil {
 		return nil, nil
 	}
-	reg := NewDefaultRegistry()
+	reg := opts.Registry
+	if reg == nil {
+		reg = NewDefaultRegistry()
+	}
 	var checks []providerPreflightCheck
 	warnedUncovered := map[string]bool{}
 	for _, n := range g.Nodes {

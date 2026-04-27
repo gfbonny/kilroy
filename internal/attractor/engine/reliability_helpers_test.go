@@ -87,7 +87,7 @@ digraph G {
   graph [goal="status ingestion fixture"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="write status"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="write status"]
   fix [shape=parallelogram, tool_command="echo fixed > fixed.txt"]
   start -> a
   a -> fix [condition="outcome=fail"]
@@ -116,17 +116,17 @@ digraph G {
 	out, decErr := readFixtureOutcome(filepath.Join(logsRoot, "a", "status.json"))
 	if decErr != nil {
 		if fallbackCopied {
-			return runtime.Outcome{}, string(statusSourceWorktree), logsRoot
+			return runtime.Outcome{}, string(StatusSourceWorktree), logsRoot
 		}
-		return runtime.Outcome{}, string(statusSourceNone), logsRoot
+		return runtime.Outcome{}, string(StatusSourceNone), logsRoot
 	}
 
-	source := string(statusSourceNone)
+	source := string(StatusSourceNone)
 	switch {
 	case canonical && out.Status == runtime.StatusSuccess:
-		source = string(statusSourceCanonical)
+		source = string(StatusSourceCanonical)
 	case fallbackCopied:
-		source = string(statusSourceWorktree)
+		source = string(StatusSourceWorktree)
 	}
 	return out, source, logsRoot
 }
@@ -171,7 +171,7 @@ digraph G {
   graph [goal="heartbeat fixture"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="heartbeat test"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="heartbeat test"]
   start -> a -> exit
 }
 `)
@@ -459,17 +459,17 @@ func newReliabilityFixtureEngine(t *testing.T, repo, logsRoot, runID string, dot
 		RunBranchPrefix: "attractor/run",
 	}
 	eng := &Engine{
-		Graph:           g,
-		Options:         opts,
-		DotSource:       dotSource,
-		LogsRoot:        logsRoot,
-		baseLogsRoot:    logsRoot,
-		WorktreeDir:     repo,
-		RunBranch:       opts.RunBranchPrefix + "/" + runID,
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: &SimulatedCodergenBackend{},
+		Graph:        g,
+		Options:      opts,
+		DotSource:    dotSource,
+		LogsRoot:     logsRoot,
+		baseLogsRoot: logsRoot,
+		WorktreeDir:  repo,
+		RunBranch:    opts.RunBranchPrefix + "/" + runID,
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
+		AgentBackend: &SimulatedAgentBackend{},
 	}
 	for k, v := range g.Attrs {
 		eng.Context.Set("graph."+k, v)

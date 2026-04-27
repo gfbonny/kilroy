@@ -121,7 +121,7 @@ var modelAnnotations = map[string]string{
 	"claude-sonnet":    "best speed/quality balance",
 	"claude-haiku":     "fastest, cost-optimized",
 	"gemini-3-flash":   "fast, highly capable, 1M context",
-	"gemini-2.5-pro":   "high intelligence, large context",
+	"gemini-3.1-pro":   "high intelligence, large context",
 	"gemini-2.5-flash": "fast, cost-effective",
 	"gpt-4.1":          "flagship",
 	"gpt-4o":           "multimodal, strong reasoning",
